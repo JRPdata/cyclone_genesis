@@ -252,6 +252,21 @@ def get_latest_possible_model_time(model_name):
     latest_time = datetime.replace(utc_now, hour = latest_hour, minute = 0, second = 0, microsecond = 0)
     return latest_time
 
+# for interval_hours = 6, find 6 hour model timestamp prior to 00,06,12,18Z
+def get_latest_n_model_times(model_name, n=4):
+    model_times = []
+    interval_hours = model_interval_hours[model_name]
+    utc_now = datetime.utcnow()
+    model_hour = utc_now.hour
+    latest_hour = (model_hour // interval_hours) * interval_hours
+    latest_time = datetime.replace(utc_now, hour = latest_hour, minute = 0, second = 0, microsecond = 0)
+
+    model_times.append(latest_time)
+    for n in range(n-1):
+        latest_time = get_prior_model_time(model_name, latest_time)
+        model_times.append(latest_time)
+    return model_times
+
 def get_prior_model_time(model_name, dt):
     interval_hours = model_interval_hours[model_name]
     prior_time = dt - timedelta(hours = interval_hours)
@@ -638,14 +653,7 @@ def download_step(model_name, model_timestamp, time_step_int):
 
     return r
 
-def download_latest_run(model_name, model_timestamp):
-    utc_now = datetime.utcnow()
-    interval_hours = model_interval_hours[model_name]
-    # 2x is the limit for staleness: if we get runs too stale we will miss the latest run while trying to get the older one
-    if (utc_now - model_timestamp) > timedelta(hours=interval_hours*2):
-        # too stale
-        return -4
-
+def download_model_run(model_name, model_timestamp):
     already_calculated_time_steps, missing_calculated_time_steps = get_calculated_and_missing_time_steps(model_name, model_timestamp)
 
     if missing_calculated_time_steps is None:
@@ -687,37 +695,32 @@ def download_latest_run(model_name, model_timestamp):
 if __name__ == '__main__':
     # track completed model runs (per model name)
     complete_model_runs = {}
-    model_timestamp = {}
+    model_timestamps = {}
     for model_name in model_names_to_download:
-        model_timestamp[model_name] = get_latest_possible_model_time(model_name)
         complete_model_runs[model_name] = []
 
     while(True):
         for model_name in model_names_to_download:
-            if model_timestamp[model_name] in complete_model_runs[model_name]:
-                print('Already have latest model run.')
-                r = 0
-                model_timestamp[model_name] = get_latest_possible_model_time(model_name)
-                continue
-            # download latest run with available timesteps
-            # there may be some cycling but the staleness check should always avoid infinite cycling between old runs
-            r = download_latest_run(model_name, model_timestamp[model_name])
-            if r == -2 or r == -1:
-                print(f'Failed to finish downloading latest {model_name} run from {model_timestamp[model_name]}. Retrying later.')
-            elif r == -3:
-                # could not even download any files, try prior run
-                print(f'{model_name} run from {model_timestamp[model_name]} not available. Trying to get prior model run after backing off.')
-                model_timestamp[model_name] = get_prior_model_time(model_name, model_timestamp[model_name])
-            elif r == -4:
-                print(f'Failed to download latest {model_name} run from {model_timestamp[model_name]}. Too stale.')
-                model_timestamp[model_name] = get_latest_possible_model_time(model_name)
-            elif r == 0:
-                # succesfully downloaded latest run
-                print(f'Finished downloaded latest {model_name} run for {model_name} {model_timestamp[model_name]} (or already exists).')
-                # get next one after backing off
-                model_timestamp[model_name] = get_latest_possible_model_time(model_name)
-                if model_timestamp[model_name] not in complete_model_runs[model_name]:
-                    complete_model_runs[model_name].append(model_timestamp[model_name])
+            model_timestamps[model_name] = get_latest_n_model_times(model_name)
+            for model_timestamp in model_timestamps[model_name]:
+                if model_timestamp in complete_model_runs[model_name]:
+                    print(f'Already have {model_timestamp} for {model_name}.')
+                    r = 0
+                    continue
+                # download latest run with available timesteps
+                # there may be some cycling but the staleness check should always avoid infinite cycling between old runs
+                r = download_model_run(model_name, model_timestamp)
+                if r == -2 or r == -1:
+                    print(f'Failed to finish downloading latest {model_name} run from {model_timestamp}. Retrying later.')
+                elif r == -3:
+                    # could not even download any files, try prior run
+                    print(f'{model_name} run from {model_timestamp[model_name]} not available.')
+                elif r == 0:
+                    # succesfully downloaded latest run
+                    print(f'Finished downloaded latest {model_name} run for {model_name} {model_timestamp} (or already exists).')
+                    # get next one after backing off
+                    if model_timestamp not in complete_model_runs[model_name]:
+                        complete_model_runs[model_name].append(model_timestamp)
 
         print(f'Backing off for {backoff_time} seconds.')
         time.sleep(backoff_time)
