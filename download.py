@@ -17,6 +17,7 @@ import shutil
 
 backoff_time = 600
 sleep_time = 1
+num_latest_runs = 4
 
 disturbances_db_file_path = '/home/db/Documents/JRPdata/cyclone-genesis/disturbances.db'
 
@@ -253,7 +254,7 @@ def get_latest_possible_model_time(model_name):
     return latest_time
 
 # for interval_hours = 6, find 6 hour model timestamp prior to 00,06,12,18Z
-def get_latest_n_model_times(model_name, n=4):
+def get_latest_n_model_times(model_name, n=num_latest_runs):
     model_times = []
     interval_hours = model_interval_hours[model_name]
     utc_now = datetime.utcnow()
@@ -714,7 +715,7 @@ if __name__ == '__main__':
                     print(f'Failed to finish downloading latest {model_name} run from {model_timestamp}. Retrying later.')
                 elif r == -3:
                     # could not even download any files, try prior run
-                    print(f'{model_name} run from {model_timestamp[model_name]} not available.')
+                    print(f'{model_name} run from {model_timestamp} not available.')
                 elif r == 0:
                     # succesfully downloaded latest run
                     print(f'Finished downloaded latest {model_name} run for {model_name} {model_timestamp} (or already exists).')
