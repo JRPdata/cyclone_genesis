@@ -16,7 +16,7 @@ import shutil
 # todo somehow need to be able to optionally download missing runs
 
 backoff_time = 600
-sleep_time = 2
+sleep_time = 1
 
 disturbances_db_file_path = '/home/db/Documents/JRPdata/cyclone-genesis/disturbances.db'
 
@@ -318,7 +318,7 @@ def generate_curl_grib_copy_commands_nav(timestamp_prefix, url_folder, url_base_
 
     # Run the subprocess and capture its output
     result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    time.sleep(2)
+    time.sleep(sleep_time)
     if result.returncode != 0:
         print(f"Warning: Command failed with exit code {result.returncode}")
         print(f"Command: {curl_command}")
@@ -400,7 +400,7 @@ def generate_curl_commands_cmc(timestamp_prefix, url_folder, url_base_file_name,
 
             # Run the subprocess and capture its output
             result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            time.sleep(2)
+            time.sleep(sleep_time)
             if result.returncode != 0:
                 print(f"Warning: Command failed with exit code {result.returncode}")
                 print(f"Command: {curl_command}")
@@ -420,7 +420,7 @@ def generate_curl_commands_ecm(timestamp_prefix, idx_file_name, url_folder, url_
 
         # Run the subprocess and capture its output
         result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        time.sleep(2)
+        time.sleep(sleep_time)
         if result.returncode != 0:
             print(f"Warning: Command failed with exit code {result.returncode}")
             print(f"Command: {curl_command}")
@@ -473,7 +473,7 @@ def generate_curl_commands_ecm(timestamp_prefix, idx_file_name, url_folder, url_
 
                 # Run the subprocess and capture its output
                 result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                time.sleep(2)
+                time.sleep(sleep_time)
                 if result.returncode != 0:
                     print(f"Warning: Command failed with exit code {result.returncode}")
                     print(f"Command: {curl_command}")
@@ -493,7 +493,7 @@ def generate_curl_commands_gfs(timestamp_prefix, idx_file_name, url_folder, url_
 
         # Run the subprocess and capture its output
         result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        time.sleep(2)
+        time.sleep(sleep_time)
         if result.returncode != 0:
             print(f"Warning: Command failed with exit code {result.returncode}")
             print(f"Command: {curl_command}")
@@ -540,7 +540,7 @@ def generate_curl_commands_gfs(timestamp_prefix, idx_file_name, url_folder, url_
 
             # Run the subprocess and capture its output
             result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            time.sleep(2)
+            time.sleep(sleep_time)
             if result.returncode != 0:
                 print(f"Warning: Command failed with exit code {result.returncode}")
                 print(f"Command: {curl_command}")
