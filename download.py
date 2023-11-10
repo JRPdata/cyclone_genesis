@@ -31,7 +31,7 @@ print_level_importance = 2
 backoff_time = 600
 # wait between downloads (seconds)
 sleep_time = 1
-# number of last n runs to get
+# number of last n runs to get (might get one more than this)
 num_latest_runs = 4
 
 # only download runs not already calculated
@@ -295,7 +295,7 @@ def get_latest_n_model_times(model_name, n=num_latest_runs):
     latest_time = datetime.replace(utc_now, hour = latest_hour, minute = 0, second = 0, microsecond = 0)
 
     model_times.append(latest_time)
-    for n in range(n-1):
+    for n in range(n):
         latest_time = get_prior_model_time(model_name, latest_time)
         model_times.append(latest_time)
     return model_times
