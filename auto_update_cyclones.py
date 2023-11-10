@@ -1975,6 +1975,8 @@ def get_unprocessed_disturbance_model_runs():
 
 def calc_tc_candidates():
     unprocessed_data = get_unprocessed_disturbance_model_runs()
+    if len(unprocessed_data) == 0:
+        return
     print("Calculate TC candidates (and simplified tracks)")
     print(f"# Model runs to process: {len(unprocessed_data)}")
     print("")
@@ -2827,6 +2829,6 @@ def add_tc_candidate(model_name, model_init_time, component_num, max_10m_wind_sp
 polling_interval = 5
 
 while True:
-    print("\nChecking for new disturbance data from completed model runs")
+    #print("\nChecking for new disturbance data from completed model runs")
     calc_tc_candidates()
     time.sleep(60 * polling_interval)
