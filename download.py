@@ -15,11 +15,30 @@ import shutil
 # todo need a space margin (1 gb at least, as 500 mb for one run)
 # todo somehow need to be able to optionally download missing runs
 
+import threading
+import sys
+import signal
+
+# print based on level (lower is more important):
+#  0 is None (for no messages printed)
+#  1 is important (i.e. disk space, database error)
+#  2 is notification level: messages for when download runs complete
+#  3 is potentially not important (could not download files (as in an incomplete model run))
+#  4 is for verbose debugging (print curl/grib_copy statements)
+print_level_importance = 2
+
+# how often to check (seconds)
 backoff_time = 600
+# wait between downloads (seconds)
 sleep_time = 1
+# number of last n runs to get
 num_latest_runs = 4
 
+# only download runs not already calculated
 disturbances_db_file_path = '/home/db/Documents/JRPdata/cyclone-genesis/disturbances.db'
+
+# GFS and NAV are in the same thread as they use the same server
+model_names_to_download_thread_groupings = [['GFS', 'NAV'], ['CMC'], ['ECM']]
 
 # use this to download individual grib files for NAVGEM so we can split them with grib_copy
 tmp_download_dir = '/tmp'
@@ -48,6 +67,7 @@ url_folder_by_model = {
     'NAV': 'https://nomads.ncep.noaa.gov/pub/data/nccf/com/fnmoc/prod'
 }
 
+# the time steps in the file name are not all ### (ECM just uses a single digit)
 model_time_step_str_format = {
     'GFS': '03',
     'ECM': '00',
@@ -118,7 +138,7 @@ ignored_file_extensions = [
     'index'
 ]
 
-# hours between model runs
+# hours between model runs (not the time steps)
 model_interval_hours = {
     'GFS': 6,
     'ECM': 12,
@@ -126,6 +146,7 @@ model_interval_hours = {
     'NAV': 6
 }
 
+# this is used to check for already downloaded files
 time_step_re_str_by_model_name = {
     'GFS': r'.*?\.f(?P<time_step>\d\d\d)_',
     'ECM': r'.*?-(?P<time_step>\d+)h-oper-fc',
@@ -133,6 +154,11 @@ time_step_re_str_by_model_name = {
     'NAV': r'.*?navgem_\d{10}f(?P<time_step>\d\d\d)'
 }
 
+# Specifies what parameters to gather (and also used in how to name it for split gribs)
+# GFS is what is used in the .idx file
+# ECM is what is in the .index file (list of jsons)
+# CMC is the portion of the file name
+# NAV are the keys used for grib_copy (download the entire grib and split it)
 params_by_model_name = {
     'GFS': [
         ':PRMSL:mean sea level:',
@@ -180,7 +206,13 @@ params_by_model_name = {
     ]
 }
 
-model_names_to_download = ['GFS', 'ECM', 'CMC', 'NAV']
+# handle thread errors
+exit_event = threading.Event()
+
+# print lines at or below print_level_importance
+def print_level(level, warning_str):
+    if level <= print_level_importance:
+        print(warning_str)
 
 def have_enough_disk_space():
     paths_to_check = {}
@@ -201,8 +233,8 @@ def have_enough_disk_space():
                     break
 
         except Exception as e:
-            print(e)
-            print(f"Warning could not get disk space for {path}")
+            print_level(1, e)
+            print_level(1, "Warning could not get disk space for {path}")
 
     return enough_space_for_all_paths
 
@@ -237,7 +269,7 @@ def get_disturbances_from_db(model_name, model_timestamp):
             retrieved_data = json.loads(result[0])
 
     except sqlite3.Error as e:
-        print(f"SQLite error: {e}")
+        print_level(1, f"SQLite error: {e}")
     finally:
         if conn:
             conn.close()
@@ -298,14 +330,14 @@ def generate_curl_grib_copy_commands_nav(timestamp_prefix, url_folder, url_base_
     try:
         res = requests.head(url_folder)
         if not res:
-            print(f"Warning: Could not get requests.head() from {url_folder}")
+            print_level(3, f"Warning: Could not get requests.head() from {url_folder}")
             return -1
 
         if res.status_code != 200:
-            print(f"Warning: Could not get requests.head() from {url_folder}")
+            print_level(3, f"Warning: Could not get requests.head() from {url_folder}")
             return -1
     except:
-        print(f"Warning: Could not get requests.head() from {url_folder}")
+        print_level(3, f"Warning: Could not get requests.head() from {url_folder}")
         return -1
 
 
@@ -315,15 +347,15 @@ def generate_curl_grib_copy_commands_nav(timestamp_prefix, url_folder, url_base_
     # always overwrite temp file in case of corruption, since all the split gribs should be able to be produced if it is OK
     url = f'{url_folder}{url_base_file_name}.grib2'
     curl_command = f"curl --create-dirs -y 30 -Y 30 -f -v -s {url} -o {output_file}"
-    print(curl_command)
+    print_level(4, curl_command)
 
     # Run the subprocess and capture its output
     result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     time.sleep(sleep_time)
     if result.returncode != 0:
-        print(f"Warning: Command failed with exit code {result.returncode}")
-        print(f"Command: {curl_command}")
-        print(f"Error output: {result.stderr.decode('utf-8')}")
+        print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+        print_level(3, f"Command: {curl_command}")
+        print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
         return -2
 
     grib_file_path = output_file
@@ -331,7 +363,7 @@ def generate_curl_grib_copy_commands_nav(timestamp_prefix, url_folder, url_base_
     try:
         os.makedirs(output_dir_timestamp, exist_ok=True)
     except:
-        print(f"Could not make folder: {output_dir_timestamp}")
+        print(1, f"Could not make folder: {output_dir_timestamp}")
         return -1
 
     for param in params:
@@ -342,19 +374,20 @@ def generate_curl_grib_copy_commands_nav(timestamp_prefix, url_folder, url_base_
         output_file = os.path.join(output_dir_timestamp, f"{timestamp_prefix}_{url_base_file_name}_{shortName}_{levtype}_{level}.grib2")
 
         grib_copy_command = f"grib_copy -w levtype='{levtype}',level={level},shortName='{shortName}' '{grib_file_path}' '{output_file}'"
-        print(grib_copy_command)
+        print_level(4, grib_copy_command)
 
         # Run the subprocess and capture its output
         result = subprocess.run(grib_copy_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode != 0:
-            print(f"Warning: Command failed with exit code {result.returncode}")
-            print(f"Command: {curl_command}")
-            print(f"Error output: {result.stderr.decode('utf-8')}")
+            print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+            print_level(3, f"Command: {curl_command}")
+            print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
             # delete the tmp file now on an error
             try:
                 os.remove(grib_file_path)
             except:
-                print(f"Warning could not delete tmp file: {grib_file_path}")
+                # this is somewhat serious as we could run out of tmp space
+                print_level(1, f"Warning could not delete tmp file: {grib_file_path}")
 
             return -2
 
@@ -362,7 +395,7 @@ def generate_curl_grib_copy_commands_nav(timestamp_prefix, url_folder, url_base_
     try:
         os.remove(grib_file_path)
     except:
-        print(f"Warning could not delete tmp file: {grib_file_path}")
+        print_level(1, f"Warning could not delete tmp file: {grib_file_path}")
 
     return 0
 
@@ -374,14 +407,14 @@ def generate_curl_commands_cmc(timestamp_prefix, url_folder, url_base_file_name,
     try:
         res = requests.head(url_folder)
         if not res:
-            print(f"Warning: Could not get requests.head() from {url_folder}")
+            print_level(3, f"Warning: Could not get requests.head() from {url_folder}")
             return -1
 
         if res.status_code != 200:
-            print(f"Warning: Could not get requests.head() from {url_folder}")
+            print_level(3, f"Warning: Could not get requests.head() from {url_folder}")
             return -1
     except:
-        print(f"Warning: Could not get requests.head() from {url_folder}")
+        print_level(3, f"Warning: Could not get requests.head() from {url_folder}")
         return -1
 
     for param in params:
@@ -397,15 +430,15 @@ def generate_curl_commands_cmc(timestamp_prefix, url_folder, url_base_file_name,
         if overwrite_or_download:
             url = f'{url_folder}{url_base_file_name_with_param}.grib2'
             curl_command = f"curl --create-dirs -y 30 -Y 30 -f -v -s {url} -o {output_file}"
-            print(curl_command)
+            print_level(4, curl_command)
 
             # Run the subprocess and capture its output
             result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             time.sleep(sleep_time)
             if result.returncode != 0:
-                print(f"Warning: Command failed with exit code {result.returncode}")
-                print(f"Command: {curl_command}")
-                print(f"Error output: {result.stderr.decode('utf-8')}")
+                print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+                print_level(3, f"Command: {curl_command}")
+                print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
                 return -2
 
     return 0
@@ -417,15 +450,15 @@ def generate_curl_commands_ecm(timestamp_prefix, idx_file_name, url_folder, url_
     if not os.path.exists(idx_file_path):
         url_idx = f'{url_folder}{idx_file_name}'
         curl_command = f"curl --create-dirs -y 30 -Y 30 -f -v -s {url_idx} -o {idx_file_path}"
-        print(curl_command)
+        print_level(4, curl_command)
 
         # Run the subprocess and capture its output
         result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         time.sleep(sleep_time)
         if result.returncode != 0:
-            print(f"Warning: Command failed with exit code {result.returncode}")
-            print(f"Command: {curl_command}")
-            #print(f"Error output: {result.stderr.decode('utf-8')}")
+            print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+            print_level(3, f"Command: {curl_command}")
+            print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
             try:
                 # clear directory if no files ready yet
                 os.rmdir(output_dir_timestamp)
@@ -463,22 +496,21 @@ def generate_curl_commands_ecm(timestamp_prefix, idx_file_name, url_folder, url_
             overwrite_or_download = True
 
             if os.path.exists(output_file):
-                #print(f'Exists: {output_file}')
                 if os.path.getsize(output_file) == size:
                     overwrite_or_download = False
 
             if overwrite_or_download:
                 url = f'{url_folder}{url_base_file_name}.grib2'
                 curl_command = f"curl --create-dirs -y 30 -Y 30 -f -v -s -r {range_str} {url} -o {output_file}"
-                print(curl_command)
+                print_level(4, curl_command)
 
                 # Run the subprocess and capture its output
                 result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 time.sleep(sleep_time)
                 if result.returncode != 0:
-                    print(f"Warning: Command failed with exit code {result.returncode}")
-                    print(f"Command: {curl_command}")
-                    print(f"Error output: {result.stderr.decode('utf-8')}")
+                    print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+                    print_level(3, f"Command: {curl_command}")
+                    print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
                     return -2
 
     return 0
@@ -490,15 +522,15 @@ def generate_curl_commands_gfs(timestamp_prefix, idx_file_name, url_folder, url_
     if not os.path.exists(idx_file_path):
         url_idx = f'{url_folder}{idx_file_name}'
         curl_command = f"curl --create-dirs -y 30 -Y 30 -f -v -s {url_idx} -o {idx_file_path}"
-        print(curl_command)
+        print_level(4, curl_command)
 
         # Run the subprocess and capture its output
         result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         time.sleep(sleep_time)
         if result.returncode != 0:
-            print(f"Warning: Command failed with exit code {result.returncode}")
-            print(f"Command: {curl_command}")
-            #print(f"Error output: {result.stderr.decode('utf-8')}")
+            print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+            print_level(3, f"Command: {curl_command}")
+            print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
             try:
                 # clear directory if no files ready yet
                 os.rmdir(output_dir_timestamp)
@@ -530,22 +562,21 @@ def generate_curl_commands_gfs(timestamp_prefix, idx_file_name, url_folder, url_
         overwrite_or_download = True
 
         if os.path.exists(output_file):
-            #print(f'Exists: {output_file}')
             if os.path.getsize(output_file) == size:
                 overwrite_or_download = False
 
         if overwrite_or_download:
             url = f'{url_folder}{url_base_file_name}'
             curl_command = f"curl --create-dirs -y 30 -Y 30 -f -v -s -r {range_str} {url} -o {output_file}"
-            print(curl_command)
+            print_level(4, curl_command)
 
             # Run the subprocess and capture its output
             result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             time.sleep(sleep_time)
             if result.returncode != 0:
-                print(f"Warning: Command failed with exit code {result.returncode}")
-                print(f"Command: {curl_command}")
-                print(f"Error output: {result.stderr.decode('utf-8')}")
+                print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+                print_level(3, f"Command: {curl_command}")
+                print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
                 return -2
 
     return 0
@@ -671,7 +702,7 @@ def download_model_run(model_name, model_timestamp):
     if steps_missing:
         for time_step_int in steps_missing:
             if not have_enough_disk_space():
-                print("Fatal error: Exiting since disk space is below the minimum set.")
+                print_level(1, "Fatal error: Exiting since disk space is below the minimum set.")
                 exit()
             cur_r = download_step(model_name, model_timestamp, time_step_int)
             if cur_r != 0:
@@ -693,35 +724,62 @@ def download_model_run(model_name, model_timestamp):
                 none_downloaded = False
     return r
 
+def download_thread(model_names):
+    try:
+        model_timestamps = {}
+        complete_model_runs = {}
+        for model_name in model_names:
+            complete_model_runs[model_name] = []
+
+        while not exit_event.is_set():
+            for model_name in model_names:
+                model_timestamps[model_name] = get_latest_n_model_times(model_name)
+                for model_timestamp in model_timestamps[model_name]:
+                    if model_timestamp in complete_model_runs[model_name]:
+                        print_level(3, f'Already have {model_timestamp} for {model_name}.')
+                        r = 0
+                        continue
+                    # download latest run with available timesteps
+                    # there may be some cycling but the staleness check should always avoid infinite cycling between old runs
+                    r = download_model_run(model_name, model_timestamp)
+                    if r == -2 or r == -1:
+                        print_level(3, f'Failed to finish downloading latest {model_name} run from {model_timestamp}. Retrying later.')
+                    elif r == -3:
+                        # could not even download any files, try the prior run
+                        print_level(3, f'{model_name} run from {model_timestamp} not available.')
+                    elif r == 0:
+                        # successfully downloaded the latest run
+                        print_level(2, f'Finished downloading latest {model_name} run for {model_name} {model_timestamp} (or already exists).')
+                        # get the next one after backing off
+                        if model_timestamp not in complete_model_runs[model_name]:
+                            complete_model_runs[model_name].append(model_timestamp)
+
+            print_level(3, f'Backing off for {backoff_time} seconds in thread {threading.current_thread().name}.')
+            time.sleep(backoff_time)
+
+    except Exception as e:
+        print_level(1, f"Thread {threading.current_thread().name} encountered an error: {e}")
+        exit_event.set()
+        sys.exit(1)
+
 if __name__ == '__main__':
-    # track completed model runs (per model name)
-    complete_model_runs = {}
-    model_timestamps = {}
-    for model_name in model_names_to_download:
-        complete_model_runs[model_name] = []
+    # run the downloads per thread (default )
+    threads = []
 
-    while(True):
-        for model_name in model_names_to_download:
-            model_timestamps[model_name] = get_latest_n_model_times(model_name)
-            for model_timestamp in model_timestamps[model_name]:
-                if model_timestamp in complete_model_runs[model_name]:
-                    print(f'Already have {model_timestamp} for {model_name}.')
-                    r = 0
-                    continue
-                # download latest run with available timesteps
-                # there may be some cycling but the staleness check should always avoid infinite cycling between old runs
-                r = download_model_run(model_name, model_timestamp)
-                if r == -2 or r == -1:
-                    print(f'Failed to finish downloading latest {model_name} run from {model_timestamp}. Retrying later.')
-                elif r == -3:
-                    # could not even download any files, try prior run
-                    print(f'{model_name} run from {model_timestamp} not available.')
-                elif r == 0:
-                    # succesfully downloaded latest run
-                    print(f'Finished downloaded latest {model_name} run for {model_name} {model_timestamp} (or already exists).')
-                    # get next one after backing off
-                    if model_timestamp not in complete_model_runs[model_name]:
-                        complete_model_runs[model_name].append(model_timestamp)
+    for group in model_names_to_download_thread_groupings:
+        thread = threading.Thread(target=download_thread, args=(group,), name='_'.join(group))
+        thread.start()
+        threads.append(thread)
 
-        print(f'Backing off for {backoff_time} seconds.')
-        time.sleep(backoff_time)
+    # Register a signal handler to catch Ctrl+C and exit gracefully
+    def signal_handler(sig, frame):
+        print_level(1, "\nCtrl+C received. Exiting once download runs are finished.")
+        exit_event.set()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+
+    for thread in threads:
+        thread.join()
+
+    print_level(1, "All threads have finished.")
