@@ -269,6 +269,8 @@ warnings.resetwarnings()
 # close old maps generated
 old_maps = []
 
+meters_to_knots = 1.943844
+
 #########################################################
 ########          CHART DISTURBANCES             ########
 #########################################################
@@ -514,7 +516,125 @@ def generate_disturbances_chart(model_name, model_timestamp, time_steps):
 ########       CALCULATE DISTURBANCES            ########
 #########################################################
 
+def traverse_contour(grid):
+    x_lookup = [0,1,0,-1]
+    y_lookup = [-1,0,1,0]
+
+    grid_shape = np.shape(grid)
+    visited = np.zeros(grid_shape, dtype=bool)
+
+    x_last = grid_shape[0] - 1
+    y_last = grid_shape[1] - 1
+
+    center_x, center_y = grid_shape[0] // 2, grid_shape[1] // 2
+
+    north_stack = []
+    south_stack = []
+    east_stack = []
+    west_stack = []
+    cardinal_stacks = [north_stack, east_stack, south_stack, west_stack]
+
+    for direction in range(4):
+        x, y = center_x, center_y
+
+        current_stack = cardinal_stacks[direction]
+        stack2 = []
+
+        found_isosurface = False
+        reached_ends = False
+        while True:
+            visited[x][y] = True
+            if not grid[x][y]:
+                last_direction = (direction-1)%4
+                new_x = x + x_lookup[last_direction]
+                new_y = y + y_lookup[last_direction]
+                if (0 <= new_x <= x_last) and (0 <= new_y <= y_last):
+                    current_stack.append((last_direction, new_x, new_y))
+
+                last_direction = (direction+1)%4
+                new_x = x + x_lookup[last_direction]
+                new_y = y + y_lookup[last_direction]
+                if (0 <= new_x <= x_last) and (0 <= new_y <= y_last):
+                    stack2.append((last_direction, new_x, new_y))
+
+                new_x = x + x_lookup[direction]
+                new_y = y + y_lookup[direction]
+                if (0 <= new_x <= x_last) and (0 <= new_y <= y_last) and not visited[new_x][new_y]:
+                    x = x + x_lookup[direction]
+                    y = y + y_lookup[direction]
+                else:
+                    reached_bounds = True
+                    break
+            else:
+                found_isosurface = True
+                break
+
+        if (not found_isosurface) and reached_bounds:
+            return False
+
+        current_stack.extend(stack2)
+
+    while(north_stack or south_stack or east_stack or west_stack):
+        for stack in cardinal_stacks:
+            if stack:
+                last_direction, x, y = stack.pop()
+                visited[x][y] = True
+                if not grid[x][y]:
+                    if (x == 0) or (y == 0) or (x == x_last) or (y == y_last):
+                        return False
+                    for neighbor_direction in [(last_direction + 1) % 4, last_direction, (last_direction - 1) % 4]:
+                        neighbor_x = x + x_lookup[last_direction]
+                        neighbor_y = y + y_lookup[last_direction]
+                        if (0 <= neighbor_x <= x_last) and (0 <= neighbor_y <= y_last):
+                            if not visited[neighbor_x][neighbor_y]:
+                                north_stack.append((neighbor_direction, neighbor_x, neighbor_y))
+
+    return True
+
+# checks for a closed isobar (not at integer steps) using traverse_contour
+# this will only return True or False, as opposed to the dfs version (which finds the contour)
+#    this is since the visited is not the contour of the isosurface because of the search method
+def has_closed_isobar_traverse_contour(mslp_data, grid_resolution, candidate, isobar_threshold=2.0, isobar_search_radius_degrees = 15):
+    isobar_neighborhood_size = calculate_neighborhood_size(isobar_search_radius_degrees, grid_resolution)
+
+    try:
+        x = candidate['x_value']
+        y = candidate['y_value']
+        minima_value = mslp_data[x][y]
+
+        # Create a modified neighborhood for isobar calculation
+
+        x_min = x - isobar_neighborhood_size
+        x_max = x + isobar_neighborhood_size + 1
+        y_min = y - isobar_neighborhood_size
+        y_max = y + isobar_neighborhood_size + 1
+
+        in_bounds = ((x_min >= 0) and
+            (x_max <= mslp_data.shape[0]) and
+            (y_min >= 0) and
+            (y_max <= mslp_data.shape[1]))
+
+        if in_bounds:
+            # the normal case (not edges of array)
+            neighborhood = mslp_data[x_min:x_max, y_min:y_max]
+        else:
+            # handle indices at the boundaries
+            neighborhood = extract_2d_neighborhood(mslp_data, (x, y), isobar_neighborhood_size)
+
+        # create a binary image (True are values that are at the threshold, with the center being False)
+        binary_neighborhood = (neighborhood - minima_value - isobar_threshold) >= 0
+
+        return traverse_contour(binary_neighborhood)
+
+    except Exception as e:
+        print(f"Error: {e}")
+        traceback.print_exc(limit=None, file=None, chain=True)
+        return None
+
 # finds a closed isobar (not at integer steps) using dfs
+# this will return a visited array of the neighborhood
+#  the visited are those values less than the isobar_threshold difference from the center enclosed by an isoline
+#  if there is no closed isobar within the neighborhood it will return None
 def find_closed_isobar(mslp_data, grid_resolution, candidate, isobar_threshold=2.0, isobar_search_radius_degrees = 15):
     isobar_neighborhood_size = calculate_neighborhood_size(isobar_search_radius_degrees, grid_resolution)
     def dfs(x, y):
@@ -1050,9 +1170,9 @@ def print_candidates(mslp_minima_list, lats = None, lons = None, meet_all_distur
         # vmax 10m is not strictly in ROCI (it's in a box formed from ROCI grid units rather than meters)
         vmax10m_in_roci_str = ""
         if 'vmax10m_in_roci' in candidate:
-            vmax10m_in_roci_str = "10m WS MAX (m/s) in ~ROCI: "
+            vmax10m_in_roci_str = "10m WS MAX (knots) in ~ROCI: "
             vmax10m_in_roci_value = candidate['vmax10m_in_roci']
-            formatted_vmax10m = f"{vmax10m_in_roci_value:3.2f}".rjust(6, ' ')
+            formatted_vmax10m = f"{vmax10m_in_roci_value * meters_to_knots:3.1f}".rjust(6, ' ')
             vmax10m_in_roci_str += formatted_vmax10m
 
         # MSLP at outermost closed isobar - MSLP minimum
@@ -1101,6 +1221,90 @@ def find_mslp_minima(mslp_data, minima_neighborhood_size=1):
         print(f"Error: {e}")
         traceback.print_exc(limit=None, file=None, chain=True)
         return [], [], []
+
+def print_grid(grid):
+    for row in grid:
+        print("".join(map(lambda x: "1" if x else "0", row)))
+
+# use traverse_contour() for speed (the non fast version uses dfs)
+def find_mslp_minima_with_closed_isobars_fast(mslp_data, grid_resolution, isobar_threshold=2.0, isobar_search_radius_degrees = 5, minima_neighborhood_size = 1):
+    isobar_neighborhood_size = calculate_neighborhood_size(isobar_search_radius_degrees, grid_resolution)
+    mslp_shape_x = mslp_data.shape[0]
+    mslp_shape_y = mslp_data.shape[1]
+    try:
+        # List to store MSLP minima as dictionaries
+        mslp_minima_list = []
+
+        # Create a list of candidates for MSLP minima
+        candidates = []
+
+        # Loop through each grid point
+        for x in range(mslp_shape_x):
+            for y in range(mslp_shape_y):
+                mslp_value = mslp_data[x, y]  # MSLP value at the current point
+
+                x_min = x - minima_neighborhood_size
+                x_max = x + minima_neighborhood_size + 1
+                y_min = y - minima_neighborhood_size
+                y_max = y + minima_neighborhood_size + 1
+
+                in_bounds = ((x_min >= 0) and
+                    (x_max <= mslp_shape_x) and
+                    (y_min >= 0) and
+                    (y_max <= mslp_shape_y))
+
+                if in_bounds:
+                    # the normal case (not edges of array)
+                    neighborhood = mslp_data[x_min:x_max, y_min:y_max]
+                else:
+                    # handle indices at the boundaries
+                    neighborhood = extract_2d_neighborhood(mslp_data, (x, y), minima_neighborhood_size)
+
+                # Check if the MSLP value is the minimum within the neighborhood
+                if mslp_value == neighborhood.min():
+                    candidates.append((x, y, float(mslp_value)))
+
+        # Loop through the candidates to find isobars
+        for x, y, minima_value in candidates:
+            # Create a modified neighborhood for isobar calculation
+
+            x_min = x - isobar_neighborhood_size
+            x_max = x + isobar_neighborhood_size + 1
+            y_min = y - isobar_neighborhood_size
+            y_max = y + isobar_neighborhood_size + 1
+
+            in_bounds = ((x_min >= 0) and
+                (x_max <= mslp_shape_x) and
+                (y_min >= 0) and
+                (y_max <= mslp_shape_y))
+
+            if in_bounds:
+                # the normal case (not edges of array)
+                neighborhood = mslp_data[x_min:x_max, y_min:y_max]
+            else:
+                # handle indices at the boundaries
+                neighborhood = extract_2d_neighborhood(mslp_data, (x, y), isobar_neighborhood_size)
+
+            # create a binary image (True are values that are at the threshold, with the center being False)
+            binary_neighborhood = (neighborhood - minima_value - isobar_threshold) >= 0
+            path_found = traverse_contour(binary_neighborhood)
+
+            if path_found:
+                # Store MSLP minima data as a dictionary
+                candidate = {
+                    "mslp_value": float(minima_value),
+                    "x_value": x,
+                    "y_value": y
+                }
+                mslp_minima_list.append(candidate)
+
+
+        return mslp_minima_list
+
+    except Exception as e:
+        print(f"Error: {e}")
+        traceback.print_exc(limit=None, file=None, chain=True)
+        return []
 
 # minima_neighborhood_size set to 1 finds the smallest area that could be called a relative minima in MSLP
 # this can create many duplicates for the same cyclone
@@ -1216,6 +1420,7 @@ def find_mslp_minima_with_closed_isobars(mslp_data, grid_resolution, isobar_thre
         print(f"Error: {e}")
         traceback.print_exc(limit=None, file=None, chain=True)
         return []
+
 
 # calculate vorticity (accounting for projection distortion) using metpy (uses finite differences method)
 # returns vorticity using an ellipsoid based on WGS84
@@ -1460,6 +1665,7 @@ def calc_roci(mslp_minima_list, mslp, mslp_fs, grid_resolution):
         # Calculate: the outermost closed isobar (dfs only)
         #   the 'mass' location of the innermost closed isobar
         #   and, the isobar difference between the MSLP minimum and the outermost closed isobar
+        # Note: a fast version of this using traverse_contour doesn't have a speed up over dfs as it will be closed for most of the isobars checked
         mass_candidate, max_closed_isobar_difference, visited_outermost_closed_isobar = get_outermost_closed_isobar(mslp, grid_resolution, candidate)
 
         average_radius, average_radius_units = find_average_radius(mslp_fs, mass_candidate, visited_outermost_closed_isobar)
@@ -1591,7 +1797,9 @@ def get_disturbance_candidates_from_split_gribs(grib_files, model_name):
         return None
 
     debug_timing()
-    mslp_minima_list_with_closed_isobars = find_mslp_minima_with_closed_isobars(mslp, grid_resolution['mslp'])
+    #mslp_minima_list_with_closed_isobars = find_mslp_minima_with_closed_isobars(mslp, grid_resolution['mslp'])
+    # use a faster version (50 seconds vs 100+s for CMC) that relies on that most of the candidates will not satisfy it
+    mslp_minima_list_with_closed_isobars = find_mslp_minima_with_closed_isobars_fast(mslp, grid_resolution['mslp'])
     debug_timing('find_mslp_minima_with_closed_isobars()')
 
     # if vorticity is missing, calculate relative vorticity for the entire data set first

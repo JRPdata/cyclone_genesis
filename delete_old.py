@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 setting_hours_old = 48
 # add to crontab, crontab line:
-# 0 0,12 * * * /usr/bin/python3 /home/db/JRPdata/cyclone-genesis/delete_old.py >> /home/db/JRPdata/cyclone-genesis/delete_old.log 2>&1
+# 0 0,12 * * * /usr/bin/python3 /home/db/Documents/JRPdata/cyclone-genesis/delete_old.py >> /home/db/Documents/JRPdata/cyclone-genesis/delete_old.log 2>&1
 
 model_data_folders_by_model_name = {
     'GFS': '/home/db/metview/JRPdata/globalmodeldata/gfs',
