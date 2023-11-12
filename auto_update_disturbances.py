@@ -2189,6 +2189,8 @@ def get_unprocessed_disturbance_model_runs():
 
 def calc_tc_candidates():
     unprocessed_data = get_unprocessed_disturbance_model_runs()
+    if len(unprocessed_data) == 0:
+        return
     print("Calculate TC candidates (and simplified tracks)")
     print(f"# Model runs to process: {len(unprocessed_data)}")
     print("")
@@ -3043,7 +3045,7 @@ hours_to_look_back = 48
 polling_interval = 5
 
 while True:
-    print("Checking for new model data for new disturbances:")
+    print("\nChecking for new model data for new disturbances:")
     for model_name in model_names_to_update:
         # process all runs not already in disturbances db for single model, starting at a timestamp
         model_interval = model_interval_hours[model_name]

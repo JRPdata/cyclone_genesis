@@ -2189,6 +2189,8 @@ def get_unprocessed_disturbance_model_runs():
 
 def calc_tc_candidates():
     unprocessed_data = get_unprocessed_disturbance_model_runs()
+    if len(unprocessed_data) == 0:
+        return
     print("Calculate TC candidates (and simplified tracks)")
     print(f"# Model runs to process: {len(unprocessed_data)}")
     print("")
