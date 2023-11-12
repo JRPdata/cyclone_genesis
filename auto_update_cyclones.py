@@ -641,8 +641,8 @@ def has_closed_isobar_traverse_contour(mslp_data, grid_resolution, candidate, is
 # this will return a visited array of the neighborhood
 #  the visited are those values less than the isobar_threshold difference from the center enclosed by an isoline
 #  if there is no closed isobar within the neighborhood it will return None
-def find_closed_isobar(mslp_data, grid_resolution, candidate, isobar_threshold=2.0, isobar_search_radius_degrees = 15):
-    isobar_neighborhood_size = calculate_neighborhood_size(isobar_search_radius_degrees, grid_resolution)
+# this is modified from previous version, so takes the (float) neighborhood as input, along with the center minima value, radius, and threshold from minima
+def find_closed_isobar_in_neighborhood(neighborhood, minima_value, isobar_neighborhood_size, isobar_threshold = 2.0):
     def dfs(x, y):
         nonlocal visited
         stack = [(x, y)]
@@ -659,38 +659,16 @@ def find_closed_isobar(mslp_data, grid_resolution, candidate, isobar_threshold=2
                     if not visited[nx][ny]:
                         if nx == 0 or ny == 0 or nx == isobar_neighborhood_size * 2 or ny == isobar_neighborhood_size * 2:
                             return False
-                        if neighborhood_modified[nx][ny] < 0:
+                        if not binary_neighborhood[nx][ny]:
                             stack.append((nx, ny))
         return True
 
     try:
-        x = candidate['x_value']
-        y = candidate['y_value']
-        minima_value = mslp_data[x][y]
-
-        # Create a modified neighborhood for isobar calculation
-
-        x_min = x - isobar_neighborhood_size
-        x_max = x + isobar_neighborhood_size + 1
-        y_min = y - isobar_neighborhood_size
-        y_max = y + isobar_neighborhood_size + 1
-
-        in_bounds = ((x_min >= 0) and
-            (x_max <= mslp_data.shape[0]) and
-            (y_min >= 0) and
-            (y_max <= mslp_data.shape[1]))
-
-        if in_bounds:
-            # the normal case (not edges of array)
-            neighborhood = mslp_data[x_min:x_max, y_min:y_max]
-        else:
-            # handle indices at the boundaries
-            neighborhood = extract_2d_neighborhood(mslp_data, (x, y), isobar_neighborhood_size)
-
-        neighborhood_modified = neighborhood - minima_value - isobar_threshold
+        # create a binary image (True are values that are at the threshold, with the center being False)
+        binary_neighborhood = (neighborhood - minima_value - isobar_threshold) >= 0
 
         # Initialize visited array for DFS
-        visited = np.zeros_like(neighborhood_modified, dtype=bool)
+        visited = np.zeros_like(binary_neighborhood, dtype=bool)
 
         # Flag to track if a closed path is found
         path_found = dfs(isobar_neighborhood_size, isobar_neighborhood_size)
@@ -797,8 +775,33 @@ def find_average_radius(mslp_fs, candidate, neighborhood, num_legs=576):
 def get_outermost_closed_isobar(mslp_data, grid_resolution, candidate, isobar_search_radius_degrees = 15):
     mslp_candidate = copy.deepcopy(candidate)
 
+    # get neighborhood once
+    isobar_neighborhood_size = calculate_neighborhood_size(isobar_search_radius_degrees, grid_resolution)
+    x = mslp_candidate['x_value']
+    y = mslp_candidate['y_value']
+    mslp_center_minima_value = mslp_data[x][y]
+
+    # Create a modified neighborhood for isobar calculation
+
+    x_min = x - isobar_neighborhood_size
+    x_max = x + isobar_neighborhood_size + 1
+    y_min = y - isobar_neighborhood_size
+    y_max = y + isobar_neighborhood_size + 1
+
+    in_bounds = ((x_min >= 0) and
+        (x_max <= mslp_data.shape[0]) and
+        (y_min >= 0) and
+        (y_max <= mslp_data.shape[1]))
+
+    if in_bounds:
+        # the normal case (not edges of array)
+        neighborhood = mslp_data[x_min:x_max, y_min:y_max]
+    else:
+        # handle indices at the boundaries
+        neighborhood = extract_2d_neighborhood(mslp_data, (x, y), isobar_neighborhood_size)
+
     # center of closest closed isobar (1 hPa away)
-    visited = find_closed_isobar(mslp_data, grid_resolution, candidate, isobar_threshold=1, isobar_search_radius_degrees = isobar_search_radius_degrees)
+    visited = find_closed_isobar_in_neighborhood(neighborhood, mslp_center_minima_value, isobar_neighborhood_size, isobar_threshold=1)
     neighborhood_mass_x, neighborhood_mass_y = find_feature_center(visited)
     neighborhood_center_x = int(visited.shape[0] // 2)
     neighborhood_center_y = int(visited.shape[1] // 2)
@@ -812,7 +815,7 @@ def get_outermost_closed_isobar(mslp_data, grid_resolution, candidate, isobar_se
     last_visited = None
     last_isobar_threshold = None
     for isobar_threshold in range(2, 200):
-        visited = find_closed_isobar(mslp_data, grid_resolution, candidate, isobar_threshold=isobar_threshold, isobar_search_radius_degrees = isobar_search_radius_degrees)
+        visited = find_closed_isobar_in_neighborhood(neighborhood, mslp_center_minima_value, isobar_neighborhood_size, isobar_threshold=isobar_threshold)
         if visited is not None:
             last_visited = visited
             last_isobar_threshold = isobar_threshold
@@ -1108,7 +1111,8 @@ def convert_to_signed_lon(lon):
 # this is in a number of cells radius from the center (so a neighborhood size of 1 would be 3x3)
 def calculate_neighborhood_size(degree_radius, grid_resolution):
     # Calculate the radius in grid points
-    radius_in_grid_points = int(degree_radius / grid_resolution)
+    # changed to round() rather than truncating to integer
+    radius_in_grid_points = int(round(degree_radius / grid_resolution))
     return radius_in_grid_points
 
 def array_indices_to_lat_lon(x, y, lats, lons):
@@ -1335,7 +1339,7 @@ def find_mslp_minima_with_closed_isobars(mslp_data, grid_resolution, isobar_thre
                     if not visited[nx][ny]:
                         if nx == 0 or ny == 0 or nx == isobar_neighborhood_size * 2 or ny == isobar_neighborhood_size * 2:
                             return False
-                        if neighborhood_modified[nx][ny] < 0:
+                        if not binary_neighborhood[nx][ny]:
                             stack.append((nx, ny))
         return True
 
@@ -1393,10 +1397,10 @@ def find_mslp_minima_with_closed_isobars(mslp_data, grid_resolution, isobar_thre
                 # handle indices at the boundaries
                 neighborhood = extract_2d_neighborhood(mslp_data, (x, y), isobar_neighborhood_size)
 
-            neighborhood_modified = neighborhood - minima_value - isobar_threshold
+            binary_neighborhood = (neighborhood - minima_value - isobar_threshold) >= 0
 
             # Initialize visited array for DFS
-            visited = np.zeros_like(neighborhood_modified, dtype=bool)
+            visited = np.zeros_like(binary_neighborhood, dtype=bool)
 
             # Flag to track if a closed path is found
             path_found = dfs(isobar_neighborhood_size, isobar_neighborhood_size)
@@ -1408,7 +1412,7 @@ def find_mslp_minima_with_closed_isobars(mslp_data, grid_resolution, isobar_thre
                         "mslp_value": float(minima_value),
                         "x_value": x,
                         "y_value": y,
-                        "neighborhood": copy.deepcopy(neighborhood_modified),
+                        "neighborhood": copy.deepcopy(neighborhood - minima_value - isobar_threshold),
                         "visited": copy.deepcopy(visited)
                     }
                 else:
