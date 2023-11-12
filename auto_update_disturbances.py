@@ -523,10 +523,11 @@ def traverse_contour(grid):
     grid_shape = np.shape(grid)
     visited = np.zeros(grid_shape, dtype=bool)
 
-    x_last = grid_shape[0] - 1
-    y_last = grid_shape[1] - 1
+    y_last = grid_shape[0] - 1
+    x_last = grid_shape[1] - 1
 
-    center_x, center_y = grid_shape[0] // 2, grid_shape[1] // 2
+    center_y = grid_shape[0] // 2
+    center_x = grid_shape[1] // 2
 
     north_stack = []
     south_stack = []
@@ -535,7 +536,8 @@ def traverse_contour(grid):
     cardinal_stacks = [north_stack, east_stack, south_stack, west_stack]
 
     for direction in range(4):
-        x, y = center_x, center_y
+        y = center_y
+        x = center_x
 
         current_stack = cardinal_stacks[direction]
         stack2 = []
@@ -543,25 +545,25 @@ def traverse_contour(grid):
         found_isosurface = False
         reached_ends = False
         while True:
-            visited[x][y] = True
-            if not grid[x][y]:
+            visited[y][x] = True
+            if not grid[y][x]:
                 last_direction = (direction-1)%4
-                new_x = x + x_lookup[last_direction]
                 new_y = y + y_lookup[last_direction]
-                if (0 <= new_x <= x_last) and (0 <= new_y <= y_last):
-                    current_stack.append((last_direction, new_x, new_y))
+                new_x = x + x_lookup[last_direction]
+                if (0 <= new_y <= y_last) and (0 <= new_x <= x_last):
+                    current_stack.append((last_direction, new_y, new_x))
 
                 last_direction = (direction+1)%4
-                new_x = x + x_lookup[last_direction]
                 new_y = y + y_lookup[last_direction]
-                if (0 <= new_x <= x_last) and (0 <= new_y <= y_last):
-                    stack2.append((last_direction, new_x, new_y))
+                new_x = x + x_lookup[last_direction]
+                if (0 <= new_y <= y_last) and (0 <= new_x <= x_last):
+                    stack2.append((last_direction, new_y, new_x))
 
-                new_x = x + x_lookup[direction]
                 new_y = y + y_lookup[direction]
-                if (0 <= new_x <= x_last) and (0 <= new_y <= y_last) and not visited[new_x][new_y]:
-                    x = x + x_lookup[direction]
-                    y = y + y_lookup[direction]
+                new_x = x + x_lookup[direction]
+                if (0 <= new_y <= y_last) and (0 <= new_x <= x_last) and not visited[new_y][new_x]:
+                    y = new_y
+                    x = new_x
                 else:
                     reached_bounds = True
                     break
@@ -577,17 +579,21 @@ def traverse_contour(grid):
     while(north_stack or south_stack or east_stack or west_stack):
         for stack in cardinal_stacks:
             if stack:
-                last_direction, x, y = stack.pop()
-                visited[x][y] = True
-                if not grid[x][y]:
-                    if (x == 0) or (y == 0) or (x == x_last) or (y == y_last):
+                last_direction, y, x = stack.pop()
+                if visited[y][x]:
+                    continue
+
+                visited[y][x] = True
+                if not grid[y][x]:
+                    if (y == 0) or (x == 0) or (y == y_last) or (x == x_last):
                         return False
+
                     for neighbor_direction in [(last_direction + 1) % 4, last_direction, (last_direction - 1) % 4]:
-                        neighbor_x = x + x_lookup[last_direction]
-                        neighbor_y = y + y_lookup[last_direction]
-                        if (0 <= neighbor_x <= x_last) and (0 <= neighbor_y <= y_last):
-                            if not visited[neighbor_x][neighbor_y]:
-                                north_stack.append((neighbor_direction, neighbor_x, neighbor_y))
+                        neighbor_y = y + y_lookup[neighbor_direction]
+                        neighbor_x = x + x_lookup[neighbor_direction]
+                        if (0 <= neighbor_y <= y_last) and (0 <= neighbor_x <= x_last):
+                            if not visited[neighbor_y][neighbor_x]:
+                                stack.append((neighbor_direction, neighbor_y, neighbor_x))
 
     return True
 
@@ -807,12 +813,13 @@ def get_outermost_closed_isobar(mslp_data, grid_resolution, candidate, isobar_se
     last_isobar_threshold = None
     for isobar_threshold in range(2, 200):
         visited = find_closed_isobar(mslp_data, grid_resolution, candidate, isobar_threshold=isobar_threshold, isobar_search_radius_degrees = isobar_search_radius_degrees)
-        if visited is None and last_visited is not None:
-            break
-        else:
-            last_isobar_thresold = isobar_threshold
+        if visited is not None:
             last_visited = visited
-    return mslp_candidate, last_isobar_thresold, last_visited
+            last_isobar_threshold = isobar_threshold
+        if visited is None:
+            break
+
+    return mslp_candidate, last_isobar_threshold, last_visited
 
 # Define a context manager to temporarily ignore the warning
 class SuppressRuntimeWarningVortCalcs:
@@ -1297,7 +1304,6 @@ def find_mslp_minima_with_closed_isobars_fast(mslp_data, grid_resolution, isobar
                     "y_value": y
                 }
                 mslp_minima_list.append(candidate)
-
 
         return mslp_minima_list
 
