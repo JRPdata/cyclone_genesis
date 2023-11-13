@@ -633,7 +633,7 @@ def has_closed_isobar_traverse_contour(mslp_data, grid_resolution, candidate, is
         return traverse_contour(binary_neighborhood)
 
     except Exception as e:
-        print(f"Error: {e}")
+        print_with_process_id(f"Error: {e}")
         traceback.print_exc(limit=None, file=None, chain=True)
         return None
 
@@ -679,7 +679,7 @@ def find_closed_isobar_in_neighborhood(neighborhood, minima_value, isobar_neighb
             return None
 
     except Exception as e:
-        print(f"Error: {e}")
+        print_with_process_id(f"Error: {e}")
         traceback.print_exc(limit=None, file=None, chain=True)
         return None
 
@@ -929,23 +929,22 @@ def calc_disturbances_by_model_name_date_and_time_steps(model_name, model_timest
             if res:
                 if expected_num_grib_files_by_model_name[model_name] == len(grib_files):
                     model_time_step_str = f"{int(res['time_step']):02}"
-                    print("========================================================================================")
-                    print(f"Calculating disturbances (TC candidates) {model_name} for {model_date_str} {model_hour}Z at +{model_time_step}h")
-                    print("========================================================================================")
+                    #print_with_process_id("========================================================================================")
+                    print_with_process_id(f"Calculating disturbances (TC candidates) {model_name} for {model_date_str} {model_hour}Z at +{model_time_step}h")
+                    #print_with_process_id("========================================================================================")
                     candidates = get_disturbance_candidates_from_split_gribs(grib_files, model_name)
                     if candidates is not None:
                         update_disturbances_db(model_name, model_step_timestamp, model_time_step, candidates)
                         all_candidates[model_time_step_str] = candidates
                 else:
-                    print(f"Missing files for {model_name} at time step {model_time_step} in {model_dir}")
+                    print_with_process_id(f"Missing files for {model_name} at time step {model_time_step} in {model_dir}")
             else:
-                print(f"Could not parse time step for {model_name} at time step {model_time_step} in {model_dir}")
+                print_with_process_id(f"Could not parse time step for {model_name} at time step {model_time_step} in {model_dir}")
         else:
-            print(f"Could not find grib files for {model_name} at time step {model_time_step} in {model_dir}")
+            print_with_process_id(f"Could not find grib files for {model_name} at time step {model_time_step} in {model_dir}")
 
         # getting the time taken for executing the code in seconds
         debug_timing(f'Total time taken for one step {model_name}')
-        print("\n")
 
     debug_timing(f'Total time taken for all steps {model_name}')
 
@@ -967,7 +966,7 @@ def get_disturbances_from_db(model_name, model_timestamp):
             retrieved_data = json.loads(result[0])
 
     except sqlite3.Error as e:
-        print(f"SQLite error (get_disturbances_from_db): {e}")
+        print_with_process_id(f"SQLite error (get_disturbances_from_db): {e}")
     finally:
         if conn:
             conn.close()
@@ -981,6 +980,11 @@ def update_disturbances_db(model_name, model_timestamp, model_time_step, candida
         # store disturbance candidates in database
         conn = sqlite3.connect(disturbances_db_file_path)
         cursor = conn.cursor()
+        # Parallelization:
+        # As we are reading in a dict and appending in parallel...
+        #   we need to make this exclusive to make sure only the latest dict is used
+        #   otherwise we might clobber our work for previous time-steps for the same model & init time
+        cursor.execute('BEGIN EXCLUSIVE TRANSACTION')
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS disturbances (
@@ -1016,7 +1020,8 @@ def update_disturbances_db(model_name, model_timestamp, model_time_step, candida
         conn.commit()
 
     except sqlite3.Error as e:
-        print(f"SQLite error (update_disturbances_db): {e}")
+        print_with_process_id(f"SQLite error (update_disturbances_db): {e}")
+        conn.rollback()
     finally:
         if conn:
             conn.close()
@@ -1031,7 +1036,7 @@ def debug_timing(func_str = None):
 
     debug_time_start = debug_time_start_stack.pop()
     debug_time_end = time.time()
-    print(f'{func_str} execution time (seconds): {debug_time_end - debug_time_start:.1f}')
+    print_with_process_id(f'{func_str} execution time (seconds): {debug_time_end - debug_time_start:.1f}')
 
 # rv_to_sign just maps to positive and negative, without it it does an (arbitrary) color mapping
 def create_image(array, title, rv_to_sign=True, radius=None):
@@ -1079,7 +1084,7 @@ def list_available_parameters(grib_file):
             parameter_unit = grb.units
             level_type = grb.levelType
             level = grb.level
-            print(grb)
+            print_with_process_id(grb)
             parameter_info.append({
                 "Parameter Name": parameter_name,
                 "Parameter shortName": parameter_shortName,
@@ -1093,15 +1098,15 @@ def list_available_parameters(grib_file):
 
         # Print the information for parameters
         for info in parameter_info:
-            print("Parameter Name:", info["Parameter Name"])
-            print("Parameter shortName:", info["Parameter shortName"])
-            print("Unit:", info["Unit"])
-            print("Level Type:", info["Level Type"])
-            print("Level:", info["Level"])
-            print("\n")
+            print_with_process_id("Parameter Name:", info["Parameter Name"])
+            print_with_process_id("Parameter shortName:", info["Parameter shortName"])
+            print_with_process_id("Unit:", info["Unit"])
+            print_with_process_id("Level Type:", info["Level Type"])
+            print_with_process_id("Level:", info["Level"])
+            print_with_process_id("")
 
     except Exception as e:
-        print(f"Error: {e}")
+        print_with_process_id(f"Error: {e}")
         traceback.print_exc(limit=None, file=None, chain=True)
 
 def convert_to_signed_lon(lon):
@@ -1198,7 +1203,7 @@ def print_candidates(mslp_minima_list, lats = None, lons = None, meet_all_distur
             numbering_str = "    "
         else:
             numbering_str = f"#{n: >2}, "
-        print(f"{numbering_str}{basin_str}Latitude (deg:): {lat: >6.1f}, Longitude (deg): {lon: >6.1f}, MSLP (hPa): {formatted_mslp}{roci_str}\n        {rv_str}{thickness_str}{vmax_str}\n        {vmax10m_in_roci_str}{closed_isobar_delta_str}")
+        print_with_process_id(f"{numbering_str}{basin_str}Latitude (deg:): {lat: >6.1f}, Longitude (deg): {lon: >6.1f}, MSLP (hPa): {formatted_mslp}{roci_str}\n        {rv_str}{thickness_str}{vmax_str}\n        {vmax10m_in_roci_str}{closed_isobar_delta_str}")
 
         if debug_isobar_images:
             create_image(candidate['neighborhood'], 'Neighborhood')
@@ -1229,13 +1234,13 @@ def find_mslp_minima(mslp_data, minima_neighborhood_size=1):
 
         return candidates
     except Exception as e:
-        print(f"Error: {e}")
+        print_with_process_id(f"Error: {e}")
         traceback.print_exc(limit=None, file=None, chain=True)
         return [], [], []
 
 def print_grid(grid):
     for row in grid:
-        print("".join(map(lambda x: "1" if x else "0", row)))
+        print_with_process_id("".join(map(lambda x: "1" if x else "0", row)))
 
 # use traverse_contour() for speed (the non fast version uses dfs)
 def find_mslp_minima_with_closed_isobars_fast(mslp_data, grid_resolution, isobar_threshold=2.0, isobar_search_radius_degrees = 5, minima_neighborhood_size = 1):
@@ -1312,7 +1317,7 @@ def find_mslp_minima_with_closed_isobars_fast(mslp_data, grid_resolution, isobar
         return mslp_minima_list
 
     except Exception as e:
-        print(f"Error: {e}")
+        print_with_process_id(f"Error: {e}")
         traceback.print_exc(limit=None, file=None, chain=True)
         return []
 
@@ -1322,7 +1327,7 @@ def find_mslp_minima_with_closed_isobars_fast(mslp_data, grid_resolution, isobar
 # Quoting [1]; "a 3° buffer around the position at forecast hour 12. Note that the position at forecast hour 18 is on or within the 3° buffer. Thus, these two points are considered to be the same TC. A new buffer is then drawn around the location at forecast hour 18 (green box), and a search is done for any positions on or within the buffer at forecast hour 24. This process is repeated until no points are found on or within the buffer."
 def find_mslp_minima_with_closed_isobars(mslp_data, grid_resolution, isobar_threshold=2.0, isobar_search_radius_degrees = 5, minima_neighborhood_size = 1):
     isobar_neighborhood_size = calculate_neighborhood_size(isobar_search_radius_degrees, grid_resolution)
-    #print('isobar neighborsize', isobar_neighborhood_size)
+    #print_with_process_id('isobar neighborsize', isobar_neighborhood_size)
     def dfs(x, y):
         nonlocal visited
         stack = [(x, y)]
@@ -1427,7 +1432,7 @@ def find_mslp_minima_with_closed_isobars(mslp_data, grid_resolution, isobar_thre
         return mslp_minima_list
 
     except Exception as e:
-        print(f"Error: {e}")
+        print_with_process_id(f"Error: {e}")
         traceback.print_exc(limit=None, file=None, chain=True)
         return []
 
@@ -1815,7 +1820,7 @@ def get_disturbance_candidates_from_split_gribs(grib_files, model_name):
     # if vorticity is missing, calculate relative vorticity for the entire data set first
     if relative_vorticity_850 is None:
         # this may issue warnings for divide by 0 for vorticity calculations
-        print("Calculating Relative vorticity for 850 hPa")
+        #print_with_process_id("Calculating Relative vorticity for 850 hPa")
         debug_timing()
         if default_vorticity_method == 'metpy':
             rv_850 = calculate_vorticity(u_wind_850, v_wind_850, lats=lats, lons=lons)
@@ -1862,8 +1867,8 @@ def get_disturbance_candidates_from_split_gribs(grib_files, model_name):
     for candidate in mslp_minima_list_with_disturbance_threshold_booleans:
         # exclude candidates not meeting all criteria
         if not candidate['criteria']['all']:
-            #print("Failed candidate:")
-            #print(json.dumps(candidate,indent=4))
+            #print_with_process_id("Failed candidate:")
+            #print_with_process_id(json.dumps(candidate,indent=4))
             continue
 
         # Update a copy of the candidate's dictionary with LAT, LON
@@ -1882,7 +1887,7 @@ def get_disturbance_candidates_from_split_gribs(grib_files, model_name):
     updated_mslp_minima_list_with_10m_wind = find_max_wind_10m_in_roci(updated_mslp_minima_list_with_roci, u_wind_10m, v_wind_10m)
     debug_timing('find_max_wind_10m_in_roci()')
 
-    print('\n')
+    #print_with_process_id('\n')
     return updated_mslp_minima_list_with_10m_wind
 
 def get_grid_resolution_from_fieldset(fs):
@@ -2045,46 +2050,46 @@ def load_and_extract_split_grib_data(grib_files, model_name):
 
         # Check if units are not in hPa and convert if necessary
         if mslp_units != "hPa":
-            #print(f"Converting MSLP units from {mslp_units} to hPa")
+            #print_with_process_id(f"Converting MSLP units from {mslp_units} to hPa")
             if mslp_units == "Pa":
                 # Convert from Pa to hPa
                 mslp *= 0.01
                 mslp_units = "hPa"
             else:
-                print("Warning: Units of MSLP are not in Pa or hPa. Please verify the units for accurate results.")
+                print_with_process_id("Warning: Units of MSLP are not in Pa or hPa. Please verify the units for accurate results.")
 
         # Check if units are not in m/s for 925 hPa wind components and convert if necessary
         if not (re.search(r"(m/s|m s\*\*-1)", wind_925_units)):
-            print(f"Converting 925 hPa wind components units from {wind_925_units} to m/s")
+            print_with_process_id(f"Converting 925 hPa wind components units from {wind_925_units} to m/s")
             if re.search(r"knots|knot", wind_925_units, re.I):
                 # Convert from knots to m/s (1 knot ≈ 0.514444 m/s)
                 u_wind_925 *= 0.514444
                 v_wind_925 *= 0.514444
                 wind_925_units = "m/s"
             else:
-                print("Warning: Units of 925 hPa wind components are not in knots, m/s, or m s**-1. Please verify the units for accurate results.")
+                print_with_process_id("Warning: Units of 925 hPa wind components are not in knots, m/s, or m s**-1. Please verify the units for accurate results.")
 
         # Check if units are not in m/s for 925 hPa wind components and convert if necessary
         if wind_850_units and not (re.search(r"(m/s|m s\*\*-1)", wind_850_units)):
-            print(f"Converting 850 hPa wind components units from {wind_850_units} to m/s")
+            print_with_process_id(f"Converting 850 hPa wind components units from {wind_850_units} to m/s")
             if re.search(r"knots|knot", wind_925_units, re.I):
                 # Convert from knots to m/s (1 knot ≈ 0.514444 m/s)
                 u_wind_850 *= 0.514444
                 v_wind_850 *= 0.514444
                 wind_850_units = "m/s"
             else:
-                print("Warning: Units of 925 hPa wind components are not in knots, m/s, or m s**-1. Please verify the units for accurate results.")
+                print_with_process_id("Warning: Units of 925 hPa wind components are not in knots, m/s, or m s**-1. Please verify the units for accurate results.")
 
         # Check if units are not in m/s for 925 hPa wind components and convert if necessary
         if wind_10m_units and not (re.search(r"(m/s|m s\*\*-1)", wind_10m_units)):
-            print(f"Converting 10 m wind components units from {wind_10m_units} to m/s")
+            print_with_process_id(f"Converting 10 m wind components units from {wind_10m_units} to m/s")
             if re.search(r"knots|knot", wind_10m_units, re.I):
                 # Convert from knots to m/s (1 knot ≈ 0.514444 m/s)
                 u_wind_10m *= 0.514444
                 v_wind_10m *= 0.514444
                 wind_10m_units = "m/s"
             else:
-                print("Warning: Units of 925 hPa wind components are not in knots, m/s, or m s**-1. Please verify the units for accurate results.")
+                print_with_process_id("Warning: Units of 925 hPa wind components are not in knots, m/s, or m s**-1. Please verify the units for accurate results.")
 
         # make sure shapes are all the same
         lat_shapes = [x.shape for x in
@@ -2117,13 +2122,13 @@ def load_and_extract_split_grib_data(grib_files, model_name):
         # check to make sure all the same shape
         if len(set(lat_shapes)) != 1:
             # lats and lons different shapes!
-            print(f"Error: getting disturbance candidates: lats have different shapes for: {grib_files}")
+            print_with_process_id(f"Error: getting disturbance candidates: lats have different shapes for: {grib_files}")
             return [None] * 17
 
         # check to make sure all the same shape
         if len(set(lon_shapes)) != 1:
             # lats and lons different shapes!
-            print(f"Error: getting disturbance candidates: lons have different shapes for: {grib_files}")
+            print_with_process_id(f"Error: getting disturbance candidates: lons have different shapes for: {grib_files}")
             return [None] * 17
 
         lats = mslp_lats
@@ -2131,7 +2136,7 @@ def load_and_extract_split_grib_data(grib_files, model_name):
 
         return grid_resolution, lats, lons, mslp, mslp_fs, u_wind_925, v_wind_925, u_wind_850, u_wind_850_fs, v_wind_850, v_wind_850_fs, geopotential_250, geopotential_850, relative_vorticity_850, u_wind_10m, v_wind_10m, u_wind_850_grib_file_path
     except Exception as e:
-        print(f"Error: {e}")
+        print_with_process_id(f"Error: {e}")
         traceback.print_exc(limit=None, file=None, chain=True)
         return [None] * 17
 
@@ -2195,9 +2200,9 @@ def calc_tc_candidates():
     unprocessed_data = get_unprocessed_disturbance_model_runs()
     if len(unprocessed_data) == 0:
         return
-    print("Calculate TC candidates (and simplified tracks)")
-    print(f"# Model runs to process: {len(unprocessed_data)}")
-    print("")
+    print_with_process_id("Calculate TC candidates (and simplified tracks)")
+    print_with_process_id(f"# Model runs to process: {len(unprocessed_data)}")
+    print_with_process_id("")
     for row in unprocessed_data:
         graph = create_graph_and_add_candidates(row)
         connect_graph_colocated(graph)
@@ -2205,8 +2210,8 @@ def calc_tc_candidates():
         remove_disturbances_not_meeting_time_criteria(graph)
         process_and_simplify_graph(graph)
 
-    print("")
-    print("Completed all model runs.")
+    print_with_process_id("")
+    print_with_process_id("Completed all model runs.")
 
 # connect nodes at same timestep that are colocated
 def connect_graph_colocated(graph):
@@ -2336,10 +2341,10 @@ def process_and_simplify_graph(graph):
     g = Geod(ellps='WGS84')
 
     has_error = False
-    print("")
-    print("=========================")
-    print(graph.graph['name'])
-    print("=========================")
+    print_with_process_id("")
+    print_with_process_id("=========================")
+    print_with_process_id(graph.graph['name'])
+    print_with_process_id("=========================")
 
     model_name = graph.graph['model_name']
     init_time = graph.graph['init_time']
@@ -2431,7 +2436,7 @@ def process_and_simplify_graph(graph):
                             # it is reducible
                             reducible_nodes = copy.deepcopy(time_step_component)
                             reducible_nodes.remove(min_mslp_node)
-                            #print('Removing nodes:',reducible_nodes)
+                            #print_with_process_id('Removing nodes:',reducible_nodes)
                             graph.remove_nodes_from(list(reducible_nodes))
                             components_were_modified = True
                             # also remove from component
@@ -2490,7 +2495,7 @@ def process_and_simplify_graph(graph):
                     max_segment_length = max(segment_lengths)
 
                 if max_segment_length < 5:
-                    #print("No cases with segments >= 5.")
+                    #print_with_process_id("No cases with segments >= 5.")
                     continue
 
                 for not_connected_segment in not_connected_segments:
@@ -2515,15 +2520,15 @@ def process_and_simplify_graph(graph):
                     segment_successor_index = segment_last_index + 1
                     if segment_predecessor_index >= 0:
                         segment_predecessor_valid_time = node_valid_times[segment_predecessor_index]
-                        #print("  Node bunch before segment:", nodes_by_valid_time[segment_predecessor_valid_time])
+                        #print_with_process_id("  Node bunch before segment:", nodes_by_valid_time[segment_predecessor_valid_time])
 
-                    #print("  Node bunch at start:", nodes_by_valid_time[segment_first_valid_time])
-                    #print("  Node bunch at end of segment:", nodes_by_valid_time[segment_last_valid_time])
+                    #print_with_process_id("  Node bunch at start:", nodes_by_valid_time[segment_first_valid_time])
+                    #print_with_process_id("  Node bunch at end of segment:", nodes_by_valid_time[segment_last_valid_time])
                     nodes_at_end_of_segment = nodes_by_valid_time[segment_last_valid_time]
 
                     if segment_successor_index < len(nodes_by_valid_time):
                         segment_successor_valid_time = node_valid_times[segment_successor_index]
-                        #print("  Node bunch after segment:", nodes_by_valid_time[segment_successor_valid_time])
+                        #print_with_process_id("  Node bunch after segment:", nodes_by_valid_time[segment_successor_valid_time])
 
                         # disconnect 'bridge' nodes at a merger (at start of a merger)
                         nodes_after_end_of_segment = nodes_by_valid_time[segment_successor_valid_time]
@@ -2661,11 +2666,11 @@ def process_and_simplify_graph(graph):
     components.sort(key=get_first_node_valid_time)
     components_were_modified = True
     if len(components) != num_components:
-        print(f"# components (before separation): {num_components}")
+        print_with_process_id(f"# components (before separation): {num_components}")
         num_components = len(components)
-        print(f"# components (after separation): {num_components}")
+        print_with_process_id(f"# components (after separation): {num_components}")
     else:
-        print(f"# components: {num_components}")
+        print_with_process_id(f"# components: {num_components}")
 
     for i, component in enumerate(components):
         nodes_by_valid_time = {}
@@ -2702,18 +2707,18 @@ def process_and_simplify_graph(graph):
 
         first_valid_time = graph.nodes[first_node]["valid_time"]
         last_valid_time = graph.nodes[last_node]["valid_time"]
-        print(f"  Start Valid Time: {first_valid_time}")
+        print_with_process_id(f"  Start Valid Time: {first_valid_time}")
         print_candidates([graph.nodes[first_node]["data"]], no_numbering=True)
-        print(f"  Last Valid Time: {last_valid_time}")
+        print_with_process_id(f"  Last Valid Time: {last_valid_time}")
         print_candidates([graph.nodes[last_node]["data"]], no_numbering=True)
 
         max_10m_wind_speed = None
         if max_10m_wind_speed_node is not None:
             max_10m_wind_speed_valid_time = graph.nodes[max_10m_wind_speed_node]["valid_time"]
-            print(f"  Max 10m Wind Speed Valid Time: {max_10m_wind_speed_valid_time}")
+            print_with_process_id(f"  Max 10m Wind Speed Valid Time: {max_10m_wind_speed_valid_time}")
             print_candidates([graph.nodes[max_10m_wind_speed_node]["data"]], no_numbering=True)
             max_10m_wind_speed = float(graph.nodes[max_10m_wind_speed_node]["data"]['vmax10m_in_roci'])
-        print("")
+        print_with_process_id("")
 
         # recover candidate data via simplified_nodes_by_valid_time
         tc_disturbance_candidates = []
@@ -2728,13 +2733,13 @@ def process_and_simplify_graph(graph):
         has_error = has_error or ret
 
     if num_removed_nodes:
-        print('# Removed nodes: ', num_removed_nodes)
+        print_with_process_id('# Removed nodes: ', num_removed_nodes)
 
     if num_removed_next_edges:
-        print('# Removed Next Edges: ', num_removed_next_edges)
+        print_with_process_id('# Removed Next Edges: ', num_removed_next_edges)
 
     if num_removed_colocated_edges:
-        print('# Removed Colocated Edges: ', num_removed_colocated_edges)
+        print_with_process_id('# Removed Colocated Edges: ', num_removed_colocated_edges)
 
     # mark model run completed if no errors
     if not has_error:
@@ -2745,7 +2750,7 @@ def process_and_simplify_graph(graph):
     if write_graphs:
         nx.write_gexf(graph, file_graph_path, encoding="utf-8", prettyprint=True)
 
-    print("")
+    print_with_process_id("")
 
 # returns all disturbances by timestamp for completed model runs ONLY
 def get_all_disturbances_sorted_by_timestamp():
@@ -2772,7 +2777,7 @@ def get_all_disturbances_sorted_by_timestamp():
                 all_retrieved_data.append(retrieved_data)
 
     except sqlite3.Error as e:
-        print(f"SQLite error (get_all_disturbances_sorted_by_timestamp): {e}")
+        print_with_process_id(f"SQLite error (get_all_disturbances_sorted_by_timestamp): {e}")
     finally:
         if conn:
             conn.close()
@@ -2893,7 +2898,7 @@ def get_tc_completed():
                 all_retrieved_data.append(retrieved_data)
 
     except sqlite3.Error as e:
-        print(f"SQLite error (get_tc_completed): {e}")
+        print_with_process_id(f"SQLite error (get_tc_completed): {e}")
     finally:
         if conn:
             conn.close()
@@ -2925,7 +2930,7 @@ def update_tc_completed(model_name, model_init_time):
             conn.commit()
 
     except sqlite3.Error as e:
-        print(f"SQLite error (update_tc_completed): {e}")
+        print_with_process_id(f"SQLite error (update_tc_completed): {e}")
     finally:
         if conn:
             conn.close()
@@ -2988,7 +2993,7 @@ def add_tc_candidate(model_name, model_init_time, component_num, max_10m_wind_sp
 
     except sqlite3.Error as e:
         has_error = True
-        print(f"SQLite error (add_tc_candidate: tc_disturbances): {e}")
+        print_with_process_id(f"SQLite error (add_tc_candidate: tc_disturbances): {e}")
     finally:
         if conn:
             conn.close()
@@ -3031,17 +3036,13 @@ def add_tc_candidate(model_name, model_init_time, component_num, max_10m_wind_sp
 
     except sqlite3.Error as e:
         has_error = True
-        print(f"SQLite error (add_tc_candidate: tc_candidates): {e}")
+        print_with_process_id(f"SQLite error (add_tc_candidate: tc_candidates): {e}")
     finally:
         if conn:
             conn.close()
 
     return has_error
 
-
-#################################################
-#### REGULAR CELLS FOR UPDATING DISTURBANCES ####
-#################################################
 
 ## AUTO UPDATE CODE ##
 
@@ -3051,50 +3052,175 @@ hours_to_look_back = 48
 # polling interval in minutes to recalculate (look for new gribs and update the disturbances)
 polling_interval = 5
 
-while True:
-    print("\nChecking for new model data for new disturbances:")
-    for model_name in model_names_to_update:
-        # process all runs not already in disturbances db for single model, starting at a timestamp
-        model_interval = model_interval_hours[model_name]
+# Parallelized on model time steps
+# Note: If there is a failture relating to metview and EOF, delete any metview created idx files (not the GFS idx files): i.e., ending in ".grib2.923a8.idx"
 
-        # Get the current UTC time
-        current_time = datetime.utcnow()
+# Global variable for the number of worker proceses
+n_worker_processes = 4  # If using 1, don't use this and use the non parallel version
 
-        #start_model_timestamp_str = '2023-10-30T18:00:00'
-        #start_model_timestamp = datetime.fromisoformat(start_model_timestamp_str)
-        prev_interval_hour = (current_time.hour // model_interval) * model_interval
-        start_model_timestamp = current_time
-        start_model_timestamp = start_model_timestamp.replace(hour=prev_interval_hour, minute=0, second=0, microsecond=0)
-        start_model_timestamp -= timedelta(hours=hours_to_look_back)
+import concurrent.futures
+import multiprocessing
+import signal
 
-        # Calculate the next 6-hour interval
-        next_interval_hour = (current_time.hour // model_interval + 1) * model_interval
+# Create a queue to store tasks
+task_queue = multiprocessing.Queue()
 
-        # If the next interval is at 24:00, move it to the next day
-        if next_interval_hour == 24:
-            next_time = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
-            next_time += timedelta(days=1)
-            next_interval_hour = 0
+# Maintain a set to track enqueued tasks
+enqueued_tasks = set()
+
+process_exiting_event = multiprocessing.Event()
+
+process_lock = multiprocessing.Lock()
+
+# Counter for completed tasks
+completed_tasks_counter = multiprocessing.Value('i', 0)
+completed_tasks_counter_lock = multiprocessing.Lock()
+
+def print_with_process_id(*args, **kwargs):
+    try:
+        process_number = os.getpid()
+        print(f"P#{process_number}: ", end='')
+        print(*args, **kwargs)
+    except:
+        print("No PID: ", end='')
+        print(*args, **kwargs)
+
+# Signal handler for Ctrl-C
+def signal_handler(sig, frame):
+    print_with_process_id("Received Ctrl-C. Waiting for current tasks to finish...")
+
+    process_exiting_event.set()
+
+    for _ in range(n_worker_processes + 1):
+        task_queue.put(None)
+
+    try:
+        sys.exit(0)
+    except Exception as e:
+        print("Error exiting:")
+        traceback.print_exc(limit=None, file=None, chain=True)
+
+def worker():
+    try:
+        print_with_process_id("Worker process started.")
+        while not process_exiting_event.is_set():
+            try:
+                # Get a task from the queue (blocking)
+                task = task_queue.get()
+
+                if task:
+                    model_name, start_model_timestamp, model_time_step = task
+                    process_model(model_name, start_model_timestamp, model_time_step)
+
+                    with completed_tasks_counter_lock:
+                        completed_tasks_counter.value += 1
+
+                else:
+                    # Only get None when exiting (Ctrl-C)
+                    break
+
+            except Exception as e:
+                traceback.print_exc(limit=None, file=None, chain=True)
+                #print_with_process_id(f"Error in worker: {e}")
+
+        print_with_process_id("Worker finished")
+
+    except Exception as e:
+        print_with_process_id("Exception")
+        traceback.print_exc(limit=None, file=None, chain=True)
+        print_with_process_id(f"Worker process encountered an exception.")
+
+def enqueue_task(model_name, start_model_timestamp, model_time_step):
+    # Use a tuple to represent the task
+    task = (model_name, start_model_timestamp, model_time_step)
+
+    # Use a lock to ensure atomicity of set operations
+    with process_lock:
+        # Check if the task is already enqueued
+        if task not in enqueued_tasks:
+            task_queue.put(task)
+            enqueued_tasks.add(task)
+
+def process_model(model_name, start_model_timestamp, model_time_step):
+    # only passing a single time step (as a list), as this allows us to keep the same code and parallelize it by time step
+    all_candidates = calc_disturbances_by_model_name_date_and_time_steps(model_name, start_model_timestamp, [model_time_step])
+
+# Register the signal handler
+signal.signal(signal.SIGINT, signal_handler)
+
+# Start worker processes
+with concurrent.futures.ProcessPoolExecutor(max_workers=n_worker_processes) as executor:
+    futures = [executor.submit(worker) for _ in range(n_worker_processes)]
+
+    print_with_process_id("Main process starting.")
+
+    while not process_exiting_event.is_set():
+        # Clear the set of enqueued tasks
+        # This is needed as we don't want to enqueue tasks multiple times that results in multiple workers working the same queue item
+        with process_lock:
+            enqueued_tasks.clear()
+
+        exiting = False
+
+        for model_name in model_names_to_update:
+            model_interval = model_interval_hours[model_name]
+            current_time = datetime.utcnow()
+            prev_interval_hour = (current_time.hour // model_interval) * model_interval
+            start_model_timestamp = current_time.replace(hour=prev_interval_hour, minute=0, second=0, microsecond=0)
+            start_model_timestamp -= timedelta(hours=hours_to_look_back)
+
+            next_interval_hour = (current_time.hour // model_interval + 1) * model_interval
+
+            if next_interval_hour == 24:
+                next_time = current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                next_interval_hour = 0
+            else:
+                next_time = current_time.replace(hour=next_interval_hour, minute=0, second=0, microsecond=0)
+
+            end_timestamp = next_time if next_time >= start_model_timestamp else start_model_timestamp
+
+            interval = timedelta(hours=model_interval)
+            timestamps = []
+
+            current_timestamp = start_model_timestamp
+            while current_timestamp <= end_timestamp:
+                timestamps.append(current_timestamp)
+                current_timestamp += interval
+
+            for model_timestamp in timestamps:
+                model_hour_str = f'{model_timestamp.hour:02}'
+                time_steps = all_time_steps_by_model[model_name][model_hour_str]
+
+                for model_time_step in time_steps:
+                    # Enqueue the task only if it's not already in the set
+                    if not process_exiting_event.is_set():
+                        enqueue_task(model_name, model_timestamp, model_time_step)
+
+                    else:
+                        exiting = True
+                        break
+
+                if exiting:
+                    break
+
+            if exiting:
+                break
+
+        if exiting:
+            break
+
+        # Sleep for 30 seconds (this is to give time to check if there is no real work to be done)
+        time.sleep(30)
+
+        # Check if the queue is empty
+        if task_queue.empty():
+            # If the queue is empty, sleep for the full polling interval
+            time.sleep(60 * (polling_interval - 0.5))
+
         else:
-            next_time = current_time.replace(hour=next_interval_hour, minute=0, second=0, microsecond=0)
+            # Block until all tasks in the queue are processed
+            pass
 
-        # If the next time is greater than or equal to the model timestamp, use it; otherwise, use the model timestamp
-        end_timestamp = next_time if next_time >= start_model_timestamp else start_model_timestamp
 
-        # Get the list of timestamps expected (model_interval hour intervals)
-        interval = timedelta(hours=model_interval)
-        timestamps = []
-        current_timestamp = start_model_timestamp
-        while current_timestamp <= end_timestamp:
-            timestamps.append(current_timestamp)
-            current_timestamp += interval
-
-        for model_timestamp in timestamps:
-            print("Processing", model_name, model_timestamp)
-            model_hour_str = f'{model_timestamp.hour:02}'
-            time_steps = all_time_steps_by_model[model_name][model_hour_str]
-            all_candidates = calc_disturbances_by_model_name_date_and_time_steps(model_name, model_timestamp, time_steps)
-
-        print(f"\nDone with {model_name}")
-
-    time.sleep(60 * polling_interval)
+# Perform any finalization logic after all processes have finished
+print_with_process_id("Main process finished. Exiting")
