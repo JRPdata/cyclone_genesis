@@ -3076,6 +3076,10 @@ process_lock = multiprocessing.Lock()
 completed_tasks_counter = multiprocessing.Value('i', 0)
 completed_tasks_counter_lock = multiprocessing.Lock()
 
+# Counter for number of total tasks enqueued
+n_total_tasks = multiprocessing.Value('i', 0)
+n_total_tasks_lock = multiprocessing.Lock()
+
 def print_with_process_id(*args, **kwargs):
     try:
         process_number = os.getpid()
@@ -3138,6 +3142,8 @@ def enqueue_task(model_name, start_model_timestamp, model_time_step):
     with process_lock:
         # Check if the task is already enqueued
         if task not in enqueued_tasks:
+            with n_total_tasks_lock:
+                n_total_tasks.value += 1
             task_queue.put(task)
             enqueued_tasks.add(task)
 
@@ -3209,18 +3215,25 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=n_worker_processes) as e
         if exiting:
             break
 
-        # Sleep for 30 seconds (this is to give time to check if there is no real work to be done)
         time.sleep(30)
+        completed_task_diff = 0
+        with n_total_tasks_lock:
+            with completed_tasks_counter_lock:
+                completed_task_diff = n_total_tasks.value - completed_tasks_counter.value
 
-        # Check if the queue is empty
-        if task_queue.empty():
-            # If the queue is empty, sleep for the full polling interval
+        # avoid a greater likelihood of a race condition (repeating previous work) by waiting to add more tasks when there are only a few left
+        if completed_task_diff <= n_worker_processes and completed_task_diff != 0:
+            # a few tasks left but not zero
             time.sleep(60 * (polling_interval - 0.5))
-
         else:
-            # Block until all tasks in the queue are processed
-            pass
-
+            if completed_task_diff != 0:
+                # many left (more than n_worker processes), wait until queue is empty before clearing enqueued tasks
+                while not task_queue.empty():
+                    # give some time to complete tasks before polling again
+                    time.sleep(60 * (polling_interval - 0.5))
+            else:
+                # either none processed or a few processed very fast (wait for more data)
+                time.sleep(60 * (polling_interval - 0.5))
 
 # Perform any finalization logic after all processes have finished
 print_with_process_id("Main process finished. Exiting")
