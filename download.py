@@ -732,9 +732,13 @@ def download_thread(model_names):
             complete_model_runs[model_name] = []
 
         while not exit_event.is_set():
+            exiting = False
             for model_name in model_names:
                 model_timestamps[model_name] = get_latest_n_model_times(model_name)
                 for model_timestamp in model_timestamps[model_name]:
+                    if exit_event.is_set():
+                        exiting = True
+                        break
                     if model_timestamp in complete_model_runs[model_name]:
                         print_level(3, f'Already have {model_timestamp} for {model_name}.')
                         r = 0
@@ -753,31 +757,45 @@ def download_thread(model_names):
                         # get the next one after backing off
                         if model_timestamp not in complete_model_runs[model_name]:
                             complete_model_runs[model_name].append(model_timestamp)
+                if exiting:
+                    break
+            if exiting:
+                break
 
             print_level(3, f'Backing off for {backoff_time} seconds in thread {threading.current_thread().name}.')
             time.sleep(backoff_time)
+
+        if exiting:
+            print_level(1, f'Thread {threading.current_thread().name} exiting.')
 
     except Exception as e:
         print_level(1, f"Thread {threading.current_thread().name} encountered an error: {e}")
         exit_event.set()
         sys.exit(1)
 
+# Register a signal handler to catch Ctrl+C and exit gracefully
+def signal_handler(sig, frame):
+    print_level(1, f"\nCtrl+C received. Exiting once download runs are finished. May take {backoff_time} s to exit. Repeat to forcefully exit (may corrupt downloads)")
+    exit_event.set()
+    global ctrl_c_count
+    ctrl_c_count += 1
+
+    if ctrl_c_count >= 4:
+        print("Received multiple Ctrl-C. Exiting forcefully immediately.")
+        os._exit(1)
+
 if __name__ == '__main__':
     # run the downloads per thread (default )
     threads = []
+
+    ctrl_c_count = 0
+
+    signal.signal(signal.SIGINT, signal_handler)
 
     for group in model_names_to_download_thread_groupings:
         thread = threading.Thread(target=download_thread, args=(group,), name='_'.join(group))
         thread.start()
         threads.append(thread)
-
-    # Register a signal handler to catch Ctrl+C and exit gracefully
-    def signal_handler(sig, frame):
-        print_level(1, "\nCtrl+C received. Exiting once download runs are finished.")
-        exit_event.set()
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, signal_handler)
 
     for thread in threads:
         thread.join()
