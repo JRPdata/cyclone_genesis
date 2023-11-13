@@ -2264,10 +2264,6 @@ def connect_graph_next_timestep(graph):
     # Sort the time step keys in ascending order
     time_step_keys.sort()
 
-    # Create time step pairs with smaller value first
-    time_step_pairs = [(current, future) for current, future in zip(time_step_keys, time_step_keys[1:])
-                      if (future - current) == 6]
-
     # Step 1: Get a list of all possible time_step pairs that are 6 apart
     time_step_keys = list(nodes_by_time_step.keys())
     time_step_pairs = [(int(time_step_keys[i]), int(time_step_keys[i+1]))
@@ -2874,6 +2870,15 @@ def get_tc_completed():
         # Connect to the SQLite database
         conn = sqlite3.connect(tc_candidates_db_file_path)
         cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS completed (
+                id INTEGER PRIMARY KEY,
+                model_name TEXT,
+                init_date TEXT,
+                completed_date TEXT,
+                UNIQUE(model_name, init_date)
+            )
+        ''')
 
         # Query all rows from the 'disturbances' table and order by 'model_timestamp'
         cursor.execute('SELECT model_name, init_date, completed_date FROM completed ORDER BY init_date')
