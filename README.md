@@ -4,8 +4,12 @@ DO NOT USE
 
 EXPERIMENTAL
 
-WORK IN PROGRESS
+Find tropical cyclones (potential/TC genesis and active) from global models. See references at top of notebook.
 
-Find tropical cyclones (potential/TC genesis and active) from global models
+Note: This uses thresholds from FSU but for higher resolution models so it is more sensitive.
 
-Eventually, output model stats related to potential cyclones (such as minimum pressure, vmax, etc. for each cyclone)
+2023-11-14:
+
+Last commit as I've progressed as far as I have any more interest in developing this, unless I find more bugs.
+
+UKMET was not added to the download programs and the various scripts, but it should work, provided split gribs. It costs too much money to obtain the data.
