@@ -690,7 +690,7 @@ def generate_tc_chart(tc_candidates, saveonly=False):
 
     # save the map if wanted
     if save_tc_maps:
-        file_name = f'{model_timestamp}.html'
+        file_name = f'{most_recent_timestamp}_c{datetime.utcnow().isoformat()}.html'
         save_file_path = os.path.join(tc_maps_folder, file_name)
         m.save(save_file_path)
         return save_file_path
