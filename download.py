@@ -667,7 +667,7 @@ def download_step(model_name, model_timestamp, time_step_int):
         url_base_file_name = f'gfs.t{model_hour}z.pgrb2.0p25.f{time_step}'
         r = generate_curl_commands_gfs(timestamp_prefix, idx_file_name, url_folder, url_base_file_name, output_dir, params)
     elif model_name == 'ECM':
-        url_folder = f'{model_url_folder}/{model_date}/{model_hour}z/0p4-beta/oper/'
+        url_folder = f'{model_url_folder}/{model_date}/{model_hour}z/ifs/0p4-beta/oper/'
         idx_file_name = f'{model_date}{model_hour}0000-{time_step}h-oper-fc.index'
         # we will add the .grib2 extension before we download
         url_base_file_name = f'{model_date}{model_hour}0000-{time_step}h-oper-fc'
