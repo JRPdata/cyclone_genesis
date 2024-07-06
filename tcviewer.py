@@ -3,6 +3,10 @@
 #   uses a-deck,b-deck,tcvitals (from NHC,UCAR) and tc genesis candidates (tc_candidates.db)
 #### DO NOT USE OR RELY ON THIS!
 
+# for plotting boundaries
+import geopandas as gpd
+from shapely.geometry import Polygon
+
 import traceback
 import requests
 import gzip
@@ -58,6 +62,22 @@ tcvitals_basin_to_atcf_basin = {
     'P': 'SH',
     'W': 'WP'
 }
+
+### plot greater houston boundary
+# Load the shapefile using Geopandas
+# from census shapefiles
+shapefile_path = "tl_2023_us_cbsa/tl_2023_us_cbsa.shp"
+
+try:
+    gdf = gpd.read_file(shapefile_path)
+    # Filter the GeoDataFrame to only include the Houston-The Woodlands-Sugar Land, TX Metro Area
+    houston_gdf = gdf[gdf['NAME'] == 'Houston-Pasadena-The Woodlands, TX']
+    if houston_gdf.empty:
+        raise ValueError("Houston-The Woodlands-Sugar Land, TX Metro Area not found in the shapefile")
+    # Ensure the CRS matches that of the Cartopy map (PlateCarree)
+    custom_gdf = houston_gdf.to_crs(ccrs.PlateCarree().proj4_init)
+except:
+    custom_gdf = None
 
 matplotlib.use('Agg')
 matplotlib.rcParams['figure.dpi'] = 100
@@ -904,6 +924,15 @@ class App:
         self.create_widgets()
         self.display_map()
 
+    def display_custom_boundaries(self):
+        if custom_gdf is not None:
+            for geometry in custom_gdf.geometry:
+                if isinstance(geometry, Polygon):
+                    self.ax.add_geometries([geometry], crs=ccrs.PlateCarree(), edgecolor='magenta', facecolor='none', linewidth=2)
+                else:
+                    for polygon in geometry:
+                        self.ax.add_geometries([polygon], crs=ccrs.PlateCarree(), edgecolor='magenta', facecolor='none', linewidth=2)
+
     def combo_selected_models_event(self, event):
         current_value = self.adeck_selected_combobox.get()
         if current_value == self.adeck_previous_selected:
@@ -912,6 +941,7 @@ class App:
         else:
             self.adeck_previous_selected = current_value
             self.display_map()
+            self.display_custom_boundaries()
             if not self.have_deck_data:
                 self.update_deck_data()
             self.display_deck_data()
@@ -1015,6 +1045,7 @@ class App:
     def reload(self):
         if self.mode == "ADECK":
             self.display_map()
+            self.display_custom_boundaries()
             self.update_deck_data()
             self.display_deck_data()
         elif self.mode == "GENESIS":
