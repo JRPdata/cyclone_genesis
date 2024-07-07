@@ -3,6 +3,10 @@
 #   uses a-deck,b-deck,tcvitals (from NHC,UCAR) and tc genesis candidates (tc_candidates.db)
 #### DO NOT USE OR RELY ON THIS!
 
+# for tracking modification date of source files
+from dateutil import parser
+import copy
+
 # for plotting boundaries
 import geopandas as gpd
 from shapely.geometry import Polygon
@@ -33,6 +37,13 @@ from matplotlib.collections import LineCollection
 
 # performance optimizations
 import matplotlib
+
+# how often (in minutes) to check for stale data in three classes: tcvitals, adeck, bdecks
+#   for notification purposes only..
+#      colors reload button red (a-deck), orange (b-deck), yellow (tcvitals) -without- downloading data automatically
+#   checks modification date in any class of the three, and refreshes the entire class
+#      timer resets after manual reloads
+TIMER_INTERVAL_MINUTES = 30
 
 # URLs
 tcvitals_urls = [
@@ -421,23 +432,46 @@ def get_tc_candidates_at_or_before_init_time(interval_end):
 
     return model_init_times, all_retrieved_data
 
+def http_get_modification_date(url):
+    try:
+        response = requests.head(url)
+        # Check if the request was successful (status code 200 or 2xx)
+        if response.status_code // 100 == 2:
+            # Extract the modification date from the 'Last-Modified' header
+            modification_date = response.headers.get('Last-Modified')
+            return modification_date
+        # If the request was not successful, return None
+        return None
+
+    except Exception as e:
+        print(f"An error occurred getting {url}: {e}")
+        return None
+
 # Function to download a file from a URL
 def download_file(url, local_filename):
-    with requests.get(url, stream=True) as r:
-        r.raise_for_status()
-        with open(local_filename, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
-    return local_filename
+    try:
+        with requests.get(url, stream=True) as r:
+            r.raise_for_status()
+            with open(local_filename, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+            dt_mod = get_modification_date_from_header(r.headers)
+    except Exception as e:
+        traceback.print_exc()
+        print(f"Failed to download {url}: {e}")
+        return None
+    return dt_mod
 
 # Function to get the most recent records for each storm from TCVitals files
 def get_recent_storms(tcvitals_urls):
     storms = {}
+    dt_mods_tcvitals = {}
     current_time = datetime.utcnow()
     for url in tcvitals_urls:
         response = requests.get(url)
-
         if response.status_code == 200:
+            dt_mod = get_modification_date_from_header(response.headers)
             lines = response.text.splitlines()
             for line in lines:
                 parts = line.split()
@@ -453,12 +487,14 @@ def get_recent_storms(tcvitals_urls):
                             'data': line
                         }
 
+            dt_mods_tcvitals[url] = dt_mod
+
     recent_storms = {}
     for storm_id, val in storms.items():
         data = val['data']
         storm_dict = tcvitals_line_to_dict(data)
         recent_storms[storm_id] = storm_dict
-    return recent_storms
+    return dt_mods_tcvitals, recent_storms
 
 def decode_ab_deck_line(line):
     columns = [
@@ -545,134 +581,166 @@ def ab_deck_line_to_dict(line):
         raw_data['valid_time'] = valid_datetime.isoformat()
     return raw_data
 
+def get_modification_date_from_header(responseheaders):
+    try:
+        # Assume already done status code check
+            modification_date = responseheaders.get('Last-Modified')
+            dt_offset_aware = parser.parse(modification_date)
+            dt_offset_native = dt_offset_aware.astimezone().replace(tzinfo=None)
+            return dt_offset_native
+    except:
+        return None
+
+def http_get_modification_date(url):
+    try:
+        response = requests.head(url)
+        if response.status_code // 100 == 2:
+            return get_modification_date_from_header(response.headers)
+        # If the request was not successful, return None
+        return None
+
+    except Exception as e:
+        print(f"An error occurred getting {url}: {e}")
+        return None
+
 # Function to get the corresponding A-Deck and B-Deck files for the identified storms
-def get_deck_files(storms, adeck_urls, bdeck_urls):
+def get_deck_files(storms, adeck_urls, bdeck_urls, do_update_adeck, do_update_bdeck):
     adeck = defaultdict(dict)
     bdeck = defaultdict(dict)
     year = datetime.utcnow().year
     most_recent_model_dates = defaultdict(lambda: datetime.min)
     most_recent_bdeck_dates = defaultdict(lambda: datetime.min)
+    dt_mods_adeck = {}
+    dt_mods_bdeck = {}
 
     for storm_id in storms.keys():
         basin_id = storm_id[:2]
         storm_number = storm_id[2:4]
         # Download A-Deck files
-        for url in adeck_urls:
-            file_url = url.format(basin_id=basin_id.lower(), year=year, storm_number=storm_number)
-            isgz = False
-            if file_url[-3:] == ".gz":
-                isgz = True
-                local_filename = f"a{storm_id.lower()}.dat.gz"
-            else:
-                local_filename = f"a{storm_id.lower()}.dat"
-            try:
-                download_file(file_url, local_filename)
-
-                with open(local_filename, 'rb') as f:
-                    file_header = f.read(4)
-
-                # If the file starts with '1f 8b', it's likely a gzipped file
-                if file_header[:2] == b'\x1f\x8b':
-                    with gzip.open(local_filename, 'rt') as z:
-                        file_content = z.read()
+        if do_update_adeck:
+            for url in adeck_urls:
+                file_url = url.format(basin_id=basin_id.lower(), year=year, storm_number=storm_number)
+                isgz = False
+                if file_url[-3:] == ".gz":
+                    isgz = True
+                    local_filename = f"a{storm_id.lower()}.dat.gz"
                 else:
-                    with open(local_filename, 'rt') as f:
-                        file_content = f.read()
+                    local_filename = f"a{storm_id.lower()}.dat"
+                try:
+                    dt_mod = download_file(file_url, local_filename)
+                    if not dt_mod:
+                        # download failed
+                        continue
 
-                os.remove(local_filename)
+                    with open(local_filename, 'rb') as f:
+                        file_header = f.read(4)
 
-                lines = file_content.splitlines()
-                latest_date = datetime.min
+                    # If the file starts with '1f 8b', it's likely a gzipped file
+                    if file_header[:2] == b'\x1f\x8b':
+                        with gzip.open(local_filename, 'rt') as z:
+                            file_content = z.read()
+                    else:
+                        with open(local_filename, 'rt') as f:
+                            file_content = f.read()
 
-                # see if it is latest first before decoding
-                for line in lines:
-                    parts = line.split(',')
-                    if len(parts) > 4 and parts[3].strip() == '03':  # Model identifier '03'
-                        date_str = parts[2].strip()
-                        model_date = datetime.strptime(date_str, '%Y%m%d%H')
-                        if model_date > latest_date:
-                            latest_date = model_date
+                    os.remove(local_filename)
 
-                # now we know if we have data to update from source
-                if latest_date > most_recent_model_dates[storm_id]:
-                    most_recent_model_dates[storm_id] = latest_date
-                    for line in lines:
-                        parts = line.split(',')
-                        if len(parts) > 4 and parts[3].strip() == '03':  # TECH '03' are forecast models
-                            date_str = parts[2].strip()
-                            model_date = datetime.strptime(date_str, '%Y%m%d%H')
-                            if model_date == latest_date:
-                                ab_deck_line_dict = ab_deck_line_to_dict(line)
-                                model_id = ab_deck_line_dict['TECH']
-                                valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
-                                if storm_id not in adeck.keys():
-                                    adeck[storm_id] = {}
-                                if model_id not in adeck[storm_id].keys():
-                                    adeck[storm_id][model_id] = {}
-                                adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
-
-
-            except OSError as e:
-                traceback.print_exc()
-                print(f"OSError opening/reading file: {e}")
-            except UnicodeDecodeError as e:
-                traceback.print_exc()
-                print(f"UnicodeDecodeError: {e}")
-                with gzip.open(local_filename, 'rb') as z:
-                    raw_content = z.read(10)  # Read a few bytes to check the content
-                    print(f"First 10 bytes of the file (in hex): {raw_content.hex()}")
-            except Exception as e:
-                traceback.print_exc()
-                print(f"Failed to download {file_url}: {e}")
-        # Download B-Deck files
-        for url in bdeck_urls:
-            file_url = url.format(year=year, basin_id=basin_id.lower(), storm_number=storm_number)
-            try:
-                response = requests.get(file_url)
-                if response.status_code == 200:
-                    lines = response.text.splitlines()
+                    lines = file_content.splitlines()
                     latest_date = datetime.min
 
                     # see if it is latest first before decoding
                     for line in lines:
                         parts = line.split(',')
-                        if len(parts) > 4:
+                        if len(parts) > 4 and parts[3].strip() == '03':  # Model identifier '03'
                             date_str = parts[2].strip()
-                            bdeck_date = datetime.strptime(date_str, '%Y%m%d%H')
-                            if bdeck_date > latest_date:
-                                latest_date = bdeck_date
+                            model_date = datetime.strptime(date_str, '%Y%m%d%H')
+                            if model_date > latest_date:
+                                latest_date = model_date
 
                     # now we know if we have data to update from source
-                    if latest_date >= most_recent_bdeck_dates[storm_id]:
-                        most_recent_bdeck_dates[storm_id] = latest_date
+                    if latest_date > most_recent_model_dates[storm_id]:
+                        most_recent_model_dates[storm_id] = latest_date
+                        for line in lines:
+                            parts = line.split(',')
+                            if len(parts) > 4 and parts[3].strip() == '03':  # TECH '03' are forecast models
+                                date_str = parts[2].strip()
+                                model_date = datetime.strptime(date_str, '%Y%m%d%H')
+                                if model_date == latest_date:
+                                    ab_deck_line_dict = ab_deck_line_to_dict(line)
+                                    model_id = ab_deck_line_dict['TECH']
+                                    valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
+                                    if storm_id not in adeck.keys():
+                                        adeck[storm_id] = {}
+                                    if model_id not in adeck[storm_id].keys():
+                                        adeck[storm_id][model_id] = {}
+                                    adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
+
+                    dt_mods_adeck[file_url] = dt_mod
+                except OSError as e:
+                    traceback.print_exc()
+                    print(f"OSError opening/reading file: {e}")
+                except UnicodeDecodeError as e:
+                    traceback.print_exc()
+                    print(f"UnicodeDecodeError: {e}")
+                    with gzip.open(local_filename, 'rb') as z:
+                        raw_content = z.read(10)  # Read a few bytes to check the content
+                        print(f"First 10 bytes of the file (in hex): {raw_content.hex()}")
+                except Exception as e:
+                    traceback.print_exc()
+                    print(f"Failed to download {file_url}: {e}")
+        if do_update_bdeck:
+            # Download B-Deck files
+            for url in bdeck_urls:
+                file_url = url.format(year=year, basin_id=basin_id.lower(), storm_number=storm_number)
+                try:
+                    response = requests.get(file_url)
+                    if response.status_code == 200:
+                        dt_mod = get_modification_date_from_header(response.headers)
+
+                        lines = response.text.splitlines()
+                        latest_date = datetime.min
+
+                        # see if it is latest first before decoding
                         for line in lines:
                             parts = line.split(',')
                             if len(parts) > 4:
                                 date_str = parts[2].strip()
                                 bdeck_date = datetime.strptime(date_str, '%Y%m%d%H')
-                                ab_deck_line_dict = ab_deck_line_to_dict(line)
-                                # id should be 'BEST'
-                                bdeck_id = ab_deck_line_dict['TECH']
-                                valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
-                                if storm_id not in bdeck.keys():
-                                    bdeck[storm_id] = {}
-                                if bdeck_id not in bdeck[storm_id].keys():
-                                    bdeck[storm_id][bdeck_id] = {}
-                                bdeck[storm_id][bdeck_id][valid_datetime.isoformat()] = ab_deck_line_dict
+                                if bdeck_date > latest_date:
+                                    latest_date = bdeck_date
 
-            except OSError as e:
-                traceback.print_exc()
-                print(f"OSError opening/reading file: {e}")
-            except UnicodeDecodeError as e:
-                traceback.print_exc()
-                print(f"UnicodeDecodeError: {e}")
-                with gzip.open(local_filename, 'rb') as z:
-                    raw_content = z.read(10)  # Read a few bytes to check the content
-                    print(f"First 10 bytes of the file (in hex): {raw_content.hex()}")
-            except Exception as e:
-                traceback.print_exc()
-                print(f"Failed to download {file_url}: {e}")
-    return adeck, bdeck
+                        # now we know if we have data to update from source
+                        if latest_date >= most_recent_bdeck_dates[storm_id]:
+                            most_recent_bdeck_dates[storm_id] = latest_date
+                            for line in lines:
+                                parts = line.split(',')
+                                if len(parts) > 4:
+                                    date_str = parts[2].strip()
+                                    bdeck_date = datetime.strptime(date_str, '%Y%m%d%H')
+                                    ab_deck_line_dict = ab_deck_line_to_dict(line)
+                                    # id should be 'BEST'
+                                    bdeck_id = ab_deck_line_dict['TECH']
+                                    valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
+                                    if storm_id not in bdeck.keys():
+                                        bdeck[storm_id] = {}
+                                    if bdeck_id not in bdeck[storm_id].keys():
+                                        bdeck[storm_id][bdeck_id] = {}
+                                    bdeck[storm_id][bdeck_id][valid_datetime.isoformat()] = ab_deck_line_dict
+
+                        dt_mods_bdeck[file_url] = dt_mod
+                except OSError as e:
+                    traceback.print_exc()
+                    print(f"OSError opening/reading file: {e}")
+                except UnicodeDecodeError as e:
+                    traceback.print_exc()
+                    print(f"UnicodeDecodeError: {e}")
+                    with gzip.open(local_filename, 'rb') as z:
+                        raw_content = z.read(10)  # Read a few bytes to check the content
+                        print(f"First 10 bytes of the file (in hex): {raw_content.hex()}")
+                except Exception as e:
+                    traceback.print_exc()
+                    print(f"Failed to download {file_url}: {e}")
+    return dt_mods_adeck, dt_mods_bdeck, adeck, bdeck
 
 def parse_tcvitals_line(line):
     """
@@ -897,6 +965,12 @@ def tcvitals_line_to_dict(line):
 
     return storm_vitals
 
+# returns a list of modified/created or keys in new_dict
+def diff_dicts(old_dict, new_dict):
+    new_keys = new_dict.keys() - old_dict.keys()
+    modified_keys = {key for key in old_dict.keys() & new_dict.keys() if new_dict[key] != old_dict[key]}
+    all_changed_keys = new_keys | modified_keys
+    return all_changed_keys
 
 class App:
     def __init__(self, root):
@@ -920,6 +994,16 @@ class App:
         self.lastgl = None
 
         self.have_deck_data = False
+        # track whether there is new tcvitals,adecks,bdecks data
+        self.timer_id = None
+        self.stale_urls = {}
+        self.stale_urls['tcvitals'] = set()
+        self.stale_urls['adeck'] = set()
+        self.stale_urls['bdeck'] = set()
+        # keys are the urls we will check for if it is stale, values are datetime objects
+        self.dt_mods_tcvitals = {}
+        self.dt_mods_adeck = {}
+        self.dt_mods_bdeck = {}
 
         self.create_widgets()
         self.display_map()
@@ -971,7 +1055,7 @@ class App:
         self.exit_button_adeck = ttk.Button(self.adeck_mode_frame, text="EXIT", command=self.root.quit, style="TButton")
         self.exit_button_adeck.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.reload_button_adeck = ttk.Button(self.adeck_mode_frame, text="(RE)LOAD", command=self.reload, style="TButton")
+        self.reload_button_adeck = ttk.Button(self.adeck_mode_frame, text="(RE)LOAD", command=self.reload_adeck, style="TButton")
         self.reload_button_adeck.pack(side=tk.LEFT, padx=5, pady=5)
 
         self.label_adeck_mode = ttk.Label(self.adeck_mode_frame, text="ADECK MODE. Models: 0", background="black", foreground="white")
@@ -1034,13 +1118,105 @@ class App:
             self.adeck_mode_frame.pack_forget()
             self.genesis_mode_frame.pack(side=tk.TOP, fill=tk.X)
 
-    def update_deck_data(self):
-        # Get recent storms
-        self.recent_storms = get_recent_storms(tcvitals_urls)
+    def update_reload_button_color(self):
+        if self.stale_urls['adeck']:
+            self.reload_button_adeck.configure(style='TButtonRed')
+        elif self.stale_urls['bdeck']:
+            self.reload_button_adeck.configure(style='TButtonOrange')
+        elif self.stale_urls['tcvitals']:
+            self.reload_button_adeck.configure(style='TButtonYellow')
+        else:
+            self.reload_button_adeck.configure(style='TButton')
 
+    def update_deck_data(self):
+        # track which data is stale (tc vitals, adeck, bdeck)
+        # unfortunately we need to get all of one type (vitals, adeck, bdeck) from both mirrors since it's unknown which mirror actually has most up-to-date data from the modification date alone
+        updated_urls_tcvitals = set()
+        updated_urls_adeck = set()
+        updated_urls_bdeck = set()
+
+        # logic for updating classes
+        do_update_tcvitals = do_update_adeck = do_update_bdeck = False
+        if not self.have_deck_data:
+            # first fetch of data
+            do_update_tcvitals = do_update_adeck = do_update_bdeck = True
+        else:
+            # refresh status of stale data one more time since the user has requested a reload
+            self.check_for_stale_data()
+            if self.dt_mods_tcvitals and self.stale_urls['tcvitals']:
+                do_update_tcvitals = True
+            if self.dt_mods_adeck and self.stale_urls['adeck']:
+                do_update_adeck = True
+            if self.dt_mods_bdeck and self.stale_urls['bdeck']:
+                do_update_bdeck = True
+
+        # Get recent storms (tcvitals)
+        if do_update_tcvitals:
+            new_dt_mods_tcvitals, new_recent_storms = get_recent_storms(tcvitals_urls)
+            if new_dt_mods_tcvitals:
+                old_dt_mods = copy.deepcopy(self.dt_mods_tcvitals)
+                self.dt_mods_tcvitals.update(new_dt_mods_tcvitals)
+                updated_urls_tcvitals = diff_dicts(old_dt_mods, self.dt_mods_tcvitals)
+                if updated_urls_tcvitals:
+                    self.recent_storms = new_recent_storms
         # Get A-Deck and B-Deck files
-        self.adeck, self.bdeck = get_deck_files(self.recent_storms, adeck_urls, bdeck_urls)
-        self.have_deck_data = True
+        if do_update_adeck or do_update_bdeck:
+            new_dt_mods_adeck, new_dt_mods_bdeck, new_adeck, new_bdeck = get_deck_files(self.recent_storms, adeck_urls, bdeck_urls, do_update_adeck, do_update_bdeck)
+            if new_dt_mods_adeck and do_update_adeck:
+                old_dt_mods = copy.deepcopy(self.dt_mods_adeck)
+                self.dt_mods_adeck.update(new_dt_mods_adeck)
+                updated_urls_adeck = diff_dicts(old_dt_mods, self.dt_mods_adeck)
+                if updated_urls_adeck:
+                    self.adeck = new_adeck
+            if new_dt_mods_bdeck and do_update_bdeck:
+                old_dt_mods = copy.deepcopy(self.dt_mods_bdeck)
+                self.dt_mods_bdeck.update(new_dt_mods_bdeck)
+                updated_urls_bdeck = diff_dicts(old_dt_mods, self.dt_mods_bdeck)
+                if updated_urls_bdeck:
+                    self.bdeck = new_bdeck
+
+        if self.dt_mods_tcvitals or self.dt_mods_adeck or self.dt_mods_bdeck:
+            # at least something was downloaded
+            self.have_deck_data = True
+        self.stale_urls['tcvitals'] = self.stale_urls['tcvitals'] - updated_urls_tcvitals
+        self.stale_urls['adeck'] = self.stale_urls['adeck'] - updated_urls_adeck
+        self.stale_urls['bdeck'] = self.stale_urls['bdeck'] - updated_urls_bdeck
+
+        self.update_reload_button_color()
+
+    def check_for_stale_data(self):
+        print("Checking for stale data")
+        self.timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_data)
+        if self.dt_mods_tcvitals:
+            for url, old_dt_mod in self.dt_mods_tcvitals.items():
+                new_dt_mod = http_get_modification_date(url)
+                if new_dt_mod:
+                    if new_dt_mod > old_dt_mod:
+                        print("Found stale tcvitals")
+                        self.stale_urls['tcvitals'] = self.stale_urls['tcvitals'] + url
+        if self.dt_mods_adeck:
+            for url, old_dt_mod in self.dt_mods_adeck.items():
+                new_dt_mod = http_get_modification_date(url)
+                if new_dt_mod:
+                    if new_dt_mod > old_dt_mod:
+                        print("Found stale adeck")
+                        self.stale_urls['adeck'] = self.stale_urls['adeck'] + url
+        if self.dt_mods_bdeck:
+            for url, old_dt_mod in self.dt_mods_bdeck.items():
+                new_dt_mod = http_get_modification_date(url)
+                if new_dt_mod:
+                    if new_dt_mod > old_dt_mod:
+                        print("Found stale bdeck")
+                        self.stale_urls['bdeck'] = self.stale_urls['bdeck'] + url
+
+        self.update_reload_button_color()
+
+    def reload_adeck(self):
+        if self.timer_id is not None:
+            self.root.after_cancel(self.timer_id)
+        self.timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_data)
+
+        self.reload()
 
     def reload(self):
         if self.mode == "ADECK":
@@ -1091,6 +1267,7 @@ class App:
         selected_model_data = {}
         actual_models = set()
         all_models = set()
+
         for storm_atcf_id in self.adeck.keys():
             for model_id, models in self.adeck[storm_atcf_id].items():
                 for valid_time, data in models.items():
@@ -1112,7 +1289,12 @@ class App:
         # tcvitals
         for storm_atcf_id, data in self.recent_storms.items():
             valid_date_str = data['valid_time']
+            if storm_atcf_id not in selected_model_data.keys():
+                selected_model_data[storm_atcf_id] = {}
             selected_model_data[storm_atcf_id]['TCVITALS'] = {valid_date_str: data}
+            dt = datetime.fromisoformat(valid_date_str)
+            if dt < earliest_model_valid_datetime:
+                earliest_model_valid_datetime = dt
 
         return earliest_model_valid_datetime, len(all_models), len(actual_models), selected_model_data
 
@@ -1641,7 +1823,7 @@ class App:
 
     def update_axes(self):
             gl = self.lastgl
-            if self.zoom_rect:
+            if self.zoom_rect and len(self.zoom_rect) == 4:
                 x0, y0, x1, y1 = self.zoom_rect
             else:
                 x0, y0, x1, y1 = -180, -90, 180, 90
@@ -1713,6 +1895,12 @@ class App:
         screen_height = self.root.winfo_screenheight()
 
         dpi = 100
+        if self.fig:
+            try:
+                plt.close(self.fig)
+            except:
+                pass
+
         self.fig = plt.figure(figsize=(screen_width / dpi, screen_height / dpi), dpi=dpi, facecolor='black')
 
         #self.ax = self.fig.add_subplot(111, projection=ccrs.PlateCarree())
@@ -1858,6 +2046,10 @@ if __name__ == "__main__":
     # Style configuration for ttk widgets
     style = ttk.Style()
     style.configure("TButton", background="black", foreground="white")
+    style.configure("TButtonRed", background="black", foreground="red")
+    style.configure("TButtonOrange", background="black", foreground="orange")
+    style.configure("TButtonYellow", background="black", foreground="yellow")
+
     style.configure("TCheckbutton", background="black", foreground="white")
     style.configure("TopFrame.TFrame", background="black")
     style.configure("CanvasFrame.TFrame", background="black")
