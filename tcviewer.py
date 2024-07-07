@@ -3,6 +3,12 @@
 #   uses a-deck,b-deck,tcvitals (from NHC,UCAR) and tc genesis candidates (tc_candidates.db)
 #### DO NOT USE OR RELY ON THIS!
 
+# for measurements (geodesic)
+#   note: measures geodesic distance, not the 'path' distance that might show as a blue line
+import cartopy.geodesic as cgeo
+from shapely.geometry import LineString
+import numpy as np
+
 # for tracking modification date of source files
 from dateutil import parser
 import copy
@@ -1005,6 +1011,18 @@ class App:
         self.dt_mods_adeck = {}
         self.dt_mods_bdeck = {}
 
+        self.measure_mode = False
+        self.start_point = None
+        self.end_point = None
+        self.line = None
+        self.distance_text = None
+
+        self.cid_press = None
+        self.cid_release = None
+        self.cid_motion = None
+        self.cid_key_press = None
+        self.cid_key_release = None
+
         self.create_widgets()
         self.display_map()
 
@@ -1025,7 +1043,6 @@ class App:
         else:
             self.adeck_previous_selected = current_value
             self.display_map()
-            self.display_custom_boundaries()
             if not self.have_deck_data:
                 self.update_deck_data()
             self.display_deck_data()
@@ -1221,7 +1238,6 @@ class App:
     def reload(self):
         if self.mode == "ADECK":
             self.display_map()
-            self.display_custom_boundaries()
             self.update_deck_data()
             self.display_deck_data()
         elif self.mode == "GENESIS":
@@ -1898,6 +1914,7 @@ class App:
         if self.fig:
             try:
                 plt.close(self.fig)
+                self.reset_measurement()
             except:
                 pass
 
@@ -1918,7 +1935,6 @@ class App:
         # Adjust aspect ratio of the subplot
         self.ax.set_aspect('equal')
 
-
         # Draw red border around figure
         #self.fig.patch.set_edgecolor('red')
         #self.fig.patch.set_linewidth(2)
@@ -1929,16 +1945,15 @@ class App:
 
         self.update_axes()
 
-
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.canvas_frame)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-
-
-        self.canvas.mpl_connect("button_press_event", self.on_click)
-        self.canvas.mpl_connect("button_release_event", self.on_release)
-        self.canvas.mpl_connect("motion_notify_event", self.on_motion)
+        self.cid_press = self.canvas.mpl_connect("button_press_event", self.on_click)
+        self.cid_release = self.canvas.mpl_connect("button_release_event", self.on_release)
+        self.cid_motion = self.canvas.mpl_connect("motion_notify_event", self.on_motion)
+        self.cid_key_press = self.canvas.mpl_connect('key_press_event', self.on_key_press)
+        self.cid_key_release = self.canvas.mpl_connect('key_release_event', self.on_key_release)
 
         # we only know how big the canvas frame/plot is after drawing/packing, and we need to wait until drawing to fix the size
         self.canvas_frame.update_idletasks()
@@ -1950,47 +1965,230 @@ class App:
         divider = Divider(self.fig, (0, 0, 1, 1), h, v, aspect=False)
         self.ax.set_axes_locator(divider.new_locator(nx=1, ny=1))
         self.canvas.draw()
+        self.display_custom_boundaries()
+
+    def on_key_press(self, event):
+        if event.key == 'shift':
+            self.measure_mode = True
+
+    def on_key_release(self, event):
+        if event.key == 'shift':
+            self.measure_mode = False
 
     def on_click(self, event):
-        if event.button == 1:  # Left click
-            self.zoom_rect = [event.xdata, event.ydata]
-            if self.rect_patch:
-                self.rect_patch.remove()
-                self.rect_patch = None
-        elif event.button == 3:  # Right click
-            self.zoom_out()
+        xlim = self.ax.get_xlim()
+        ylim = self.ax.get_ylim()
+
+        if event.inaxes == self.ax:
+            # Check if mouse coordinates are within figure bounds
+            try:
+                inbound = (xlim[0] <= event.xdata <= xlim[1] and ylim[0] <= event.ydata <= ylim[1])
+            except:
+                inbound = False
+
+            if inbound:
+                if self.measure_mode:
+                    if event.button == 1:
+                        self.start_point = (event.xdata, event.ydata)
+                        self.end_point = (event.xdata, event.ydata)
+                    elif event.button == 3:
+                        self.reset_measurement()
+                else:
+                    if event.button == 1:  # Left click
+                        self.zoom_rect = [event.xdata, event.ydata]
+                        if self.rect_patch:
+                            self.rect_patch.remove()
+                            self.rect_patch = None
+                    elif event.button == 3:  # Right click
+                        self.zoom_out()
 
     def on_release(self, event):
-        if event.button == 1 and self.zoom_rect:  # Left click release
-            if event.xdata is None or event.ydata is None:
-                if self.rect_patch is None:
-                    self.zoom_rect = None
-                    return
-                x1 = self.zoom_rect[0] + self.rect_patch.get_width()
-                y1 = self.zoom_rect[1] + self.rect_patch.get_height()
-                self.zoom_rect.extend([x1, y1])
-            else:
-                self.zoom_rect.extend([event.xdata, event.ydata])
+        xlim = self.ax.get_xlim()
+        ylim = self.ax.get_ylim()
 
-            # Remove the rectangle patch after zoom operation
-            if self.rect_patch:
-                self.rect_patch.remove()
-                self.rect_patch = None
-            self.zoom_in()
-            self.zoom_rect = None
+        # Check if mouse coordinates are within figure bounds
+        try:
+            inbound = (xlim[0] <= event.xdata <= xlim[1] and ylim[0] <= event.ydata <= ylim[1])
+        except:
+            inbound = False
 
-    def on_motion(self, event):
-        if self.zoom_rect and event.inaxes:
-            x0, y0 = self.zoom_rect
-            x1, y1 = event.xdata, event.ydata
-            if type(x0) == type(x1) == type(y0) == type(y1):
+        if self.measure_mode:
+            if event.button == 1 and self.start_point:
+                if inbound:
+                    self.end_point = (event.xdata, event.ydata)
+
+                try:
+                    distance = self.calculate_distance(self.start_point, self.end_point)
+                except:
+                    distance = 0
+                if distance > 0:
+                    if self.line:
+                        try:
+                            self.line.remove()
+                        except:
+                            pass
+                    if self.distance_text:
+                        try:
+                            self.distance_text.remove()
+                        except:
+                            pass
+
+                    self.line = self.ax.plot([self.start_point[0], self.end_point[0]],
+                                             [self.start_point[1], self.end_point[1]],
+                                             color='cyan', linewidth=2, transform=ccrs.PlateCarree())[0]
+                    self.display_distance_text(distance)
+                    self.start_point = None
+                    self.end_point = None
+                    self.fig.canvas.draw()
+                else:
+                    self.reset_measurement()
+                    self.fig.canvas.draw()
+        else:
+            if event.button == 1 and self.zoom_rect:  # Left click release
+                if event.xdata is None or event.ydata is None or not inbound:
+                    if self.rect_patch is None:
+                        self.zoom_rect = None
+                        return
+                    x1 = self.zoom_rect[0] + self.rect_patch.get_width()
+                    y1 = self.zoom_rect[1] + self.rect_patch.get_height()
+                    self.zoom_rect.extend([x1, y1])
+                else:
+                    self.zoom_rect.extend([event.xdata, event.ydata])
+
+                # Remove the rectangle patch after zoom operation
                 if self.rect_patch:
                     self.rect_patch.remove()
-                width = x1 - x0
-                height = y1 - y0
-                self.rect_patch = Rectangle((x0, y0), width, height, fill=False, color='yellow', linestyle='--')
-                self.ax.add_patch(self.rect_patch)
-                self.canvas.draw_idle()
+                    self.rect_patch = None
+                self.zoom_in()
+                self.zoom_rect = None
+
+    def on_motion(self, event):
+        xlim = self.ax.get_xlim()
+        ylim = self.ax.get_ylim()
+
+        if event.inaxes == self.ax:
+            # Check if mouse coordinates are within figure bounds
+            try:
+                inbound = (xlim[0] <= event.xdata <= xlim[1] and ylim[0] <= event.ydata <= ylim[1])
+            except:
+                inbound = False
+
+            if self.measure_mode:
+                if self.start_point:
+                    if inbound:
+                        self.end_point = (event.xdata, event.ydata)
+                    else:
+                        return
+
+                    try:
+                        if not self.line:
+                            self.line = self.ax.plot([self.start_point[0], self.end_point[0]],
+                                                     [self.start_point[1], self.end_point[1]],
+                                                     color='cyan', linewidth=2, transform=ccrs.PlateCarree())[0]
+                    except:
+                        pass
+
+                    try:
+                        self.line.set_data([self.start_point[0], self.end_point[0]],
+                                           [self.start_point[1], self.end_point[1]])
+                    except:
+                        pass
+
+                    if self.distance_text:
+                        try:
+                            self.distance_text.remove()
+                        except:
+                            pass
+
+                    try:
+                        distance = self.calculate_distance(self.start_point, self.end_point)
+                        self.display_distance_text(distance)
+                    except:
+                        distance = 0
+
+                    self.fig.canvas.draw()
+            else:
+                if self.zoom_rect:
+                    x0, y0 = self.zoom_rect
+                    if inbound:
+                        x1, y1 = event.xdata, event.ydata
+                    else:
+                        # out of bound motion
+                        return
+                    if type(x0) == type(x1) == type(y0) == type(y1):
+                        if self.rect_patch:
+                            try:
+                                self.rect_patch.remove()
+                            except:
+                                pass
+                        width = x1 - x0
+                        height = y1 - y0
+                        self.rect_patch = Rectangle((x0, y0), width, height, fill=False, color='yellow', linestyle='--')
+                        self.ax.add_patch(self.rect_patch)
+                        self.canvas.draw_idle()
+
+    def reset_measurement(self):
+        if self.line:
+            try:
+                self.line.remove()
+            except:
+                pass
+            self.line = None
+        if self.distance_text:
+            try:
+                self.distance_text.remove()
+            except:
+                pass
+            self.distance_text = None
+        self.start_point = None
+        self.end_point = None
+        self.fig.canvas.draw()
+
+    def calculate_distance(self, start_point, end_point):
+        geod = cgeo.Geodesic()
+        lats_lons = [start_point, end_point]
+        line = LineString([start_point, end_point])
+        total_distance = geod.geometry_length(line)
+        nautical_miles = total_distance / 1852
+        return nautical_miles
+
+    def display_distance_text(self, distance):
+        if self.start_point and self.end_point:
+            mid_point = ((self.start_point[0] + self.end_point[0]) / 2,
+                         (self.start_point[1] + self.end_point[1]) / 2)
+
+            dx = self.end_point[0] - self.start_point[0]
+            dy = self.end_point[1] - self.start_point[1]
+            angle = np.degrees(np.arctan2(dy, dx))
+
+            # Fixed offset distance in pixels
+            offset_pixels = 20  # Adjust as needed
+
+            # Calculate degrees per pixel in both x and y directions
+            extent = self.ax.get_extent()
+            lon_diff = extent[1] - extent[0]
+            lat_diff = extent[3] - extent[2]
+
+            lon_deg_per_pixel = lon_diff / self.ax.get_window_extent().width
+            lat_deg_per_pixel = lat_diff / self.ax.get_window_extent().height
+
+            # Convert offset from pixels to degrees
+            offset_degrees = offset_pixels * lon_deg_per_pixel
+
+            # Calculate offset in degrees in x and y directions
+            offset_x_deg = offset_degrees * np.cos(np.radians(angle + 90))
+            offset_y_deg = offset_degrees * np.sin(np.radians(angle + 90))
+
+            # Adjust angle to ensure text is always right-side up
+            if angle > 90 or angle < -90:
+                angle += 180
+                offset_x_deg = -offset_x_deg
+                offset_y_deg = -offset_y_deg
+
+            self.distance_text = self.ax.text(mid_point[0] + offset_x_deg, mid_point[1] + offset_y_deg,
+                                              f"{distance:.2f} NM", color='white', fontsize=12,
+                                              ha='center', va='center', rotation=angle,
+                                              bbox=dict(facecolor='black', alpha=0.5))
 
     def zoom_in(self):
         if self.zoom_rect and None not in self.zoom_rect and len(self.zoom_rect) == 4:
