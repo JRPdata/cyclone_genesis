@@ -3,6 +3,8 @@
 #   uses a-deck,b-deck,tcvitals (from NHC,UCAR) and tc genesis candidates (tc_candidates.db)
 #### DO NOT USE OR RELY ON THIS!
 
+# 'ALL' excludes GEFS members
+
 # for measurements (geodesic)
 #   note: measures geodesic distance, not the 'path' distance that might show as a blue line
 import cartopy.geodesic as cgeo
@@ -211,7 +213,7 @@ intensity_models = {
     'TCVITALS',
     'BEST'
 }
-
+# exclude these models from all lists (except GEFS-MEMBERS)
 excluded_models = {
     'TABS',
     'TABM',
@@ -254,39 +256,74 @@ excluded_models = {
 }
 included_intensity_models = set(intensity_models) - set(excluded_models)
 statistical_models = ['OCD5', 'TCLP', 'SHIP', 'DSHP', 'LGEM', 'DRCL', 'SHF5', 'BEST', 'TCVITALS']
+gefs_members_models = [
+    'AC00',
+    'AP01',
+    'AP02',
+    'AP03',
+    'AP04',
+    'AP05',
+    'AP06',
+    'AP07',
+    'AP08',
+    'AP09',
+    'AP10',
+    'AP11',
+    'AP12',
+    'AP13',
+    'AP14',
+    'AP15',
+    'AP16',
+    'AP17',
+    'AP18',
+    'AP19',
+    'AP20',
+    'AP21',
+    'AP22',
+    'AP23',
+    'AP24',
+    'AP25',
+    'AP26',
+    'AP27',
+    'AP28',
+    'AP29',
+    'AP30',
+    'BEST',
+    'TCVITALS'
+]
 global_models = [
-'AVNO',
-'AVNI',
-'AEMN',
-'AEMI',
-'AEM2',
-'AMMN',
-'CMC',
-'CMCI',
-'CMC2',
-'EGR2',
-'EGRI',
-'EGRR',
-'UKM',
-'UKM2',
-'UKMI',
-'UKX',
-'UKX2',
-'UKXI'
-'ECM2',
-'ECMI',
-'EMX2',
-'EMXI',
-'NGX',
-'NGX2',
-'NGXI',
-'NNIB',
-'NNIC',
-'NVG2',
-'NVGI',
-'NVGM',
-'BEST',
-'TCVITALS'
+    'AVNO',
+    'AVNI',
+    'AEMN',
+    'AEMI',
+    'AEM2',
+    'AMMN',
+    'CMC',
+    'CMCI',
+    'CMC2',
+    'EGR2',
+    'EGRI',
+    'EGRR',
+    'UKM',
+    'UKM2',
+    'UKMI',
+    'UKX',
+    'UKX2',
+    'UKXI'
+    'ECM2',
+    'ECMI',
+    'EMX2',
+    'EMXI',
+    'NGX',
+    'NGX2',
+    'NGXI',
+    'NNIB',
+    'NNIC',
+    'NVG2',
+    'NVGI',
+    'NVGM',
+    'BEST',
+    'TCVITALS'
 ]
 regional_models = ['HFSA', 'HFSB', 'HFAI', 'HFA2', 'HFBI', 'HFB2',
                    'HMON',  'HMNI', 'HMN2',
@@ -680,6 +717,18 @@ def get_deck_files(storms, adeck_urls, bdeck_urls, do_update_adeck, do_update_bd
                                     if model_id not in adeck[storm_id].keys():
                                         adeck[storm_id][model_id] = {}
                                     adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
+                                elif model_date >= (latest_date - timedelta(hours=6)):
+                                    # GEFS members ATCF is reported late by 6 hours...
+                                    ab_deck_line_dict = ab_deck_line_to_dict(line)
+                                    model_id = ab_deck_line_dict['TECH']
+                                    # allow only late GEFS members:
+                                    if model_id[0:2] in ['AC', 'AP']:
+                                        valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
+                                        if storm_id not in adeck.keys():
+                                            adeck[storm_id] = {}
+                                        if model_id not in adeck[storm_id].keys():
+                                            adeck[storm_id][model_id] = {}
+                                        adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
 
                     dt_mods_adeck[file_url] = dt_mod
                 except OSError as e:
@@ -1072,7 +1121,7 @@ class App:
         self.exit_button_adeck = ttk.Button(self.adeck_mode_frame, text="EXIT", command=self.root.quit, style="TButton")
         self.exit_button_adeck.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.reload_button_adeck = ttk.Button(self.adeck_mode_frame, text="(RE)LOAD", command=self.reload_adeck, style="TButton")
+        self.reload_button_adeck = ttk.Button(self.adeck_mode_frame, text="(RE)LOAD", command=self.reload_adeck, style="White.TButton")
         self.reload_button_adeck.pack(side=tk.LEFT, padx=5, pady=5)
 
         self.label_adeck_mode = ttk.Label(self.adeck_mode_frame, text="ADECK MODE. Models: 0", background="black", foreground="white")
@@ -1083,11 +1132,11 @@ class App:
         style.map('TCombobox', foreground=[('readonly','white')])
         style.map('TCombobox', selectbackground=[('readonly', 'black')])
         style.map('TCombobox', selectforeground=[('readonly', 'white')])
-        self.adeck_selected_combobox = ttk.Combobox(self.adeck_mode_frame, width = 12, textvariable = self.adeck_selected, state='readonly')
+        self.adeck_selected_combobox = ttk.Combobox(self.adeck_mode_frame, width = 14, textvariable = self.adeck_selected, state='readonly')
         self.adeck_selected_combobox.pack(side=tk.LEFT, padx=5, pady=5)
         self.adeck_selected_combobox['state'] = 'readonly' # Set the state according to configure colors
-        self.adeck_selected_combobox['values'] = ('ALL', 'STATISTICAL', 'GLOBAL', 'REGIONAL', 'CONSENSUS', 'OFFICIAL')
-        self.adeck_selected_combobox.current(5)
+        self.adeck_selected_combobox['values'] = ('ALL', 'STATISTICAL', 'GLOBAL', 'GEFS-MEMBERS', 'REGIONAL', 'CONSENSUS', 'OFFICIAL')
+        self.adeck_selected_combobox.current(6)
         self.adeck_previous_selected = self.adeck_selected.get()
 
         self.adeck_selected_combobox.bind("<<ComboboxSelected>>", self.combo_selected_models_event)
@@ -1137,13 +1186,13 @@ class App:
 
     def update_reload_button_color(self):
         if self.stale_urls['adeck']:
-            self.reload_button_adeck.configure(style='TButtonRed')
+            self.reload_button_adeck.configure(style='Red.TButton')
         elif self.stale_urls['bdeck']:
-            self.reload_button_adeck.configure(style='TButtonOrange')
+            self.reload_button_adeck.configure(style='Orange.TButton')
         elif self.stale_urls['tcvitals']:
-            self.reload_button_adeck.configure(style='TButtonYellow')
+            self.reload_button_adeck.configure(style='Yellow.TButton')
         else:
-            self.reload_button_adeck.configure(style='TButton')
+            self.reload_button_adeck.configure(style='White.TButton')
 
     def update_deck_data(self):
         # track which data is stale (tc vitals, adeck, bdeck)
@@ -1157,6 +1206,9 @@ class App:
         if not self.have_deck_data:
             # first fetch of data
             do_update_tcvitals = do_update_adeck = do_update_bdeck = True
+            if self.timer_id is not None:
+                self.root.after_cancel(self.timer_id)
+            self.timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_data)
         else:
             # refresh status of stale data one more time since the user has requested a reload
             self.check_for_stale_data()
@@ -1195,36 +1247,34 @@ class App:
         if self.dt_mods_tcvitals or self.dt_mods_adeck or self.dt_mods_bdeck:
             # at least something was downloaded
             self.have_deck_data = True
-        self.stale_urls['tcvitals'] = self.stale_urls['tcvitals'] - updated_urls_tcvitals
-        self.stale_urls['adeck'] = self.stale_urls['adeck'] - updated_urls_adeck
-        self.stale_urls['bdeck'] = self.stale_urls['bdeck'] - updated_urls_bdeck
 
+        self.stale_urls['tcvitals'] = self.stale_urls['tcvitals'] - set(updated_urls_tcvitals)
+        self.stale_urls['adeck'] = self.stale_urls['adeck'] - set(updated_urls_adeck)
+        self.stale_urls['bdeck'] = self.stale_urls['bdeck'] - set(updated_urls_bdeck)
         self.update_reload_button_color()
 
     def check_for_stale_data(self):
-        print("Checking for stale data")
+        if self.timer_id is not None:
+            self.root.after_cancel(self.timer_id)
         self.timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_data)
         if self.dt_mods_tcvitals:
             for url, old_dt_mod in self.dt_mods_tcvitals.items():
                 new_dt_mod = http_get_modification_date(url)
                 if new_dt_mod:
                     if new_dt_mod > old_dt_mod:
-                        print("Found stale tcvitals")
-                        self.stale_urls['tcvitals'] = self.stale_urls['tcvitals'] + url
+                        self.stale_urls['tcvitals'] = self.stale_urls['tcvitals'] | set([url])
         if self.dt_mods_adeck:
             for url, old_dt_mod in self.dt_mods_adeck.items():
                 new_dt_mod = http_get_modification_date(url)
                 if new_dt_mod:
                     if new_dt_mod > old_dt_mod:
-                        print("Found stale adeck")
-                        self.stale_urls['adeck'] = self.stale_urls['adeck'] + url
+                        self.stale_urls['adeck'] = self.stale_urls['adeck'] | set([url])
         if self.dt_mods_bdeck:
             for url, old_dt_mod in self.dt_mods_bdeck.items():
                 new_dt_mod = http_get_modification_date(url)
                 if new_dt_mod:
                     if new_dt_mod > old_dt_mod:
-                        print("Found stale bdeck")
-                        self.stale_urls['bdeck'] = self.stale_urls['bdeck'] + url
+                        self.stale_urls['bdeck'] = self.stale_urls['bdeck'] | set([url])
 
         self.update_reload_button_color()
 
@@ -1263,6 +1313,8 @@ class App:
             return included_intensity_models
         elif selected_text == 'GLOBAL':
             return global_models
+        elif selected_text == 'GEFS-MEMBERS':
+            return gefs_members_models
         elif selected_text == 'STATISTICAL':
             return statistical_models
         elif selected_text == 'REGIONAL':
@@ -1300,6 +1352,8 @@ class App:
         for storm_atcf_id in self.bdeck.keys():
             for model_id, models in self.bdeck[storm_atcf_id].items():
                 if model_id in selected_models:
+                    if storm_atcf_id not in selected_model_data.keys():
+                        selected_model_data[storm_atcf_id] = {}
                     selected_model_data[storm_atcf_id][model_id] = models
 
         # tcvitals
@@ -2243,10 +2297,12 @@ if __name__ == "__main__":
 
     # Style configuration for ttk widgets
     style = ttk.Style()
+    style.theme_use('clam')  # Ensure using a theme that supports customization
     style.configure("TButton", background="black", foreground="white")
-    style.configure("TButtonRed", background="black", foreground="red")
-    style.configure("TButtonOrange", background="black", foreground="orange")
-    style.configure("TButtonYellow", background="black", foreground="yellow")
+    style.configure("White.TButton", background="black", foreground="white")
+    style.configure("Red.TButton", background="black", foreground="red")
+    style.configure("Orange.TButton", background="black", foreground="orange")
+    style.configure("Yellow.TButton", background="black", foreground="yellow")
 
     style.configure("TCheckbutton", background="black", foreground="white")
     style.configure("TopFrame.TFrame", background="black")
