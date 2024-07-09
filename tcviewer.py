@@ -5,6 +5,9 @@
 
 # 'ALL' excludes GEFS members
 
+# for mouse hover features
+from rtree import index
+
 # for measurements (geodesic)
 #   note: measures geodesic distance, not the 'path' distance that might show as a blue line
 import cartopy.geodesic as cgeo
@@ -32,7 +35,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Rectangle, Circle
 from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
 
@@ -52,6 +55,12 @@ import matplotlib
 #   checks modification date in any class of the three, and refreshes the entire class
 #      timer resets after manual reloads
 TIMER_INTERVAL_MINUTES = 30
+
+# On mouse hover, select points to display status within a 0.1 degree bounding box
+MOUSE_SELECT_IN_DEGREES = 0.5
+
+# Size of circle patch radius on mouse hover (in pixels)
+DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS = 20
 
 # URLs
 tcvitals_urls = [
@@ -85,7 +94,7 @@ tcvitals_basin_to_atcf_basin = {
 ### plot greater houston boundary
 # Load the shapefile using Geopandas
 # from census shapefiles
-shapefile_path = "tl_2023_us_cbsa/tl_2023_us_cbsa.shp"
+#shapefile_path = "tl_2023_us_cbsa/tl_2023_us_cbsa.shp"
 
 try:
     gdf = gpd.read_file(shapefile_path)
@@ -1072,8 +1081,167 @@ class App:
         self.cid_key_press = None
         self.cid_key_release = None
 
+        # keep list of all lat_lon_with_time_step_list (plural) used to create points in last drawn map
+        self.plotted_tc_candidates = []
+        # r-tree index
+        self.rtree_p = index.Property()
+        self.rtree_idx = index.Index(properties=self.rtree_p)
+        # Mapping from rtree point index to (tc_index, tc_candidate_point_index)
+        self.rtree_tuple_point_id = 0
+        self.rtree_tuple_index_mapping = {}
+
+        # circle patch for selected marker
+        self.circle_handle = None
+        self.last_circle_lon = None
+        self.last_circle_lat = None
+
         self.create_widgets()
         self.display_map()
+
+    def calculate_radius_pixels(self):
+        # Get current extent of the map in degrees and pixels
+        extent = self.ax.get_extent()
+        lon_diff = extent[1] - extent[0]
+        lat_diff = extent[3] - extent[2]
+
+        # Get window extent in pixels
+        window_extent = self.ax.get_window_extent()
+        lon_pixels = window_extent.width
+        lat_pixels = window_extent.height
+
+        # Calculate degrees per pixel in both x and y directions
+        lon_deg_per_pixel = lon_diff / lon_pixels
+        lat_deg_per_pixel = lat_diff / lat_pixels
+
+        # Convert pixels to degrees
+        radius_degrees = max(lon_deg_per_pixel, lat_deg_per_pixel) * DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS
+
+        return radius_degrees
+
+    def clear_plotted_list(self):
+        self.plotted_tc_candidates = []
+        self.rtree_p = index.Property()
+        self.rtree_idx = index.Index(properties=self.rtree_p)
+        self.rtree_tuple_point_id = 0
+        self.rtree_tuple_index_mapping = {}
+        # reset all labels
+        self.update_tc_status_labels()
+        self.clear_circle_patch()
+
+    def update_plotted_list(self, tc_candidate):
+        # zero indexed
+        tc_index = len(self.plotted_tc_candidates)
+        for point_index, point in enumerate(tc_candidate):  # Iterate over each point in the track
+            lat, lon = point['lat'], point['lon']
+            # Can't use a tuple (tc_index, point_index) as the index so use a mapped index
+            self.rtree_idx.insert(self.rtree_tuple_point_id, (lon, lat, lon, lat))
+            self.rtree_tuple_index_mapping[self.rtree_tuple_point_id] = (tc_index, point_index)
+            self.rtree_tuple_point_id += 1
+
+        self.plotted_tc_candidates.append(tc_candidate)
+
+    def update_tc_status_labels(self, tc_index = None, tc_point_index = None):
+        # may not have init interface yet
+        try:
+            if tc_index is None or tc_point_index is None or len(self.plotted_tc_candidates) == 0:
+                self.label_mouse_hover_info_coords.config(text="(-tt.tttt, -nnn.nnnn)")
+                self.label_mouse_hover_info_valid_time.config(text="YYYY-MM-DD hhZ")
+                self.label_mouse_hover_info_model_init.config(text="YYYY-MM-DD hhZ")
+                self.label_mouse_hover_info_vmax_10m.config(text="---.- kt")
+                self.label_mouse_hover_info_mslp.config(text="----.- hPa")
+                self.label_mouse_hover_info_roci.config(text="---- km")
+                self.label_mouse_hover_info_isobar_delta.config(text="--- hPa")
+            else:
+                # list of dicts (points in time) for tc candidate
+                tc_candidate = self.plotted_tc_candidates[tc_index]
+                # dict at a point in time for tc candidate
+                tc_candidate_point = tc_candidate[tc_point_index]
+                model_name = tc_candidate_point['model_name']
+                lat = tc_candidate_point['lat']
+                lon = tc_candidate_point['lon']
+                valid_time = tc_candidate_point['valid_time'].strftime('%Y-%m-%d %HZ')
+                init_time = tc_candidate_point['init_time'].strftime('%Y-%m-%d %HZ')
+                if tc_candidate_point['vmax10m_in_roci']:
+                    vmax_10m = tc_candidate_point['vmax10m_in_roci']
+                else:
+                    vmax_10m = tc_candidate_point['vmax10m']
+                mslp = tc_candidate_point['mslp_value']
+                roci = tc_candidate_point['roci']
+                isobar_delta = tc_candidate_point['closed_isobar_delta']
+
+                self.label_mouse_hover_info_coords.config(text=f"({lon:>9.4f}, {lat:>8.4f})")
+                if valid_time:
+                    self.label_mouse_hover_info_valid_time.config(text=valid_time)
+                else:
+                    self.label_mouse_hover_info_valid_time.config(text="YYYY-MM-DD hhZ")
+                if init_time:
+                    self.label_mouse_hover_info_model_init.config(text=f"{model_name:>4} {init_time}")
+                else:
+                    self.label_mouse_hover_info_model_init.config(text="YYYY-MM-DD hhZ")
+                if vmax_10m:
+                    self.label_mouse_hover_info_vmax_10m.config(text=f"{vmax_10m:>5.1f} kt")
+                else:
+                    self.label_mouse_hover_info_vmax_10m.config(text="---.- kt")
+                if mslp:
+                    self.label_mouse_hover_info_mslp.config(text=f"{mslp:>6.1f} hPa")
+                else:
+                    self.label_mouse_hover_info_mslp.config(text="----.- hPa")
+                if roci:
+                    self.label_mouse_hover_info_roci.config(text=f"{roci:>4.0f} km")
+                else:
+                    self.label_mouse_hover_info_roci.config(text="---- km")
+                if isobar_delta:
+                    self.label_mouse_hover_info_isobar_delta.config(text=f"{isobar_delta:>3.0f} hPa")
+                else:
+                    self.label_mouse_hover_info_isobar_delta.config(text="--- hPa")
+        except:
+            traceback.print_exc()
+            pass
+
+    def update_labels_for_mouse_hover(self, lat=None, lon=None):
+        if not lat or not lon:
+            return
+
+        # Update label for mouse cursor position on map first
+        self.label_mouse_coords.config(text=f"({lon:>8.4f}, {lat:>9.4f})")
+
+        # Next, find nearest point (within some bounding box, as we want to be selective)
+        # Define a bounding box around the cursor for initial query (in degrees)
+        buffer = MOUSE_SELECT_IN_DEGREES  # Adjust this value based on desired precision
+        bounding_box = (lon - buffer, lat - buffer, lon + buffer, lat + buffer)
+
+        # Query the R-tree for points within the bounding box
+        possible_matches = list(self.rtree_idx.intersection(bounding_box, objects=True))
+
+        # Calculate the geodesic distance and find the nearest point
+        nearest_point_index = None
+        min_distance = float('inf')
+        for item in possible_matches:
+            unmapped_point_index = item.id
+            tc_index, point_index = self.rtree_tuple_index_mapping[unmapped_point_index]
+            point = self.plotted_tc_candidates[tc_index][point_index]
+            distance = self.calculate_distance((lon, lat), (point['lon'], point['lat']))
+            if distance < min_distance:
+                min_distance = distance
+                nearest_point_index = (tc_index, point_index)
+
+        # Update the labels if a nearest point is found within the threshold
+        if nearest_point_index:
+            tc_index, point_index = nearest_point_index
+            self.update_tc_status_labels(tc_index,point_index)
+            # get the nearest_point
+            point = self.plotted_tc_candidates[tc_index][point_index]
+            lat = point['lat']
+            lon = point['lon']
+            self.update_circle_patch(lon=lon, lat=lat)
+        else:
+            # clear the label if no point is found? No.
+            #   Not only will this prevent the constant reconfiguring of labels, it allows the user more flexibility
+            #self.update_tc_status_labels()
+
+            # Do clear the circle though as it might be obtrusive
+            self.clear_circle_patch()
+
 
     def display_custom_boundaries(self):
         if custom_gdf is not None:
@@ -1100,14 +1268,18 @@ class App:
         self.top_frame = ttk.Frame(self.root, style="TopFrame.TFrame")
         self.top_frame.pack(side=tk.TOP, fill=tk.X, expand=False)
 
+        # Middle frame
+        self.tools_frame = ttk.Frame(self.root, style="ToolsFrame.TFrame")
+        self.tools_frame.pack(side=tk.TOP, fill=tk.X, expand=False)
+
         self.create_adeck_mode_widgets()
         self.create_genesis_mode_widgets()
+        self.create_tools_widgets()
 
         self.update_mode()
 
         self.canvas_frame = ttk.Frame(self.root, style="CanvasFrame.TFrame")
         self.canvas_frame.pack(fill=tk.X, expand=True)
-
 
 #        self.status_line = ttk.Label(self.root, text="", relief=tk.SUNKEN, anchor=tk.W, background="black", foreground="white")
 #        self.status_line.pack(side=tk.BOTTOM, fill=tk.X)
@@ -1171,6 +1343,63 @@ class App:
 
         self.switch_to_adeck_button = ttk.Button(self.genesis_mode_frame, text="SWITCH TO ADECK MODE", command=self.switch_mode, style="TButton")
         self.switch_to_adeck_button.pack(side=tk.RIGHT, padx=5, pady=5)
+
+    def create_tools_widgets(self):
+        #self.tools_frame = ttk.Frame(self.tools_frame, style="Tools.TFrame")
+
+        self.add_marker_button = ttk.Button(self.tools_frame, text="ADD MARKER", command=self.add_marker, style="TButton")
+        self.add_marker_button.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_coords_prefix = ttk.Label(self.tools_frame, text="Cursor position:", background="black", foreground="white")
+        self.label_mouse_coords_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_coords = ttk.Label(self.tools_frame, text="(-tt.tttt, -nnn.nnnn)", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_coords.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_prefix = ttk.Label(self.tools_frame, text="(Cursor hover) Info:", background="black", foreground="white")
+        self.label_mouse_hover_info_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_coords = ttk.Label(self.tools_frame, text="(-tt.tttt, -nnn.nnnn)", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_info_coords.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_valid_time_prefix = ttk.Label(self.tools_frame, text="Valid time:", background="black", foreground="white")
+        self.label_mouse_hover_info_valid_time_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_valid_time = ttk.Label(self.tools_frame, text="YYYY-MM-DD hhZ", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_info_valid_time.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_model_init_prefix = ttk.Label(self.tools_frame, text="Model init:", background="black", foreground="white")
+        self.label_mouse_hover_info_model_init_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_model_init = ttk.Label(self.tools_frame, text="YYYY-MM-DD hhZ", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_info_model_init.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_vmax_10m_prefix = ttk.Label(self.tools_frame, text="Vmax @ 10m:", background="black", foreground="white")
+        self.label_mouse_hover_info_vmax_10m_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_vmax_10m = ttk.Label(self.tools_frame, text="---.- kt", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_info_vmax_10m.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_mslp_prefix = ttk.Label(self.tools_frame, text="MSLP:", background="black", foreground="white")
+        self.label_mouse_hover_info_mslp_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_mslp = ttk.Label(self.tools_frame, text="----.- hPa", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_info_mslp.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_roci_prefix = ttk.Label(self.tools_frame, text="ROCI:", background="black", foreground="white")
+        self.label_mouse_hover_info_roci_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_roci = ttk.Label(self.tools_frame, text="---- km", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_info_roci.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_isobar_delta_prefix = ttk.Label(self.tools_frame, text="Isobar delta:", background="black", foreground="white")
+        self.label_mouse_hover_info_isobar_delta_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_isobar_delta = ttk.Label(self.tools_frame, text="--- hPa", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_info_isobar_delta.pack(side=tk.LEFT, padx=5, pady=5)
+
+    def add_marker(self):
+        pass
 
     def switch_mode(self):
         self.mode = "GENESIS" if self.mode == "ADECK" else "ADECK"
@@ -1422,6 +1651,8 @@ class App:
             (456, float('inf'))
         ]
 
+        self.clear_plotted_list()
+
         for storm_atcf_id, tc in tc_candidates.items():
             numc += 1
             for model_name, disturbance_candidates in tc.items():
@@ -1489,6 +1720,8 @@ class App:
                         prev_lon_repeat1 = lon
 
                         lat_lon_with_time_step_list.append(candidate_info)
+
+                    self.update_plotted_list(lat_lon_with_time_step_list)
 
                     # do in reversed order so most recent items get rendered on top
                     for i, (start, end) in reversed(list(enumerate(time_step_ranges))):
@@ -1706,6 +1939,8 @@ class App:
             (456, float('inf'))
         ]
 
+        self.clear_plotted_list()
+
         for tc in tc_candidates:
             numc += 1
             numcandidates = len(tc_candidates)
@@ -1736,7 +1971,7 @@ class App:
                     lon = candidate['lon']
                     candidate_info = {}
                     candidate_info['model_name'] = model_name
-                    candidate_info['init_time'] = model_timestamp
+                    candidate_info['init_time'] = datetime.fromisoformat(model_timestamp)
                     candidate_info['lat'] = candidate['lat']
                     candidate_info['lon'] = lon
                     candidate_info['lon_repeat'] = candidate_info['lon']
@@ -1813,6 +2048,7 @@ class App:
 
                     #m.add(get_title_overlay(title_text))
 
+                self.update_plotted_list(lat_lon_with_time_step_list)
 
                 # do in reversed order so most recent items get rendered on top
                 for i, (start, end) in reversed(list(enumerate(time_step_ranges))):
@@ -2116,6 +2352,30 @@ class App:
                 self.zoom_in()
                 self.zoom_rect = None
 
+    def update_circle_patch(self, lon=None, lat=None):
+        if self.last_circle_lon == lon and self.last_circle_lat == lat:
+            return
+
+        if self.circle_handle:
+            self.circle_handle.remove()
+
+        self.circle_handle = Circle((lon, lat), radius=self.calculate_radius_pixels(), color='pink', fill=False, linestyle='dotted', linewidth=2, alpha=0.8,
+                                    transform=ccrs.PlateCarree())
+        self.ax.add_patch(self.circle_handle)
+        self.canvas.draw()
+
+        self.last_circle_lon = lon
+        self.last_circle_lat = lat
+
+    def clear_circle_patch(self):
+        if self.circle_handle:
+            self.circle_handle.remove()
+            self.circle_handle = None
+            self.canvas.draw()
+
+        self.last_circle_lon = None
+        self.last_circle_lat = None
+
     def on_motion(self, event):
         xlim = self.ax.get_xlim()
         ylim = self.ax.get_ylim()
@@ -2126,6 +2386,10 @@ class App:
                 inbound = (xlim[0] <= event.xdata <= xlim[1] and ylim[0] <= event.ydata <= ylim[1])
             except:
                 inbound = False
+
+            lon = event.xdata
+            lat = event.ydata
+            self.update_labels_for_mouse_hover(lat=lat, lon=lon)
 
             if self.measure_mode:
                 if self.start_point:
@@ -2203,7 +2467,7 @@ class App:
         lats_lons = [start_point, end_point]
         line = LineString([start_point, end_point])
         total_distance = geod.geometry_length(line)
-        nautical_miles = total_distance / 1852
+        nautical_miles = total_distance / 1852.0
         return nautical_miles
 
     def display_distance_text(self, distance):
@@ -2304,8 +2568,11 @@ if __name__ == "__main__":
     style.configure("Orange.TButton", background="black", foreground="orange")
     style.configure("Yellow.TButton", background="black", foreground="yellow")
 
+    style.configure("FixedWidth.TLabel", font=("Latin Modern Mono", 12))
+
     style.configure("TCheckbutton", background="black", foreground="white")
     style.configure("TopFrame.TFrame", background="black")
+    style.configure("ToolsFrame.TFrame", background="black")
     style.configure("CanvasFrame.TFrame", background="black")
 
     app = App(root)
