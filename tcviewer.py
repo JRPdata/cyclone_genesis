@@ -1169,7 +1169,7 @@ class App:
                 roci = tc_candidate_point['roci']
                 isobar_delta = tc_candidate_point['closed_isobar_delta']
 
-                self.label_mouse_hover_info_coords.config(text=f"({lon:>9.4f}, {lat:>8.4f})")
+                self.label_mouse_hover_info_coords.config(text=f"({lat:>8.4f}, {lon:>9.4f})")
                 if valid_time:
                     self.label_mouse_hover_info_valid_time.config(text=valid_time)
                 else:
@@ -1203,7 +1203,7 @@ class App:
             return
 
         # Update label for mouse cursor position on map first
-        self.label_mouse_coords.config(text=f"({lon:>8.4f}, {lat:>9.4f})")
+        self.label_mouse_coords.config(text=f"({lat:>8.4f}, {lon:>9.4f})")
 
         # Next, find nearest point (within some bounding box, as we want to be selective)
         # Define a bounding box around the cursor for initial query (in degrees)
