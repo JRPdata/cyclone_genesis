@@ -39,7 +39,15 @@ DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS = 20
 ANNOTATE_CIRCLE_OVERLAP_IN_DEGREES = 0.01
 
 # how much to zoom in when using minus key
-ZOOM_IN_STEP_FACTOR = 1.05
+ZOOM_IN_STEP_FACTOR = 3
+
+# should not affect the grid spacing (as the grid spacing is based on inches)
+CHART_DPI = 100
+
+# Calculate the grid line spacing in inches for each multiple
+GRID_LINE_SPACING_DEGREES  = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 60.0, 90.0]
+# Choose the smallest option to meet the minimum grid line spacing requirement (otherwise will use largest of above)
+MIN_GRID_LINE_SPACING_INCHES = 0.75
 
 # remove any from list not wanted visible for extrema nnotations (x key)
 #   closed_isobar_delta is only from tc_candidates.db
@@ -71,6 +79,7 @@ bdeck_urls = [
 ]
 
 ### END CONFIG ###
+##################
 
 # for cycling overlapped points
 from collections import OrderedDict
@@ -150,7 +159,7 @@ except:
     custom_gdf = None
 
 matplotlib.use('Agg')
-matplotlib.rcParams['figure.dpi'] = 100
+matplotlib.rcParams['figure.dpi'] = CHART_DPI
 
 # this is for accessing by model and storm (internal component id)
 tc_candidates_db_file_path = 'tc_candidates.db'
@@ -2778,69 +2787,77 @@ class App:
         self.genesis_models_label.config(text=f"Latest models: GFS [{model_dates['GFS']}], ECM[{model_dates['ECM']}], NAV[{model_dates['NAV']}], CMC[{model_dates['CMC']}]")
 
     def update_axes(self):
-            gl = self.lastgl
-            if self.zoom_rect and len(self.zoom_rect) == 4:
-                x0, y0, x1, y1 = self.zoom_rect
-            else:
-                x0, y0, x1, y1 = -180, -90, 180, 90
-            extent = [min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)]
-            if gl:
-                gl.top_labels = False
-                gl.left_labels = False
-                gl.xlines = False
-                gl.ylines = False
-                for artist in (gl.xline_artists + gl.yline_artists +
-                               gl.bottom_label_artists + gl.top_label_artists +
-                               gl.left_label_artists + gl.right_label_artists):
-                    try:
-                        artist.remove()
-                    except:
-                        pass
+        gl = self.lastgl
 
+        if gl:
+            gl.top_labels = False
+            gl.left_labels = False
+            gl.xlines = False
+            gl.ylines = False
+            for artist in (gl.xline_artists + gl.yline_artists +
+                           gl.bottom_label_artists + gl.top_label_artists +
+                           gl.left_label_artists + gl.right_label_artists):
                 try:
-                    self.ax._gridliners.remove(gl)
+                    artist.remove()
                 except:
                     pass
 
-            gl = self.ax.gridlines(draw_labels=["bottom", "left"], x_inline=False, y_inline=False, auto_inline=False, color='white', alpha=0.5, linestyle='--')
-            # Move axis labels inside the subplot
-            self.ax.tick_params(axis='both', direction='in', labelsize=16)
-            gl.xpadding = -10     # Ideally, this would move labels inside the map, but results in hidden labels
-            gl.ypadding = -10     # Ideally, this would move labels inside the map, but results in hidden labels
+            try:
+                self.ax._gridliners.remove(gl)
+            except:
+                pass
 
-            gl.xlabel_style = {'color': 'orange'}
-            gl.ylabel_style = {'color': 'orange'}
+        gl = self.ax.gridlines(draw_labels=["bottom", "left"], x_inline=False, y_inline=False, auto_inline=False, color='white', alpha=0.5, linestyle='--')
+        # Move axis labels inside the subplot
+        self.ax.tick_params(axis='both', direction='in', labelsize=16)
+        gl.xpadding = -10     # Ideally, this would move labels inside the map, but results in hidden labels
+        gl.ypadding = -10     # Ideally, this would move labels inside the map, but results in hidden labels
 
-            # adjust spacing of grid lines by zoom
-            xdiff = abs(extent[1] - extent[0])
-            ydiff = abs(extent[3] - extent[2])
+        gl.xlabel_style = {'color': 'orange'}
+        gl.ylabel_style = {'color': 'orange'}
 
-            # preferenced by experimentation with 16:9 monitor
-            if xdiff <= 25:
-                xdegn = 1
-            elif xdiff <= 50:
-                xdegn = 5
-            else:
-                xdegn = 10
+        # in pixels
+        window_extent = self.ax.get_window_extent()
+        # in degrees
+        extent = self.ax.get_extent()
 
-            if ydiff <= 15:
-                ydegn = 1
-            elif ydiff <= 40:
-                ydegn = 5
-            else:
-                ydegn = 10
+        lon_pixels = window_extent.width
+        lat_pixels = window_extent.height
+        chart_hsize = lon_pixels / CHART_DPI
+        chart_vsize = lat_pixels / CHART_DPI
+        lon_degrees = (extent[1] - extent[0])
+        lat_degrees = (extent[3] - extent[2])
 
-            gl.xlocator = plt.MultipleLocator(xdegn)
-            gl.ylocator = plt.MultipleLocator(ydegn)
+        # Calculate the pixel-to-degree ratio
+        lon_inches_per_degree = chart_hsize / lon_degrees
+        lat_inches_per_degree = chart_vsize / lat_degrees
 
-            self.lastgl = gl
 
-            #gl.xformatter = LONGITUDE_FORMATTER
-            #gl.yformatter = LATITUDE_FORMATTER
-            lat_formatter = LatitudeFormatter(direction_label=True)
-            lon_formatter = LongitudeFormatter(direction_label=True)
-            self.ax.xaxis.set_major_formatter(lon_formatter)
-            self.ax.yaxis.set_major_formatter(lat_formatter)
+        multiples = GRID_LINE_SPACING_DEGREES
+
+        grid_line_spacing_inches = []
+        for multiple in multiples:
+            lon_grid_spacing = lon_inches_per_degree * multiple
+            lat_grid_spacing = lat_inches_per_degree * multiple
+            grid_line_spacing_inches.append(min(lon_grid_spacing, lat_grid_spacing))
+
+        #fitted_grid_line_degrees = min(multiples, key=lambda x: (x - min_grid_line_spacing_pixels if x >= min_grid_line_spacing_pixels else float('inf')))
+        fitted_grid_line_degrees = min([multiple for multiple, spacing in zip(multiples, grid_line_spacing_inches) if spacing >= MIN_GRID_LINE_SPACING_INCHES], default=float('inf'))
+        if fitted_grid_line_degrees == float('inf'):
+            # must pick a reasonable number
+            fitted_grid_line_degrees = multiples[-1]
+
+        gl.xlocator = plt.MultipleLocator(fitted_grid_line_degrees)
+        gl.ylocator = plt.MultipleLocator(fitted_grid_line_degrees)
+
+        self.lastgl = gl
+
+        #gl.xformatter = LONGITUDE_FORMATTER
+        #gl.yformatter = LATITUDE_FORMATTER
+        lat_formatter = LatitudeFormatter(direction_label=True)
+        lon_formatter = LongitudeFormatter(direction_label=True)
+        self.ax.xaxis.set_major_formatter(lon_formatter)
+        self.ax.yaxis.set_major_formatter(lat_formatter)
 
     def display_map(self):
         if self.canvas:
@@ -2850,7 +2867,6 @@ class App:
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
 
-        dpi = 100
         if self.fig:
             try:
                 plt.close(self.fig)
@@ -2858,7 +2874,7 @@ class App:
             except:
                 pass
 
-        self.fig = plt.figure(figsize=(screen_width / dpi, screen_height / dpi), dpi=dpi, facecolor='black')
+        self.fig = plt.figure(figsize=(screen_width / CHART_DPI, screen_height / CHART_DPI), dpi=CHART_DPI, facecolor='black')
 
         #self.ax = self.fig.add_subplot(111, projection=ccrs.PlateCarree())
         self.ax = plt.axes(projection=ccrs.PlateCarree())
@@ -2898,8 +2914,8 @@ class App:
         # we only know how big the canvas frame/plot is after drawing/packing, and we need to wait until drawing to fix the size
         self.canvas_frame.update_idletasks()
         # fix the size to the canvas frame
-        frame_hsize = float(self.canvas_frame.winfo_width()) / dpi
-        frame_vsize = float(self.canvas_frame.winfo_height()) / dpi
+        frame_hsize = float(self.canvas_frame.winfo_width()) / CHART_DPI
+        frame_vsize = float(self.canvas_frame.winfo_height()) / CHART_DPI
         h = [Size.Fixed(0), Size.Fixed(frame_hsize)]
         v = [Size.Fixed(0), Size.Fixed(frame_vsize)]
         divider = Divider(self.fig, (0, 0, 1, 1), h, v, aspect=False)
@@ -3248,12 +3264,66 @@ class App:
             x0, y0, x1, y1 = self.zoom_rect
             if x0 != x1 and y0 != y1:
                 extent = [min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)]
-                self.ax.set_extent(extent, crs=ccrs.PlateCarree())
+
+                # Calculate the aspect ratio of the zoom rectangle
+                zoom_aspect_ratio = (extent[3] - extent[2]) / (extent[1] - extent[0])
+
+                # Calculate the aspect ratio of the canvas frame
+                frame_width_pixels = self.canvas_frame.winfo_width()
+                frame_height_pixels = self.canvas_frame.winfo_height()
+                frame_aspect_ratio = frame_height_pixels / frame_width_pixels
+
+                lat_extent = None
+                lon_extent = None
+                # Determine the dimension to set the extent and the dimension to expand
+                if zoom_aspect_ratio < frame_aspect_ratio:
+                    # Set the longitude extent and expand the latitude extent
+                    lon_extent = extent[0], extent[1]
+                    lat_center = (extent[2] + extent[3]) / 2
+                    lat_height = (lon_extent[1] - lon_extent[0]) * frame_aspect_ratio
+                    lat_min = lat_max = None
+                    if lat_center + (lat_height / 2) > 90.0:
+                        lat_max = 90.0
+                        lat_min = lat_max - lat_height
+                    elif lat_center - (lat_height / 2) < -90.0:
+                        lat_min = -90.0
+                        lat_max = lat_min + lat_height
+                    else:
+                        lat_min = lat_center - (lat_height / 2)
+                        lat_max = lat_center + (lat_height / 2)
+                    lat_extent = [lat_min, lat_max]
+                else:
+                    # Set the latitude extent and expand the longitude extent
+                    lat_extent = extent[2], extent[3]
+                    lon_center = (extent[0] + extent[1]) / 2
+                    lon_width = (lat_extent[1] - lat_extent[0]) / frame_aspect_ratio
+                    lon_min = lon_max = None
+                    if lon_center + (lon_width / 2) > 180.0:
+                        lon_max = 180.0
+                        lon_min = lon_max - lon_width
+                    elif lon_center - (lon_width / 2) < -180.0:
+                        lon_min = -180.0
+                        lon_max = lon_min + lon_width
+                    else:
+                        lon_min = lon_center - (lon_width / 2)
+                        lon_max = lon_center + (lon_width / 2)
+                    lon_extent = [lon_min, lon_max]
+
+                self.ax.set_extent([lon_extent[0], lon_extent[1], lat_extent[0], lat_extent[1]], crs=ccrs.PlateCarree())
 
                 self.clear_storm_extrema_annotations()
                 self.update_axes()
                 self.fig.canvas.draw()
 
+                """            x0, y0, x1, y1 = self.zoom_rect
+                            if x0 != x1 and y0 != y1:
+                                extent = [min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)]
+                                self.ax.set_extent(extent, crs=ccrs.PlateCarree())
+
+                                self.clear_storm_extrema_annotations()
+                                self.update_axes()
+                                self.fig.canvas.draw()
+                """
     def zoom_out(self, max_zoom=False, step_zoom=False):
         extent = self.ax.get_extent()
         lon_diff = extent[1] - extent[0]
@@ -3292,6 +3362,15 @@ class App:
                 y1 = 90.0
                 y0 = y1 - target_height
 
+            if x0 < -180.0:
+                x0 = -180.0
+            if x1 > 180.0:
+                x1 = 180.0
+            if y0 < -90.0:
+                y0 = -90.0
+            if y1 > 90.0:
+                y1 = 90.0
+
             # Ensure new extent is within bounds
             new_extent = [
                 x0,
@@ -3300,7 +3379,7 @@ class App:
                 y1,
             ]
 
-            if x1 - x0 <= max_lon_diff and y1 - y1 <= max_lat_diff:
+            if x1 - x0 <= max_lon_diff and y1 - y0 <= max_lat_diff:
                 self.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
                 self.clear_storm_extrema_annotations()
                 self.update_axes()
