@@ -1,9 +1,79 @@
 # an experimental TC plotter (standa-alone full screen viewer) for intensity models and genesis
-###
+######
 #   uses a-deck,b-deck,tcvitals (from NHC,UCAR) and tc genesis candidates (tc_candidates.db)
-#### DO NOT USE OR RELY ON THIS!
 
-# 'ALL' excludes GEFS members
+#### EXPERIMENTAL: DO NOT USE OR RELY ON THIS!
+
+## NOTES
+# ADECK MODE: 'ALL' excludes GEFS members (only GEFS members visible in specific combo selection)
+
+######## GUI Keys/Functions
+# ZOOM IN = mouse left click and drag
+# ZOOM OUT = mouse right click
+# ZOOM OUT MAX = 0 key (0 key)
+# ZOOM IN STEP ON CURSOR = = key (equal key)
+# ZOOM OUT STEP ON CURSOR = - key (minus key)
+# ABORT ZOOM = Escape key  (if started dragging hit escape to abort a zoom)
+# MEASURE (GEODESIC) = shift + mouse left click and drag
+# ERASE MEASURE = right click
+# VIEW NEXT OVERLAPPED HOVER POINT STATUS = n key  (this will not redraw points of overlapped storms, only update hover text)
+# CIRCLE & ANNOTATE STORM EXTREMA = x key  (annotates either the selected storm in circle patch, or all storms in current view (zoom))
+# CLEAR ALL STORM EXTREMA ANNOTATIONS = c key
+
+####### CONFIG
+
+# how often (in minutes) to check for stale data in three classes: tcvitals, adeck, bdecks
+#   for notification purposes only..
+#      colors reload button red (a-deck), orange (b-deck), yellow (tcvitals) -without- downloading data automatically
+#   checks modification date in any class of the three, and refreshes the entire class
+#      timer resets after manual reloads
+TIMER_INTERVAL_MINUTES = 30
+
+# On mouse hover, select points to display status within a 0.1 degree bounding box
+MOUSE_SELECT_IN_DEGREES = 0.5
+
+# Size of circle patch radius on mouse hover (in pixels)
+DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS = 20
+
+# assume any subsequent circle annotations (for extrema) in this bounding box are overlapped in the display, so don't render
+ANNOTATE_CIRCLE_OVERLAP_IN_DEGREES = 0.01
+
+# how much to zoom in when using minus key
+ZOOM_IN_STEP_FACTOR = 1.05
+
+# remove any from list not wanted visible for extrema nnotations (x key)
+#   closed_isobar_delta is only from tc_candidates.db
+#      (it is the difference in pressure from the outermost closed isobar to the inner most close isobar) (i.e. how many concentric circles on a chart of pressure)
+#displayed_extremum_annotations = ["dt_start", "dt_end", "vmax10m", "mslp_value", "roci", "closed_isobar_delta"]
+displayed_extremum_annotations = ["dt_start", "vmax10m", "roci", "closed_isobar_delta"]
+
+DEFAULT_ANNOTATE_MARKER_COLOR = "#FFCCCC"
+DEFAULT_ANNOTATE_TEXT_COLOR = "#FFCCCC"
+ANNOTATE_DT_START_COLOR = "#00FF00"
+ANNOTATE_VMAX_COLOR = "#FF60F0"
+
+from datetime import datetime, timedelta
+# URLs
+tcvitals_urls = [
+    "https://ftp.nhc.noaa.gov/atcf/com/tcvitals",
+    "https://hurricanes.ral.ucar.edu/repository/data/tcvitals_open/combined_tcvitals.{year}.dat".format(year=datetime.utcnow().year)
+]
+
+adeck_urls = [
+    "https://ftp.nhc.noaa.gov/atcf/aid_public/a{basin_id}{storm_number}{year}.dat.gz",
+    "https://hurricanes.ral.ucar.edu/repository/data/adecks_open/a{basin_id}{storm_number}{year}.dat"
+]
+
+bdeck_urls = [
+    "https://hurricanes.ral.ucar.edu/repository/data/bdecks_open/{year}/b{basin_id}{storm_number}{year}.dat",
+    "https://ftp.nhc.noaa.gov/atcf/btk/b{basin_id}{storm_number}{year}.dat",
+    "https://ftp.nhc.noaa.gov/atcf/btk/cphc/b{basin_id}{storm_number}{year}.dat"
+]
+
+### END CONFIG ###
+
+# for cycling overlapped points
+from collections import OrderedDict
 
 # for mouse hover features
 from rtree import index
@@ -41,7 +111,6 @@ from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
 
 from mpl_toolkits.axes_grid1 import Divider, Size
 
-from datetime import datetime, timedelta
 import sqlite3
 
 from matplotlib.collections import LineCollection
@@ -49,35 +118,8 @@ from matplotlib.collections import LineCollection
 # performance optimizations
 import matplotlib
 
-# how often (in minutes) to check for stale data in three classes: tcvitals, adeck, bdecks
-#   for notification purposes only..
-#      colors reload button red (a-deck), orange (b-deck), yellow (tcvitals) -without- downloading data automatically
-#   checks modification date in any class of the three, and refreshes the entire class
-#      timer resets after manual reloads
-TIMER_INTERVAL_MINUTES = 30
-
-# On mouse hover, select points to display status within a 0.1 degree bounding box
-MOUSE_SELECT_IN_DEGREES = 0.5
-
-# Size of circle patch radius on mouse hover (in pixels)
-DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS = 20
-
-# URLs
-tcvitals_urls = [
-    "https://ftp.nhc.noaa.gov/atcf/com/tcvitals",
-    "https://hurricanes.ral.ucar.edu/repository/data/tcvitals_open/combined_tcvitals.{year}.dat".format(year=datetime.utcnow().year)
-]
-
-adeck_urls = [
-    "https://ftp.nhc.noaa.gov/atcf/aid_public/a{basin_id}{storm_number}{year}.dat.gz",
-    "https://hurricanes.ral.ucar.edu/repository/data/adecks_open/a{basin_id}{storm_number}{year}.dat"
-]
-
-bdeck_urls = [
-    "https://hurricanes.ral.ucar.edu/repository/data/bdecks_open/{year}/b{basin_id}{storm_number}{year}.dat",
-    "https://ftp.nhc.noaa.gov/atcf/btk/b{basin_id}{storm_number}{year}.dat",
-    "https://ftp.nhc.noaa.gov/atcf/btk/cphc/b{basin_id}{storm_number}{year}.dat"
-]
+# presence of importance of  level 1 item overrides 0, and level 2 overrides both levels 0 and 1 for coloring
+annotate_color_levels = {0: DEFAULT_ANNOTATE_TEXT_COLOR, 1: ANNOTATE_DT_START_COLOR, 2: ANNOTATE_VMAX_COLOR}
 
 tcvitals_basin_to_atcf_basin = {
     'E': 'EP',
@@ -623,11 +665,11 @@ def ab_deck_line_to_dict(line):
             if type(raw_data['vmax']) is int:
                 if raw_data['vmax'] == 0:
                     # sometimes gets reported as 0
-                    raw_data['vmax_10m'] = None
+                    raw_data['vmax10m'] = None
                 else:
-                    raw_data['vmax_10m'] = raw_data['vmax']
+                    raw_data['vmax10m'] = raw_data['vmax']
         else:
-            raw_data['vmax_10m'] = None
+            raw_data['vmax10m'] = None
         valid_datetime = init_datetime + timedelta(hours=raw_data['time_step'])
         raw_data['init_time'] = init_datetime.isoformat()
         raw_data['valid_time'] = valid_datetime.isoformat()
@@ -807,15 +849,6 @@ def get_deck_files(storms, adeck_urls, bdeck_urls, do_update_adeck, do_update_bd
     return dt_mods_adeck, dt_mods_bdeck, adeck, bdeck
 
 def parse_tcvitals_line(line):
-    """
-    Parse a single line of TCVitals data into a dictionary.
-
-    Args:
-    - line (str): A single line of TCVitals data.
-
-    Returns:
-    - dict: A dictionary with parsed TCVitals data.
-    """
     if len(line) >= 149:
         return {
             "organization_id": line[0:4].strip(),
@@ -897,15 +930,6 @@ def parse_tcvitals_line(line):
         }
 
 def parse_tcvitals_line(line):
-    """
-    Parse a single line of TCVitals data into a dictionary.
-
-    Args:
-    - line (str): A single line of TCVitals data.
-
-    Returns:
-    - dict: A dictionary with parsed TCVitals data.
-    """
     if len(line) >= 149:
         return {
             "organization_id": line[0:4].strip(),
@@ -1017,9 +1041,9 @@ def tcvitals_line_to_dict(line):
 
         try:
             vmax = float(storm_vitals['max_wind_speed']) * 1.9438452
-            storm_vitals['vmax_10m'] = vmax
+            storm_vitals['vmax10m'] = vmax
         except:
-            storm_vitals['vmax_10m'] = None
+            storm_vitals['vmax10m'] = None
 
         try:
             mslp = int(storm_vitals['central_pressure'])
@@ -1035,6 +1059,407 @@ def diff_dicts(old_dict, new_dict):
     modified_keys = {key for key in old_dict.keys() & new_dict.keys() if new_dict[key] != old_dict[key]}
     all_changed_keys = new_keys | modified_keys
     return all_changed_keys
+
+# a sorted cyclic dict that has the item number enumerated (sorted by value)
+# has a get() the next enumerated number and the key of the item in a cycle
+class SortedCyclicEnumDict(OrderedDict):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._sort_value = lambda x: x[1]  # default sort by value
+        self._index = 0
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._reorder()
+
+    def _reorder(self):
+        sorted_items = sorted(self.items(), key=self._sort_value)
+        temp_dict = OrderedDict(sorted_items)
+        self.clear()
+        for key, value in temp_dict.items():
+            super().__setitem__(key, value)
+        self._index = 0
+
+    def get_first_key(self):
+        if not self:
+            return None
+        return next(iter(self.items()))[0]
+
+    def next_enum_key_tuple(self):
+        if not self:
+            return None
+        sorted_items = list(self.items())
+        index = self._index % len(self)
+        key, value = sorted_items[index]
+        self._index = (self._index + 1) % len(self)
+        return (index + 1, key)
+
+    # get previous key without moving backwards (assumes have gotten at least one tuple with next)
+    def get_prev_enum_key_tuple(self):
+        if not self:
+            return None
+        sorted_items = list(self.items())
+        prev_index = (self._index - 1) % len(self)
+        key, value = sorted_items[prev_index]
+        return (prev_index + 1, key)
+
+class DraggableAnnotation:
+    def __init__(self, annotation, original_point, ax, bbox_props):
+        self.original_annotation = annotation
+        self.ax = ax
+        self.zorder = self.original_annotation.get_zorder()
+
+        self.original_point = original_point
+        self.press = None
+        self.background = None
+        self.line = None
+        self.bbox_props = bbox_props
+        self.radius_degrees = self.calculate_radius_pixels()
+
+        self.dragging = False
+
+        # Extract essential properties from the original annotation
+        text = self.original_annotation.get_text()
+        xy = self.original_annotation.get_position()
+        xytext = getattr(self.original_annotation, '_xytext', xy)
+
+        # Define essential properties to keep
+        essential_props = [
+            'color', 'fontsize', 'fontweight', 'fontstyle',
+            'horizontalalignment', 'verticalalignment',
+            'rotation', 'wrap'
+        ]
+
+        props = {prop: getattr(self.original_annotation, f'get_{prop}')()
+                 for prop in essential_props if hasattr(self.original_annotation, f'get_{prop}')}
+
+        # Ensure we have valid coordinates
+        xycoords = getattr(self.original_annotation, 'xycoords', 'data')
+        textcoords = getattr(self.original_annotation, 'textcoords', xycoords)
+
+        # Create a copy of the annotation for dragging
+        self.dragging_annotation = self.ax.annotate(
+            text,
+            xy=xy,
+            xytext=xytext,
+            xycoords=xycoords,
+            textcoords=textcoords,
+            bbox=self.bbox_props,  # Use the bbox_props passed to the constructor
+            **props
+        )
+        self.dragging_annotation.set_visible(False)
+
+        #self.bring_to_front()
+
+        # Connect to the event handlers
+        self.cid_press = self.ax.figure.canvas.mpl_connect('button_press_event', self.on_press)
+        self.cid_release = self.ax.figure.canvas.mpl_connect('button_release_event', self.on_release)
+        self.cid_motion = self.ax.figure.canvas.mpl_connect('motion_notify_event', self.on_motion)
+
+    def is_dragging(self):
+        return self.dragging
+
+    @classmethod
+    def get_topmost_annotation(cls, annotations, event):
+        # need a separate is dragging flag as bbox is unstable when we are blitting
+        #  (as we it can become invisible during the setup for blitting (in an async event with the other handlers)
+        #  the bbox will result erroneously in a 1 pixel box causing the wrong annotation to drag
+        valid_annotations = [ann for ann in annotations if ann.is_dragging() or ann.contains_point(event)]
+        if not valid_annotations:
+            return None
+        max_zorder = max(valid_annotations, key=lambda ann: ann.zorder).zorder
+        return max(valid_annotations, key=lambda ann: ann.zorder)
+
+    def calculate_radius_pixels(self):
+        # Get current extent of the map in degrees and pixels
+        extent = self.ax.get_extent()
+        lon_diff = extent[1] - extent[0]
+        lat_diff = extent[3] - extent[2]
+
+        # Get window extent in pixels
+        window_extent = self.ax.get_window_extent()
+        lon_pixels = window_extent.width
+        lat_pixels = window_extent.height
+
+        # Calculate degrees per pixel in both x and y directions
+        lon_deg_per_pixel = lon_diff / lon_pixels
+        lat_deg_per_pixel = lat_diff / lat_pixels
+
+        # Convert pixels to degrees
+        radius_degrees = max(lon_deg_per_pixel, lat_deg_per_pixel) * DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS
+
+        return radius_degrees
+
+    def contains_point(self, event):
+        bbox = self.original_annotation.get_window_extent()
+        return bbox.contains(event.x, event.y)
+
+    def on_press(self, event):
+        if self != self.get_topmost_annotation(self.ax.draggable_annotations, event):
+            return
+
+        contains, attrd = self.original_annotation.contains(event)
+        if not contains:
+            return
+
+        xy_orig = self.original_annotation.xy
+        if self.dragging_annotation and self.dragging_annotation.xy:
+            xy_cur = self.dragging_annotation.xy
+        else:
+            xy_cur = xy_orig
+        self.press = (xy_orig, self.original_annotation.get_position(), event.xdata, event.ydata)
+        self.original_annotation.set_visible(False)
+        if self.line:
+            self.line.set_visible(False)
+        self.ax.figure.canvas.draw()
+        self.background = self.ax.figure.canvas.copy_from_bbox(self.ax.bbox)
+        self.dragging_annotation.set_position(self.original_annotation.get_position())
+        self.dragging_annotation.set_visible(True)
+        if self.line:
+            self.line.set_visible(True)
+        self.ax.figure.canvas.draw()
+        self.dragging = True
+
+    def bring_to_front(self):
+        if self.ax.draggable_annotations:
+            top_zorder = max(ann.zorder for ann in self.ax.draggable_annotations) + 1
+            self.zorder = top_zorder
+            self.original_annotation.set_zorder(top_zorder)
+            self.dragging_annotation.set_zorder(top_zorder)
+        else:
+            # first
+            top_zorder = 10
+            self.zorder = top_zorder
+            self.original_annotation.set_zorder(top_zorder)
+            self.dragging_annotation.set_zorder(top_zorder)
+
+    def on_release(self, event):
+        if self.press is None:
+            return
+
+        # Update original annotation position
+        self.original_annotation.set_position(self.dragging_annotation.get_position())
+
+        # Show original annotation and hide dragging annotation
+        self.dragging_annotation.set_visible(False)
+        self.original_annotation.set_visible(True)
+
+        self.press = None
+        self.background = None
+        self.dragging = False
+
+        self.bring_to_front()
+
+        # Redraw the figure to reflect the changes
+        self.ax.figure.canvas.draw()
+
+    def on_motion(self, event):
+        if self.press is None:
+            return
+
+        (x0, y0), (x0_cur, y0_cur), xpress, ypress = self.press
+
+        xlim = self.ax.get_xlim()
+        ylim = self.ax.get_ylim()
+
+        inbound = False
+        if event.inaxes == self.ax:
+            # Check if mouse coordinates are within figure bounds
+            try:
+                inbound = (xlim[0] <= event.xdata <= xlim[1] and ylim[0] <= event.ydata <= ylim[1])
+            except:
+                inbound = False
+
+        if not(inbound) or not(xpress) or not(ypress):
+            return
+
+        dx = event.xdata - xpress
+        dy = event.ydata - ypress
+
+        cur_x = x0_cur + dx
+        cur_y = y0_cur + dy
+        # Convert the offset from display coordinates to data coordinates
+        new_x = x0_cur + dx
+        new_y = y0_cur + dy
+
+        # Calculate the position on the circle's edge
+        angle = np.arctan2(new_y - y0, new_x - x0)
+        edge_x = x0 + self.radius_degrees * np.cos(angle)
+        edge_y = y0 + self.radius_degrees * np.sin(angle)
+
+        self.dragging_annotation.set_position((cur_x, cur_y))
+
+        # Remove the old line and draw the new line
+        if self.line:
+            self.line.remove()
+        self.line = self.ax.plot(
+            [edge_x, new_x],
+            [edge_y, new_y],
+            linestyle='--',
+            color=DEFAULT_ANNOTATE_TEXT_COLOR,
+            transform=ccrs.PlateCarree(),
+        )[0]
+
+        self.ax.figure.canvas.restore_region(self.background)
+        self.ax.draw_artist(self.dragging_annotation)
+        self.ax.draw_artist(self.line)
+        self.ax.figure.canvas.blit(self.ax.bbox)
+
+    def remove(self):
+        self.ax.figure.canvas.mpl_disconnect(self.cid_press)
+        self.ax.figure.canvas.mpl_disconnect(self.cid_release)
+        self.ax.figure.canvas.mpl_disconnect(self.cid_motion)
+        if self.line:
+            self.line.remove()
+        self.original_annotation.remove()
+        self.dragging_annotation.remove()
+
+class AnnotatedCircles():
+    def __init__(self, ax):
+        self.ax = ax
+        self.circle_handles = None
+        #self.annotation_handles = None
+        self.ax.draggable_annotations = None
+        self.rtree_p = index.Property()
+        self.rtree_idx = index.Index(properties=self.rtree_p)
+
+    def get_annotations(self):
+        return self.ax.draggable_annotations
+
+    # calculate radius of pixels in degrees
+    def calculate_radius_pixels(self):
+        # Get current extent of the map in degrees and pixels
+        extent = self.ax.get_extent()
+        lon_diff = extent[1] - extent[0]
+        lat_diff = extent[3] - extent[2]
+
+        # Get window extent in pixels
+        window_extent = self.ax.get_window_extent()
+        lon_pixels = window_extent.width
+        lat_pixels = window_extent.height
+
+        # Calculate degrees per pixel in both x and y directions
+        lon_deg_per_pixel = lon_diff / lon_pixels
+        lat_deg_per_pixel = lat_diff / lat_pixels
+
+        # Convert pixels to degrees
+        radius_degrees = max(lon_deg_per_pixel, lat_deg_per_pixel) * DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS
+
+        return radius_degrees
+
+    # calculate annotation offset of pixels in degrees (of where to place the annotation next to the circle)
+    def calculate_offset_pixels(self):
+        # Get current extent of the map in degrees and pixels
+        extent = self.ax.get_extent()
+        lon_diff = extent[1] - extent[0]
+        lat_diff = extent[3] - extent[2]
+
+        # Get window extent in pixels
+        window_extent = self.ax.get_window_extent()
+        lon_pixels = window_extent.width
+        lat_pixels = window_extent.height
+
+        # Calculate degrees per pixel in both x and y directions
+        lon_deg_per_pixel = lon_diff / lon_pixels
+        lat_deg_per_pixel = lat_diff / lat_pixels
+
+        # how far outside the annotated circle to place the annotation
+        offset_pixels = DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS + 2
+
+        # Convert pixels to degrees
+        lon_offset = max(lon_deg_per_pixel, lat_deg_per_pixel) * (offset_pixels + 2)
+        lat_offset = max(lon_deg_per_pixel, lat_deg_per_pixel) * (offset_pixels + 2)
+
+        return lon_offset, lat_offset
+
+    def add(self, lat=None, lon=None, label=None, label_color=DEFAULT_ANNOTATE_TEXT_COLOR):
+        if lat is None or lon is None or label is None or self.ax is None:
+            return
+        if self.circle_handles is None:
+            self.circle_handles = []
+        #if self.annotation_handles is None:
+        #    self.annotation_handles = []
+        if self.ax.draggable_annotations is None:
+            self.ax.draggable_annotations = []
+
+        if self.has_overlap(lat=lat, lon=lon):
+            return
+
+        lon_offset, lat_offset = self.calculate_offset_pixels()
+        # calculate radius of pixels in degrees
+        radius_pixels_degrees = self.calculate_radius_pixels()
+        circle_handle = Circle((lon, lat), radius=radius_pixels_degrees, color=DEFAULT_ANNOTATE_MARKER_COLOR, fill=False, linestyle='dotted', linewidth=2, alpha=0.8,
+                                    transform=ccrs.PlateCarree())
+        self.ax.add_patch(circle_handle)
+        self.rtree_idx.insert(len(self.rtree_idx), (lon, lat, lon, lat))
+        self.circle_handles.append(circle_handle)
+
+        bbox_props = {
+            'boxstyle': 'round,pad=0.3',
+            'edgecolor': '#FFFFFF',
+            'facecolor': '#000000',
+            'alpha': 1.0
+        }
+
+        # Original annotation creation with DraggableAnnotation integration
+        annotation_handle = self.ax.annotate(label, xy=(lon, lat), xytext=(lon + lon_offset, lat + lat_offset), textcoords='data', color=label_color,
+                            fontsize=12, ha='left', va='bottom', bbox=bbox_props)
+
+        # Create DraggableAnnotation instance
+        draggable_annotation = DraggableAnnotation(annotation_handle, (lon, lat), self.ax, bbox_props)
+
+        # Store the DraggableAnnotation instance
+        #self.annotations.append(draggable_annotation)
+        self.ax.draggable_annotations.append(draggable_annotation)
+
+        # draw later as we will likely add multiple circles
+        #self.canvas.draw()
+
+    def has_overlap(self, lat=None, lon=None):
+        if lat is None or lon is None or len(self.rtree_idx) == 0:
+            return False
+        # Define a bounding box around the annotated circle for initial query (in degrees)
+        buffer = ANNOTATE_CIRCLE_OVERLAP_IN_DEGREES  # Adjust this value based on desired precision
+        bounding_box = (lon - buffer, lat - buffer, lon + buffer, lat + buffer)
+
+        # Query the R-tree for points within the bounding box
+        possible_matches = list(self.rtree_idx.intersection(bounding_box, objects=True))
+
+        if possible_matches:
+            return True
+        else:
+            return False
+
+    def clear(self):
+        cleared = False
+        #if self.annotation_handles:
+        if self.ax.draggable_annotations:
+            cleared = True
+            try:
+                #for annotation_handle in self.annotation_handles:
+                #    annotation_handle.remove()
+                for annotation in self.ax.draggable_annotations:
+                    annotation.remove()
+            except:
+                traceback.print_exc()
+                pass
+            #self.annotation_handles = None
+            self.ax.draggable_annotations = None
+        if self.circle_handles:
+            cleared = True
+            try:
+                for circle_handle in self.circle_handles:
+                    circle_handle.remove()
+            except:
+                traceback.print_exc()
+                pass
+            self.circle_handles = None
+        if self.rtree_p:
+            cleared = True
+            self.rtree_p = index.Property()
+        if self.rtree_idx:
+            cleared = True
+            self.rtree_idx = index.Index(properties=self.rtree_p)
 
 class App:
     def __init__(self, root):
@@ -1054,6 +1479,7 @@ class App:
         self.genesis_model_cycle_time = None
         self.zoom_rect = None
         self.rect_patch = None
+        self.last_cursor_lon_lat = (0.0, 0.0)
 
         self.lastgl = None
 
@@ -1082,6 +1508,7 @@ class App:
         self.cid_key_release = None
 
         # keep list of all lat_lon_with_time_step_list (plural) used to create points in last drawn map
+        #   note, each item is also a list of dicts (not enumerated)
         self.plotted_tc_candidates = []
         # r-tree index
         self.rtree_p = index.Property()
@@ -1095,9 +1522,18 @@ class App:
         self.last_circle_lon = None
         self.last_circle_lat = None
 
+        # track overlapped points (by index, pointing to the plotted_tc_candidates)
+        #   this will hold information on the marker where the cursor previously pointed to (current circle patch),
+        #   and which one of the possible matches was (is currently) viewed
+        self.nearest_point_indices_overlapped = SortedCyclicEnumDict()
+
+        # annotated circles (for storm extrema)
+        self.annotated_circles = None
+
         self.create_widgets()
         self.display_map()
 
+    # calculate radius of pixels in degrees
     def calculate_radius_pixels(self):
         # Get current extent of the map in degrees and pixels
         extent = self.ax.get_extent()
@@ -1140,14 +1576,15 @@ class App:
 
         self.plotted_tc_candidates.append(tc_candidate)
 
-    def update_tc_status_labels(self, tc_index = None, tc_point_index = None):
+    def update_tc_status_labels(self, tc_index = None, tc_point_index = None, overlapped_point_num = 0, total_num_overlapped_points = 0):
         # may not have init interface yet
         try:
             if tc_index is None or tc_point_index is None or len(self.plotted_tc_candidates) == 0:
+                self.label_mouse_hover_matches.config(text="0  ", style="FixedWidthWhite.TLabel")
                 self.label_mouse_hover_info_coords.config(text="(-tt.tttt, -nnn.nnnn)")
                 self.label_mouse_hover_info_valid_time.config(text="YYYY-MM-DD hhZ")
                 self.label_mouse_hover_info_model_init.config(text="YYYY-MM-DD hhZ")
-                self.label_mouse_hover_info_vmax_10m.config(text="---.- kt")
+                self.label_mouse_hover_info_vmax10m.config(text="---.- kt")
                 self.label_mouse_hover_info_mslp.config(text="----.- hPa")
                 self.label_mouse_hover_info_roci.config(text="---- km")
                 self.label_mouse_hover_info_isobar_delta.config(text="--- hPa")
@@ -1162,13 +1599,18 @@ class App:
                 valid_time = tc_candidate_point['valid_time'].strftime('%Y-%m-%d %HZ')
                 init_time = tc_candidate_point['init_time'].strftime('%Y-%m-%d %HZ')
                 if tc_candidate_point['vmax10m_in_roci']:
-                    vmax_10m = tc_candidate_point['vmax10m_in_roci']
+                    vmax10m = tc_candidate_point['vmax10m_in_roci']
                 else:
-                    vmax_10m = tc_candidate_point['vmax10m']
+                    vmax10m = tc_candidate_point['vmax10m']
                 mslp = tc_candidate_point['mslp_value']
                 roci = tc_candidate_point['roci']
                 isobar_delta = tc_candidate_point['closed_isobar_delta']
 
+                self.label_mouse_hover_matches.config(text=f"{overlapped_point_num}/{total_num_overlapped_points}")
+                if total_num_overlapped_points > 1:
+                    self.label_mouse_hover_matches.config(style="FixedWidthRed.TLabel")
+                else:
+                    self.label_mouse_hover_matches.config(style="FixedWidthWhite.TLabel")
                 self.label_mouse_hover_info_coords.config(text=f"({lat:>8.4f}, {lon:>9.4f})")
                 if valid_time:
                     self.label_mouse_hover_info_valid_time.config(text=valid_time)
@@ -1178,10 +1620,10 @@ class App:
                     self.label_mouse_hover_info_model_init.config(text=f"{model_name:>4} {init_time}")
                 else:
                     self.label_mouse_hover_info_model_init.config(text="YYYY-MM-DD hhZ")
-                if vmax_10m:
-                    self.label_mouse_hover_info_vmax_10m.config(text=f"{vmax_10m:>5.1f} kt")
+                if vmax10m:
+                    self.label_mouse_hover_info_vmax10m.config(text=f"{vmax10m:>5.1f} kt")
                 else:
-                    self.label_mouse_hover_info_vmax_10m.config(text="---.- kt")
+                    self.label_mouse_hover_info_vmax10m.config(text="---.- kt")
                 if mslp:
                     self.label_mouse_hover_info_mslp.config(text=f"{mslp:>6.1f} hPa")
                 else:
@@ -1199,7 +1641,7 @@ class App:
             pass
 
     def update_labels_for_mouse_hover(self, lat=None, lon=None):
-        if not lat or not lon:
+        if not(lat) or not(lon):
             return
 
         # Update label for mouse cursor position on map first
@@ -1216,23 +1658,46 @@ class App:
         # Calculate the geodesic distance and find the nearest point
         nearest_point_index = None
         min_distance = float('inf')
+        # a sorted cyclic dict that has the item number enumerated
+        # has a get() the next enumerated number and the key (the point_index tuple) in a cycle (sorted by value, which will be a datetime)
+        self.nearest_point_indices_overlapped = SortedCyclicEnumDict()
         for item in possible_matches:
             unmapped_point_index = item.id
             tc_index, point_index = self.rtree_tuple_index_mapping[unmapped_point_index]
             point = self.plotted_tc_candidates[tc_index][point_index]
-            distance = self.calculate_distance((lon, lat), (point['lon'], point['lat']))
-            if distance < min_distance:
-                min_distance = distance
-                nearest_point_index = (tc_index, point_index)
+            item_is_overlapping = False
+            if len(self.nearest_point_indices_overlapped):
+                overlapping_tc_index, overlapping_point_index = self.nearest_point_indices_overlapped.get_first_key()
+                possible_overlapping_point = self.plotted_tc_candidates[overlapping_tc_index][overlapping_point_index]
+                lon_diff = round(abs(possible_overlapping_point['lon'] - point['lon']), 3)
+                lat_diff = round(abs(possible_overlapping_point['lat'] - point['lat']), 3)
+                if lon_diff == 0.0 and lat_diff == 0.0:
+                    item_is_overlapping = True
+
+            # check to see if it is an almost exact match (~3 decimals in degrees) to approximate whether it is an overlapped point
+            if item_is_overlapping:
+                # this will likely be an overlapped point in the grid
+                self.nearest_point_indices_overlapped[(tc_index, point_index)] = point['valid_time']
+                # min distance should not significantly change (we are using the first point as reference for overlapping)
+            else:
+                distance = self.calculate_distance((lon, lat), (point['lon'], point['lat']))
+                if distance < min_distance:
+                    # not an overlapping point but still closer to cursor, so update
+                    # first clear any other points since this candidate is closer and does not have an overlapping point
+                    self.nearest_point_indices_overlapped = SortedCyclicEnumDict()
+                    self.nearest_point_indices_overlapped[(tc_index, point_index)] = point['valid_time']
+                    min_distance = distance
 
         # Update the labels if a nearest point is found within the threshold
-        if nearest_point_index:
+        total_num_overlapped_points = len(self.nearest_point_indices_overlapped)
+        if total_num_overlapped_points:
+            overlapped_point_num, nearest_point_index = self.nearest_point_indices_overlapped.next_enum_key_tuple()
             tc_index, point_index = nearest_point_index
-            self.update_tc_status_labels(tc_index,point_index)
+            self.update_tc_status_labels(tc_index,point_index, overlapped_point_num, total_num_overlapped_points)
             # get the nearest_point
             point = self.plotted_tc_candidates[tc_index][point_index]
-            lat = point['lat']
             lon = point['lon']
+            lat = point['lat']
             self.update_circle_patch(lon=lon, lat=lat)
         else:
             # clear the label if no point is found? No.
@@ -1242,6 +1707,198 @@ class App:
             # Do clear the circle though as it might be obtrusive
             self.clear_circle_patch()
 
+    def cycle_to_next_overlapped_point(self):
+        # called when user hovers on overlapped points and hits the TAB key
+        total_num_overlapped_points = len(self.nearest_point_indices_overlapped)
+        if total_num_overlapped_points > 1:
+            overlapped_point_num, nearest_point_index = self.nearest_point_indices_overlapped.next_enum_key_tuple()
+            tc_index, point_index = nearest_point_index
+            self.update_tc_status_labels(tc_index,point_index, overlapped_point_num, total_num_overlapped_points)
+            # get the nearest_point
+            point = self.plotted_tc_candidates[tc_index][point_index]
+            lon = point['lon']
+            lat = point['lat']
+            self.update_circle_patch(lon=lon, lat=lat)
+
+    def is_extremum(self, extremum_key=None, current_extremum=None, potential=None):
+        if extremum_key is None:
+            # error
+            return False
+        if current_extremum is None and potential is None:
+            return False
+        if potential is None:
+            return False
+        if current_extremum is None:
+            return True
+        if extremum_key in ['vmax10m', 'roci', 'closed_isobar_delta', 'dt_end']:
+            return potential > current_extremum
+        elif extremum_key in ['mslp_value', 'dt_start']:
+            return potential < current_extremum
+        else:
+            # unhandled case
+            return False
+
+    # defines how the annotated circle text is formatted
+    def format_extremum_label_lines(self, append = False, model_name = '', valid_time = None, extremum_key = None, extremum_val = None):
+        if valid_time is None or extremum_key is None or extremum_val is None or not(extremum_key in displayed_extremum_annotations):
+            return None, 0
+        prefix_line_str = None
+        if append == False:
+            # For first line of annotation of extremum, include Model name and Valid Time
+            model_name_prefix_str = ""
+            if model_name:
+                model_name_prefix_str = f"{model_name} "
+
+            valid_time_str = valid_time.strftime('%Y-%m-%d %HZ')
+            prefix_line_str = f"{model_name_prefix_str}{valid_time_str}\n"
+
+        extremum_label_line = None
+        color_level = 0
+        if extremum_key == "dt_start":
+            extremum_label_line = "START"
+            color_level = 1
+        elif extremum_key == "dt_end":
+            extremum_label_line = "END"
+        elif extremum_key == "vmax10m":
+            color_level = 2
+            extremum_label_line = f"VMAX_10m: {extremum_val:.1f} kt"
+        elif extremum_key == "mslp_value":
+            extremum_label_line = f"MSLP: {extremum_val:.1f} hPa"
+        elif extremum_key == "roci":
+            extremum_label_line = f"ROCI: {extremum_val:.0f} km"
+        elif extremum_key == "closed_isobar_delta":
+            extremum_label_line = f"ISOBAR_DELTA: {extremum_val:.0f} hPa"
+
+        extremum_label_lines = None
+        if extremum_label_line:
+            if prefix_line_str:
+                extremum_label_lines = f"{prefix_line_str}{extremum_label_line}"
+            else:
+                extremum_label_lines = f"{extremum_label_line}"
+
+        return extremum_label_lines, color_level
+
+    def clear_storm_extrema_annotations(self):
+        if self.annotated_circles:
+            self.annotated_circles.clear()
+
+    def any_storm_points_in_bounds(self, tc_index):
+        if not self.plotted_tc_candidates:
+            return False
+        if tc_index > len(self.plotted_tc_candidates):
+            return False
+        if not self.ax:
+            return False
+
+        any_in_bound = False
+
+        xlim = self.ax.get_xlim()
+        ylim = self.ax.get_ylim()
+
+        try:
+            for point in self.plotted_tc_candidates[tc_index]:
+                lat = point['lat']
+                lon = point['lon']
+                any_in_bound = any_in_bound or (xlim[0] <= lon <= xlim[1] and ylim[0] <= lat <= ylim[1])
+        except:
+            pass
+
+        return any_in_bound
+
+    def annotate_storm_extrema(self):
+        if len(self.plotted_tc_candidates) == 0:
+            return
+
+        # note: point_index is a tuple of tc_index, tc_point_index
+        if len(self.nearest_point_indices_overlapped) == 0:
+            # annotate all storm extrema in current view
+            for tc_index in range(len(self.plotted_tc_candidates)):
+                if len(self.plotted_tc_candidates[tc_index]):
+                    if self.any_storm_points_in_bounds(tc_index):
+                        point_index = (tc_index, 0)
+                        self.annotate_single_storm_extrema(point_index=point_index)
+        else:
+            # annotate storm extrema of previously selected
+            num, cursor_point_index = self.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
+            self.annotate_single_storm_extrema(point_index=cursor_point_index)
+
+    def annotate_single_storm_extrema(self, point_index = None):
+        tc_index, tc_point_index = point_index
+
+        # tuple of (storm) extremum (along whole path) and corresponding tc_point_index
+        #   this is the order the extrema will appear if they share the same tc_point_index
+        extrema = {
+            'dt_start': (None, None),
+            'dt_end': (None, None),
+            'vmax10m': (None, None),
+            'mslp_value': (None, None),
+            'roci': (None, None),
+            'closed_isobar_delta': (None, None),
+        }
+        for tc_point_index, point in enumerate(self.plotted_tc_candidates[tc_index]):
+            for extremum_key, extremum_val_tuple in extrema.items():
+                extremum_val, extremum_index = extremum_val_tuple
+                point_keys = point.keys()
+                point_extremum_val = None
+                if extremum_key == 'vmax10m':
+                    if 'vmax10m_in_roci' in point_keys and point['vmax10m_in_roci']:
+                        point_extremum_val = point['vmax10m_in_roci']
+                    else:
+                        if extremum_key in point_keys:
+                            point_extremum_val = point[extremum_key]
+                else:
+                    if extremum_key in ['dt_start', 'dt_end']:
+                        if 'valid_time' in point_keys:
+                            point_extremum_val = point['valid_time']
+                    elif extremum_key in point_keys:
+                        point_extremum_val = point[extremum_key]
+                is_extremum = self.is_extremum(extremum_key=extremum_key, current_extremum=extremum_val, potential=point_extremum_val)
+                if is_extremum:
+                    # replace previous extremum with the point at tc_point_index
+                    extrema[extremum_key] = (point_extremum_val, tc_point_index)
+
+        # annotate the extrema for the storm
+        point_index_labels = {}
+        # since some extremum may show up for the same point, we need to combine the extremum labels first (by point_index)
+        prev_color_level = 0
+        for extremum_key, extremum_val_tuple in extrema.items():
+            extremum_val, extremum_index = extremum_val_tuple
+            if extremum_index is None or extremum_val is None:
+                continue
+            extremum_point = self.plotted_tc_candidates[tc_index][extremum_index]
+            append = False
+            if extremum_index in point_index_labels:
+                append = True
+
+            extremum_point_keys = extremum_point.keys()
+            model_name = None
+            valid_time = None
+            if 'model_name' in extremum_point_keys:
+                model_name = extremum_point['model_name']
+            if 'valid_time' in extremum_point_keys:
+                valid_time = extremum_point['valid_time']
+            extremum_lines, new_color_level = self.format_extremum_label_lines(append=append, model_name=model_name, valid_time=valid_time, extremum_key=extremum_key, extremum_val=extremum_val)
+            if extremum_lines:
+                if append:
+                    prev_lines, prev_color_level = point_index_labels[extremum_index]
+                    if new_color_level > prev_color_level:
+                        lines_color_level = new_color_level
+                    else:
+                        lines_color_level = prev_color_level
+                    new_lines = f"{prev_lines}\n{extremum_lines}"
+                    point_index_labels[extremum_index] = (new_lines, lines_color_level)
+                else:
+                    prev_color_level = new_color_level
+                    point_index_labels[extremum_index] = (extremum_lines, prev_color_level)
+
+        # finally add the annotated circle for each label
+        added = False
+        for label_point_index, (point_label, color_level) in point_index_labels.items():
+            point = self.plotted_tc_candidates[tc_index][label_point_index]
+            added = True
+            self.annotated_circles.add(lat=point['lat'], lon=point['lon'], label=point_label, label_color=annotate_color_levels[color_level])
+        if added:
+            self.fig.canvas.draw()
 
     def display_custom_boundaries(self):
         if custom_gdf is not None:
@@ -1281,9 +1938,6 @@ class App:
         self.canvas_frame = ttk.Frame(self.root, style="CanvasFrame.TFrame")
         self.canvas_frame.pack(fill=tk.X, expand=True)
 
-#        self.status_line = ttk.Label(self.root, text="", relief=tk.SUNKEN, anchor=tk.W, background="black", foreground="white")
-#        self.status_line.pack(side=tk.BOTTOM, fill=tk.X)
-
         self.canvas = None
         self.fig = None
 
@@ -1296,7 +1950,7 @@ class App:
         self.reload_button_adeck = ttk.Button(self.adeck_mode_frame, text="(RE)LOAD", command=self.reload_adeck, style="White.TButton")
         self.reload_button_adeck.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_adeck_mode = ttk.Label(self.adeck_mode_frame, text="ADECK MODE. Models: 0", background="black", foreground="white")
+        self.label_adeck_mode = ttk.Label(self.adeck_mode_frame, text="ADECK MODE. Models: 0", style="TLabel")
         self.label_adeck_mode.pack(side=tk.LEFT, padx=5, pady=5)
 
         style = ttk.Style()
@@ -1316,7 +1970,6 @@ class App:
         self.switch_to_genesis_button = ttk.Button(self.adeck_mode_frame, text="SWITCH TO GENESIS MODE", command=self.switch_mode, style="TButton")
         self.switch_to_genesis_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
-
     def create_genesis_mode_widgets(self):
         self.genesis_mode_frame = ttk.Frame(self.top_frame, style="TopFrame.TFrame")
 
@@ -1326,7 +1979,7 @@ class App:
         self.reload_button_genesis = ttk.Button(self.genesis_mode_frame, text="(RE)LOAD", command=self.reload, style="TButton")
         self.reload_button_genesis.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_genesis_mode = ttk.Label(self.genesis_mode_frame, text="GENESIS MODE: Start valid day: YYYY-MM-DD", background="black", foreground="white")
+        self.label_genesis_mode = ttk.Label(self.genesis_mode_frame, text="GENESIS MODE: Start valid day: YYYY-MM-DD", style="TLabel")
         self.label_genesis_mode.pack(side=tk.LEFT, padx=5, pady=5)
 
         self.prev_genesis_cycle_button = ttk.Button(self.genesis_mode_frame, text="PREV CYCLE", command=self.prev_genesis_cycle, style="TButton")
@@ -1338,7 +1991,7 @@ class App:
         self.latest_genesis_cycle_button = ttk.Button(self.genesis_mode_frame, text="LATEST CYCLE", command=self.latest_genesis_cycle, style="TButton")
         self.latest_genesis_cycle_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.genesis_models_label = ttk.Label(self.genesis_mode_frame, text="Models: GFS [--/--Z], ECM[--/--Z], NAV[--/--Z], CMC[--/--Z]", background="black", foreground="white")
+        self.genesis_models_label = ttk.Label(self.genesis_mode_frame, text="Models: GFS [--/--Z], ECM[--/--Z], NAV[--/--Z], CMC[--/--Z]", style="TLabel")
         self.genesis_models_label.pack(side=tk.LEFT, padx=5, pady=5)
 
         self.switch_to_adeck_button = ttk.Button(self.genesis_mode_frame, text="SWITCH TO ADECK MODE", command=self.switch_mode, style="TButton")
@@ -1350,52 +2003,55 @@ class App:
         self.add_marker_button = ttk.Button(self.tools_frame, text="ADD MARKER", command=self.add_marker, style="TButton")
         self.add_marker_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_coords_prefix = ttk.Label(self.tools_frame, text="Cursor position:", background="black", foreground="white")
+        self.label_mouse_coords_prefix = ttk.Label(self.tools_frame, text="Cursor position:", style="TLabel")
         self.label_mouse_coords_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_coords = ttk.Label(self.tools_frame, text="(-tt.tttt, -nnn.nnnn)", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_coords = ttk.Label(self.tools_frame, text="(-tt.tttt, -nnn.nnnn)", style="FixedWidthWhite.TLabel")
         self.label_mouse_coords.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_prefix = ttk.Label(self.tools_frame, text="(Cursor hover) Info:", background="black", foreground="white")
+        self.label_mouse_hover_info_prefix = ttk.Label(self.tools_frame, text="(Hover) Matches:", style="TLabel")
         self.label_mouse_hover_info_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_coords = ttk.Label(self.tools_frame, text="(-tt.tttt, -nnn.nnnn)", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_matches = ttk.Label(self.tools_frame, text="0  ", style="FixedWidthWhite.TLabel")
+        self.label_mouse_hover_matches.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.label_mouse_hover_info_coords = ttk.Label(self.tools_frame, text="(-tt.tttt, -nnn.nnnn)", style="FixedWidthWhite.TLabel")
         self.label_mouse_hover_info_coords.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_valid_time_prefix = ttk.Label(self.tools_frame, text="Valid time:", background="black", foreground="white")
+        self.label_mouse_hover_info_valid_time_prefix = ttk.Label(self.tools_frame, text="Valid time:", style="TLabel")
         self.label_mouse_hover_info_valid_time_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_valid_time = ttk.Label(self.tools_frame, text="YYYY-MM-DD hhZ", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_info_valid_time = ttk.Label(self.tools_frame, text="YYYY-MM-DD hhZ", style="FixedWidthWhite.TLabel")
         self.label_mouse_hover_info_valid_time.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_model_init_prefix = ttk.Label(self.tools_frame, text="Model init:", background="black", foreground="white")
+        self.label_mouse_hover_info_model_init_prefix = ttk.Label(self.tools_frame, text="Model init:", style="TLabel")
         self.label_mouse_hover_info_model_init_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_model_init = ttk.Label(self.tools_frame, text="YYYY-MM-DD hhZ", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_info_model_init = ttk.Label(self.tools_frame, text="YYYY-MM-DD hhZ", style="FixedWidthWhite.TLabel")
         self.label_mouse_hover_info_model_init.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_vmax_10m_prefix = ttk.Label(self.tools_frame, text="Vmax @ 10m:", background="black", foreground="white")
-        self.label_mouse_hover_info_vmax_10m_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+        self.label_mouse_hover_info_vmax10m_prefix = ttk.Label(self.tools_frame, text="Vmax @ 10m:", style="TLabel")
+        self.label_mouse_hover_info_vmax10m_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_vmax_10m = ttk.Label(self.tools_frame, text="---.- kt", background="black", foreground="white", style="FixedWidth.TLabel")
-        self.label_mouse_hover_info_vmax_10m.pack(side=tk.LEFT, padx=5, pady=5)
+        self.label_mouse_hover_info_vmax10m = ttk.Label(self.tools_frame, text="---.- kt", style="FixedWidthWhite.TLabel")
+        self.label_mouse_hover_info_vmax10m.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_mslp_prefix = ttk.Label(self.tools_frame, text="MSLP:", background="black", foreground="white")
+        self.label_mouse_hover_info_mslp_prefix = ttk.Label(self.tools_frame, text="MSLP:", style="TLabel")
         self.label_mouse_hover_info_mslp_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_mslp = ttk.Label(self.tools_frame, text="----.- hPa", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_info_mslp = ttk.Label(self.tools_frame, text="----.- hPa", style="FixedWidthWhite.TLabel")
         self.label_mouse_hover_info_mslp.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_roci_prefix = ttk.Label(self.tools_frame, text="ROCI:", background="black", foreground="white")
+        self.label_mouse_hover_info_roci_prefix = ttk.Label(self.tools_frame, text="ROCI:", style="TLabel")
         self.label_mouse_hover_info_roci_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_roci = ttk.Label(self.tools_frame, text="---- km", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_info_roci = ttk.Label(self.tools_frame, text="---- km", style="FixedWidthWhite.TLabel")
         self.label_mouse_hover_info_roci.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_isobar_delta_prefix = ttk.Label(self.tools_frame, text="Isobar delta:", background="black", foreground="white")
+        self.label_mouse_hover_info_isobar_delta_prefix = ttk.Label(self.tools_frame, text="Isobar delta:", style="TLabel")
         self.label_mouse_hover_info_isobar_delta_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_isobar_delta = ttk.Label(self.tools_frame, text="--- hPa", background="black", foreground="white", style="FixedWidth.TLabel")
+        self.label_mouse_hover_info_isobar_delta = ttk.Label(self.tools_frame, text="--- hPa", style="FixedWidthWhite.TLabel")
         self.label_mouse_hover_info_isobar_delta.pack(side=tk.LEFT, padx=5, pady=5)
 
     def add_marker(self):
@@ -1693,8 +2349,8 @@ class App:
                             candidate_info['roci'] = float(candidate['roci'])/1000.0
                         else:
                             candidate_info['roci'] = None
-                        if 'vmax_10m' in candidate and candidate['vmax_10m']:
-                            candidate_info['vmax10m_in_roci'] = candidate['vmax_10m']
+                        if 'vmax10m' in candidate and candidate['vmax10m']:
+                            candidate_info['vmax10m_in_roci'] = candidate['vmax10m']
                         else:
                             candidate_info['vmax10m_in_roci'] = None
                         candidate_info['closed_isobar_delta'] = None
@@ -2042,12 +2698,6 @@ class App:
 
                     """
 
-                    #model_date = datetime.strftime(model_timestamp, '%Y-%m-%d')
-                    #model_hour = f'{model_timestamp.hour:02}'
-                    #title_text = f'TC candidate tracks\nLast : {most_recent_timestamp[:-6]}'
-
-                    #m.add(get_title_overlay(title_text))
-
                 self.update_plotted_list(lat_lon_with_time_step_list)
 
                 # do in reversed order so most recent items get rendered on top
@@ -2254,12 +2904,44 @@ class App:
         v = [Size.Fixed(0), Size.Fixed(frame_vsize)]
         divider = Divider(self.fig, (0, 0, 1, 1), h, v, aspect=False)
         self.ax.set_axes_locator(divider.new_locator(nx=1, ny=1))
+        self.clear_storm_extrema_annotations()
+        self.annotated_circles = AnnotatedCircles(self.ax)
         self.canvas.draw()
         self.display_custom_boundaries()
 
     def on_key_press(self, event):
         if event.key == 'shift':
             self.measure_mode = True
+
+        if event.key == 'escape':
+            # abort a zoom
+            # Remove the rectangle patch
+            if self.rect_patch:
+                self.rect_patch.remove()
+                self.rect_patch = None
+            self.zoom_rect = None
+            self.fig.canvas.draw()
+
+        if event.key == '0':
+            self.zoom_out(max_zoom=True)
+
+        if event.key == '-':
+            self.zoom_out(step_zoom=True)
+
+        if event.key == '=':
+            self.zoom_in(step_zoom=True)
+
+        if event.key == 'n':
+            self.cycle_to_next_overlapped_point()
+
+        if event.key == 'x':
+            # annotate storm extrema
+            self.annotate_storm_extrema()
+
+        if event.key == 'c':
+            # annotate storm extrema
+            self.clear_storm_extrema_annotations()
+            self.fig.canvas.draw()
 
     def on_key_release(self, event):
         if event.key == 'shift':
@@ -2285,6 +2967,13 @@ class App:
                         self.reset_measurement()
                 else:
                     if event.button == 1:  # Left click
+                        if self.annotated_circles:
+                            annotations = self.annotated_circles.get_annotations()
+                            if annotations:
+                                for annotation in annotations:
+                                    if annotation and annotation.contains_point(event):
+                                        return
+
                         self.zoom_rect = [event.xdata, event.ydata]
                         if self.rect_patch:
                             self.rect_patch.remove()
@@ -2362,7 +3051,7 @@ class App:
         self.circle_handle = Circle((lon, lat), radius=self.calculate_radius_pixels(), color='pink', fill=False, linestyle='dotted', linewidth=2, alpha=0.8,
                                     transform=ccrs.PlateCarree())
         self.ax.add_patch(self.circle_handle)
-        self.canvas.draw()
+        self.fig.canvas.draw()
 
         self.last_circle_lon = lon
         self.last_circle_lat = lat
@@ -2371,7 +3060,7 @@ class App:
         if self.circle_handle:
             self.circle_handle.remove()
             self.circle_handle = None
-            self.canvas.draw()
+            self.fig.canvas.draw()
 
         self.last_circle_lon = None
         self.last_circle_lat = None
@@ -2389,6 +3078,7 @@ class App:
 
             lon = event.xdata
             lat = event.ydata
+            self.last_cursor_lon_lat = (lon, lat)
             self.update_labels_for_mouse_hover(lat=lat, lon=lon)
 
             if self.measure_mode:
@@ -2443,7 +3133,7 @@ class App:
                         height = y1 - y0
                         self.rect_patch = Rectangle((x0, y0), width, height, fill=False, color='yellow', linestyle='--')
                         self.ax.add_patch(self.rect_patch)
-                        self.canvas.draw_idle()
+                        self.fig.canvas.draw_idle()
 
     def reset_measurement(self):
         if self.line:
@@ -2508,18 +3198,63 @@ class App:
                                               ha='center', va='center', rotation=angle,
                                               bbox=dict(facecolor='black', alpha=0.5))
 
-    def zoom_in(self):
-        if self.zoom_rect and None not in self.zoom_rect and len(self.zoom_rect) == 4:
+    def zoom_in(self, step_zoom=False):
+        if step_zoom:
+            extent = self.ax.get_extent()
+            zoom_factor = ZOOM_IN_STEP_FACTOR
+            if zoom_factor <= 1.0:
+                zoom_factor = 3.0
+            lon_diff = extent[1] - extent[0]
+            lat_diff = extent[3] - extent[2]
+            lon_center, lat_center = self.last_cursor_lon_lat
+            target_width = lon_diff / ZOOM_IN_STEP_FACTOR
+            target_height = lat_diff / ZOOM_IN_STEP_FACTOR
+            x0 = lon_center - (target_width / 2.0)
+            x1 = lon_center + (target_width / 2.0)
+            y0 = lat_center - (target_height / 2.0)
+            y1 = lat_center + (target_height / 2.0)
+            x0_diff = x1_diff = y0_diff = y1_diff = 0.0
+            if x0 < -180.0:
+                x0_diff = x0 - (-180.0)
+                x0 = -180.0
+                x1 = x0 + target_width
+            if x1 > 180.0:
+                x1_diff = 180.0 - x1
+                x1 = 180.0
+                x0 = x1 - target_width
+            if y0 < -90.0:
+                y1_diff = y0 - (-90.0)
+                y0 = 90.0
+                y1 = y0 + target_height
+            if y1 > 90.0:
+                y1_diff = 90.0 - y1
+                y1 = 90.0
+                y0 = y1 - target_height
+
+            # Ensure new extent is within bounds
+            new_extent = [
+                x0,
+                x1,
+                y0,
+                y1,
+            ]
+
+            self.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
+            self.clear_storm_extrema_annotations()
+            self.update_axes()
+            self.fig.canvas.draw()
+
+        elif self.zoom_rect and (None not in self.zoom_rect) and len(self.zoom_rect) == 4:
             x0, y0, x1, y1 = self.zoom_rect
             if x0 != x1 and y0 != y1:
                 extent = [min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)]
                 self.ax.set_extent(extent, crs=ccrs.PlateCarree())
 
+                self.clear_storm_extrema_annotations()
                 self.update_axes()
+                self.fig.canvas.draw()
 
-                self.canvas.draw()
-
-    def zoom_out(self):
+    def zoom_out(self, max_zoom=False, step_zoom=False):
         extent = self.ax.get_extent()
         lon_diff = extent[1] - extent[0]
         lat_diff = extent[3] - extent[2]
@@ -2527,34 +3262,79 @@ class App:
         max_lon_diff = 360.0  # Maximum longitudinal extent
         max_lat_diff = 180.0  # Maximum latitudinal extent
 
-        # Define zoom factor or step size
-        zoom_factor = 0.5
+        if step_zoom:
+            zoom_factor = ZOOM_IN_STEP_FACTOR
+            if zoom_factor <= 1.0:
+                zoom_factor = 3.0
+            lon_center = (extent[1] + extent[0]) / 2.0
+            lat_center = (extent[3] + extent[2]) / 2.0
+            target_width = lon_diff * ZOOM_IN_STEP_FACTOR
+            target_height = lat_diff * ZOOM_IN_STEP_FACTOR
+            x0 = lon_center - (target_width / 2.0)
+            x1 = lon_center + (target_width / 2.0)
+            y0 = lat_center - (target_height / 2.0)
+            y1 = lat_center + (target_height / 2.0)
+            x0_diff = x1_diff = y0_diff = y1_diff = 0.0
+            if x0 < -180.0:
+                x0_diff = x0 - (-180.0)
+                x0 = -180.0
+                x1 = x0 + target_width
+            if x1 > 180.0:
+                x1_diff = 180.0 - x1
+                x1 = 180.0
+                x0 = x1 - target_width
+            if y0 < -90.0:
+                y1_diff = y0 - (-90.0)
+                y0 = 90.0
+                y1 = y0 + target_height
+            if y1 > 90.0:
+                y1_diff = 90.0 - y1
+                y1 = 90.0
+                y0 = y1 - target_height
 
-        new_lon_min = max(extent[0] - lon_diff / zoom_factor, -max_lon_diff / 2)
-        new_lon_max = min(extent[1] + lon_diff / zoom_factor, max_lon_diff / 2)
-        new_lat_min = max(extent[2] - lat_diff / zoom_factor, -max_lat_diff / 2)
-        new_lat_max = min(extent[3] + lat_diff / zoom_factor, max_lat_diff / 2)
+            # Ensure new extent is within bounds
+            new_extent = [
+                x0,
+                x1,
+                y0,
+                y1,
+            ]
 
-        if new_lat_max - new_lat_min > 140:
-            new_lat_min = -90
-            new_lat_max = 90
-            new_lon_min = -180
-            new_lon_max = 180
+            if x1 - x0 <= max_lon_diff and y1 - y1 <= max_lat_diff:
+                self.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
+                self.clear_storm_extrema_annotations()
+                self.update_axes()
+                self.fig.canvas.draw()
 
-        # Ensure new extent is within bounds
-        new_extent = [
-            new_lon_min,
-            new_lon_max,
-            new_lat_min,
-            new_lat_max,
-        ]
+        else:
+            # Define zoom factor or step size
+            zoom_factor = 0.5
 
+            new_lon_min = max(extent[0] - lon_diff / zoom_factor, -max_lon_diff / 2)
+            new_lon_max = min(extent[1] + lon_diff / zoom_factor, max_lon_diff / 2)
+            new_lat_min = max(extent[2] - lat_diff / zoom_factor, -max_lat_diff / 2)
+            new_lat_max = min(extent[3] + lat_diff / zoom_factor, max_lat_diff / 2)
 
-        # Ensure the zoom doesn't exceed maximum extents
-        if new_lon_max - new_lon_min <= max_lon_diff and new_lat_max - new_lat_min <= max_lat_diff:
-            self.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
-            self.update_axes()
-            self.canvas.draw()
+            if new_lat_max - new_lat_min > 140 or max_zoom:
+                new_lat_min = -90
+                new_lat_max = 90
+                new_lon_min = -180
+                new_lon_max = 180
+
+            # Ensure new extent is within bounds
+            new_extent = [
+                new_lon_min,
+                new_lon_max,
+                new_lat_min,
+                new_lat_max,
+            ]
+
+            # Ensure the zoom doesn't exceed maximum extents
+            if new_lon_max - new_lon_min <= max_lon_diff and new_lat_max - new_lat_min <= max_lat_diff:
+                self.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
+                self.clear_storm_extrema_annotations()
+                self.update_axes()
+                self.fig.canvas.draw()
 
 if __name__ == "__main__":
     root = tk.Tk()
@@ -2562,18 +3342,22 @@ if __name__ == "__main__":
     # Style configuration for ttk widgets
     style = ttk.Style()
     style.theme_use('clam')  # Ensure using a theme that supports customization
-    style.configure("TButton", background="black", foreground="white")
-    style.configure("White.TButton", background="black", foreground="white")
-    style.configure("Red.TButton", background="black", foreground="red")
-    style.configure("Orange.TButton", background="black", foreground="orange")
-    style.configure("Yellow.TButton", background="black", foreground="yellow")
+    default_bg = "black"
+    default_fg = "white"
+    style.configure("TButton", background=default_bg, foreground=default_fg)
+    style.configure("White.TButton", background=default_bg, foreground="white")
+    style.configure("Red.TButton", background=default_bg, foreground="red")
+    style.configure("Orange.TButton", background=default_bg, foreground="orange")
+    style.configure("Yellow.TButton", background=default_bg, foreground="yellow")
 
-    style.configure("FixedWidth.TLabel", font=("Latin Modern Mono", 12))
+    style.configure("TLabel", background=default_bg, foreground=default_fg)
+    style.configure("FixedWidthWhite.TLabel", font=("Latin Modern Mono", 12), background=default_bg, foreground="white")
+    style.configure("FixedWidthRed.TLabel", font=("Latin Modern Mono", 12), background=default_bg, foreground="red")
 
-    style.configure("TCheckbutton", background="black", foreground="white")
-    style.configure("TopFrame.TFrame", background="black")
-    style.configure("ToolsFrame.TFrame", background="black")
-    style.configure("CanvasFrame.TFrame", background="black")
+    style.configure("TCheckbutton", background=default_bg, foreground=default_fg)
+    style.configure("TopFrame.TFrame", background=default_bg)
+    style.configure("ToolsFrame.TFrame", background=default_bg)
+    style.configure("CanvasFrame.TFrame", background=default_bg)
 
     app = App(root)
     root.mainloop()
