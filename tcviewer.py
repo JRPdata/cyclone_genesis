@@ -1607,9 +1607,10 @@ class App:
                 lon = tc_candidate_point['lon']
                 valid_time = tc_candidate_point['valid_time'].strftime('%Y-%m-%d %HZ')
                 init_time = tc_candidate_point['init_time'].strftime('%Y-%m-%d %HZ')
-                if tc_candidate_point['vmax10m_in_roci']:
+                vmax10m = None
+                if 'vmax10m_in_roci' in tc_candidate_point and tc_candidate_point['vmax10m_in_roci']:
                     vmax10m = tc_candidate_point['vmax10m_in_roci']
-                else:
+                elif 'vmax10m' in tc_candidate_point and tc_candidate_point['vmax10m']:
                     vmax10m = tc_candidate_point['vmax10m']
                 mslp = tc_candidate_point['mslp_value']
                 roci = tc_candidate_point['roci']
