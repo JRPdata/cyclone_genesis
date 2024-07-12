@@ -49,16 +49,132 @@ GRID_LINE_SPACING_DEGREES  = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 60.0, 90
 # Choose the smallest option to meet the minimum grid line spacing requirement (otherwise will use largest of above)
 MIN_GRID_LINE_SPACING_INCHES = 0.75
 
+DEFAULT_ANNOTATE_MARKER_COLOR = "#FFCCCC"
+DEFAULT_ANNOTATE_TEXT_COLOR = "#FFCCCC"
+ANNOTATE_DT_START_COLOR = "#00FF00"
+ANNOTATE_EARLIEST_NAMED_COLOR = "#FFFF00"
+ANNOTATE_VMAX_COLOR = "#FF60F0"
+
+# importance assigned to colors
+#  higher is more important and will switch to more important color for a point with multiple labels
+annotate_color_levels = {
+    0: DEFAULT_ANNOTATE_TEXT_COLOR,
+    1: ANNOTATE_DT_START_COLOR,
+    2: ANNOTATE_EARLIEST_NAMED_COLOR,
+    3: ANNOTATE_VMAX_COLOR
+}
+
 # remove any from list not wanted visible for extrema nnotations (x key)
 #   closed_isobar_delta is only from tc_candidates.db
 #      (it is the difference in pressure from the outermost closed isobar to the inner most close isobar) (i.e. how many concentric circles on a chart of pressure)
 #displayed_extremum_annotations = ["dt_start", "dt_end", "vmax10m", "mslp_value", "roci", "closed_isobar_delta"]
-displayed_extremum_annotations = ["dt_start", "vmax10m", "roci", "closed_isobar_delta"]
+#displayed_extremum_annotations = ["dt_start", "vmax10m", "roci", "closed_isobar_delta"]
 
-DEFAULT_ANNOTATE_MARKER_COLOR = "#FFCCCC"
-DEFAULT_ANNOTATE_TEXT_COLOR = "#FFCCCC"
-ANNOTATE_DT_START_COLOR = "#00FF00"
-ANNOTATE_VMAX_COLOR = "#FF60F0"
+# rather than a simple annotations list, use a function for interrogation & the parameters using it
+#    four parameters for the config:
+#       order (an integer from low to high), lower order displayed first
+#       label lines, the lambda func to return what is displayed, with {extremum_val} of note
+#       the parameter used by the function
+#       the name of the function
+# duplicate lines are removed (so it is fine to prefix multiple parameters with the valid time
+# key name determines order (lower order first)
+
+# what short names (keys) from annotations_result_val are actually annotated (order is as below for multiple lines at a point)
+#   displayable options are in annotations_result_val
+
+displayed_functional_annotations = [
+    "Earliest Named"
+]
+
+'''
+displayed_functional_annotations = [
+    "TC Start",
+    "Vmax_10m",
+    "Peak Vmax",
+    "Peak Isobar Delta",
+    'Peak ROCI'
+]
+'''
+
+# custom comparison functions for annotations
+#   passing the lst of points (disturbance candidates) for the tc_candidate
+#   param_keys is the list of key naems in the point used for comparison
+#   should return the index of interest (None if none satisfy)
+annotations_comparison_func_dict = {
+    'index_of_first_>=_n': lambda lst, param_keys, min_n: next(((i, x[param_keys[0]]) for i, x in enumerate(lst)
+        if param_keys[0] in x and x[param_keys[0]] and x[param_keys[0]] >= min_n), None),
+    'index_of_first_<=_n': lambda lst, param_keys, max_n: next(((i, x[param_keys[0]]) for i, x in enumerate(lst)
+        if param_keys[0] in x and x[param_keys[0]] and x[param_keys[0]] <= max_n), None),
+    'index_of_max': lambda lst, param_keys: next(
+        ((i, x[param_keys[0]]) for i, x in enumerate(lst)
+            if x.get(param_keys[0]) is not None
+                and
+                max(
+                    y.get(param_keys[0]) for y in lst
+                    ) is not None
+                and
+                x.get(param_keys[0]) ==
+                    max(
+                        y.get(param_keys[0]) for y in lst
+                    )
+        ), None) if lst and param_keys else None,
+    'index_of_min': lambda lst, param_keys: next(
+        ((i, x[param_keys[0]]) for i, x in enumerate(lst)
+            if x.get(param_keys[0]) is not None
+                and
+                max(
+                    y.get(param_keys[0]) for y in lst
+                    ) is not None
+                and
+                x.get(param_keys[0]) ==
+                    max(
+                        y.get(param_keys[0]) for y in lst
+                    )
+        ), None) if lst and param_keys else None
+}
+
+# determine which function should be associated with each label line, return (tc_point_index, parameter value)
+#   tc_candidate is the list of dicts (points) with all parameters
+#   param_keys is always a list of parameter keys used by annotations_comparison_func_dict
+annotations_result_val = {
+    'TC Start': lambda tc_candidate: annotations_comparison_func_dict['index_of_min'](tc_candidate, ['valid_time']),
+    'Earliest Named': lambda tc_candidate: annotations_comparison_func_dict['index_of_first_>=_n'](tc_candidate, ['vmax10m'], 34),
+    'Peak Vmax': lambda tc_candidate: annotations_comparison_func_dict['index_of_max'](tc_candidate, ['vmax10m']),
+    'Min MSLP': lambda tc_candidate: annotations_comparison_func_dict['index_of_min'](tc_candidate, ['mslp_value']),
+    'Peak ROCI': lambda tc_candidate: annotations_comparison_func_dict['index_of_max'](tc_candidate, ['roci']),
+    'Peak Isobar Delta': lambda tc_candidate: annotations_comparison_func_dict['index_of_max'](tc_candidate, ['closed_isobar_delta']),
+    'TC End': lambda tc_candidate: annotations_comparison_func_dict['index_of_max'](tc_candidate, ['valid_time'])
+}
+# formatting for annotation
+#   key = short name, result_val is result from lambda comparison functions above
+#   point tc_candidate[tc_point_index) passed to lambda with added parameter 'result_val'
+#       {result_val} is val from annotations_comparison_func_dict evaluation
+annotations_label_func_dict = {
+    'TC Start': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+        "\nSTART",
+    'Earliest Named': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+        "\nEARLIEST 34kt",
+    'Peak Vmax': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+        f"\nVMAX_10m: {result_val:.1f} kt",
+    'Min MSLP': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+        f"\nMSLP: {result_val:.1f} hPa",
+    'Peak ROCI': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+        f"\nROCI: {result_val:.0f} km",
+    'Peak Isobar Delta': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+        f"\nISOBAR_DELTA: {result_val:.0f} hPa",
+    'TC End': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+        "\nEND"
+}
+
+annotations_color_level = {
+    'TC Start':1,
+    'Earliest Named': 2,
+    'Peak Vmax': 3,
+    'Min MSLP': 0,
+    'Peak ROCI': 0,
+    'Peak Isobar Delta': 0,
+    'TC End': 0
+}
 
 from datetime import datetime, timedelta
 # URLs
@@ -126,9 +242,6 @@ from matplotlib.collections import LineCollection
 
 # performance optimizations
 import matplotlib
-
-# presence of importance of  level 1 item overrides 0, and level 2 overrides both levels 0 and 1 for coloring
-annotate_color_levels = {0: DEFAULT_ANNOTATE_TEXT_COLOR, 1: ANNOTATE_DT_START_COLOR, 2: ANNOTATE_VMAX_COLOR}
 
 tcvitals_basin_to_atcf_basin = {
     'E': 'EP',
@@ -1910,6 +2023,82 @@ class App:
         if added:
             self.fig.canvas.draw()
 
+    def annotate_single_storm_extrema(self, point_index = None):
+        if point_index is None or len(point_index) != 2:
+            return
+        tc_index, tc_point_index = point_index
+
+        if not self.plotted_tc_candidates or (tc_index + 1) > len(self.plotted_tc_candidates):
+            return
+
+        results = {}
+        for short_name in displayed_functional_annotations:
+            result_tuple = annotations_result_val[short_name](self.plotted_tc_candidates[tc_index])
+            if not result_tuple:
+                continue
+            point_idx, result_val = result_tuple
+            if not point_idx:
+                continue
+            if not result_val:
+                continue
+            results[point_idx] = (short_name, result_val)
+
+        if not results:
+            return
+
+        # annotate the extrema for the storm
+        point_index_labels = {}
+        # since some extremum may show up for the same point, we need to combine the extremum labels first (by point_index)
+        prev_color_level = 0
+        for result_idx in sorted(results.keys()):
+            if result_idx is None:
+                continue
+            results_tuple = results[result_idx]
+            if results_tuple is None:
+                continue
+            short_name, result_val = results_tuple
+            if result_val is None or short_name is None:
+                continue
+
+            result_point = self.plotted_tc_candidates[tc_index][result_idx]
+            append = False
+            if result_idx in point_index_labels:
+                append = True
+
+            label_str = annotations_label_func_dict[short_name](result_point, result_val)
+            new_color_level = annotations_color_level[short_name]
+
+            if label_str:
+                if append:
+                    prev_lines, prev_color_level = point_index_labels[result_idx]
+                    if new_color_level > prev_color_level:
+                        lines_color_level = new_color_level
+                    else:
+                        lines_color_level = prev_color_level
+
+                    new_lines = f"{prev_lines}\n{label_str}"
+
+                    # remove any duplicates in the new string to be appended
+                    prev_lines = prev.splitlines()
+                    new_lines = label_str.splitlines()
+                    new_lines = [line for line in new_lines if line not in prev_lines]
+                    prev_lines.extend(new_lines)
+                    appended_str = "\n".join(prev_lines)
+
+                    point_index_labels[result_idx] = (appended_str, lines_color_level)
+                else:
+                    prev_color_level = new_color_level
+                    point_index_labels[result_idx] = (label_str, prev_color_level)
+
+        # finally add the annotated circle for each label
+        added = False
+        for label_point_index, (point_label, color_level) in point_index_labels.items():
+            point = self.plotted_tc_candidates[tc_index][label_point_index]
+            added = True
+            self.annotated_circles.add(lat=point['lat'], lon=point['lon'], label=point_label, label_color=annotate_color_levels[color_level])
+        if added:
+            self.fig.canvas.draw()
+
     def display_custom_boundaries(self):
         if custom_gdf is not None:
             for geometry in custom_gdf.geometry:
@@ -2230,36 +2419,42 @@ class App:
         selected_model_data = {}
         actual_models = set()
         all_models = set()
+        if self.adeck and self.adeck.keys():
+            for storm_atcf_id in self.adeck.keys():
+                if storm_atcf_id in self.adeck and self.adeck[storm_atcf_id]:
+                    for model_id, models in self.adeck[storm_atcf_id].items():
+                        if models:
+                            for valid_time, data in models.items():
+                                dt = datetime.fromisoformat(valid_time)
+                                if dt < earliest_model_valid_datetime:
+                                    earliest_model_valid_datetime = dt
+                            all_models.add(model_id)
+                            if model_id in selected_models:
+                                if storm_atcf_id not in selected_model_data.keys():
+                                    selected_model_data[storm_atcf_id] = {}
+                                selected_model_data[storm_atcf_id][model_id] = models
+                                actual_models.add(model_id)
 
-        for storm_atcf_id in self.adeck.keys():
-            for model_id, models in self.adeck[storm_atcf_id].items():
-                for valid_time, data in models.items():
-                    dt = datetime.fromisoformat(valid_time)
-                    if dt < earliest_model_valid_datetime:
-                        earliest_model_valid_datetime = dt
-                all_models.add(model_id)
-                if model_id in selected_models:
-                    if storm_atcf_id not in selected_model_data.keys():
-                        selected_model_data[storm_atcf_id] = {}
-                    selected_model_data[storm_atcf_id][model_id] = models
-                    actual_models.add(model_id)
-
-        for storm_atcf_id in self.bdeck.keys():
-            for model_id, models in self.bdeck[storm_atcf_id].items():
-                if model_id in selected_models:
-                    if storm_atcf_id not in selected_model_data.keys():
-                        selected_model_data[storm_atcf_id] = {}
-                    selected_model_data[storm_atcf_id][model_id] = models
+        if self.bdeck:
+            for storm_atcf_id in self.bdeck.keys():
+                if storm_atcf_id in self.bdeck[storm_atcf_id] and self.bdeck[storm_atcf_id]:
+                    for model_id, models in self.bdeck[storm_atcf_id].items():
+                        if models:
+                            if model_id in selected_models:
+                                if storm_atcf_id not in selected_model_data.keys():
+                                    selected_model_data[storm_atcf_id] = {}
+                                selected_model_data[storm_atcf_id][model_id] = models
 
         # tcvitals
-        for storm_atcf_id, data in self.recent_storms.items():
-            valid_date_str = data['valid_time']
-            if storm_atcf_id not in selected_model_data.keys():
-                selected_model_data[storm_atcf_id] = {}
-            selected_model_data[storm_atcf_id]['TCVITALS'] = {valid_date_str: data}
-            dt = datetime.fromisoformat(valid_date_str)
-            if dt < earliest_model_valid_datetime:
-                earliest_model_valid_datetime = dt
+        if self.recent_storms:
+            for storm_atcf_id, data in self.recent_storms.items():
+                valid_date_str = data['valid_time']
+                if storm_atcf_id not in selected_model_data.keys():
+                    selected_model_data[storm_atcf_id] = {}
+                selected_model_data[storm_atcf_id]['TCVITALS'] = {valid_date_str: data}
+                dt = datetime.fromisoformat(valid_date_str)
+                if dt < earliest_model_valid_datetime:
+                    earliest_model_valid_datetime = dt
 
         return earliest_model_valid_datetime, len(all_models), len(actual_models), selected_model_data
 
@@ -2363,6 +2558,7 @@ class App:
                             candidate_info['vmax10m_in_roci'] = candidate['vmax10m']
                         else:
                             candidate_info['vmax10m_in_roci'] = None
+                            candidate_info['vmax10m'] = None
                         candidate_info['closed_isobar_delta'] = None
                         if 'mslp' in candidate and candidate['mslp']:
                             candidate_info['mslp_value'] = candidate['mslp']
@@ -2653,6 +2849,7 @@ class App:
                     candidate_info['roci'] = candidate['roci']/1000
                     vmaxkt = candidate['vmax10m_in_roci'] * 1.9438452
                     candidate_info['vmax10m_in_roci'] = vmaxkt
+                    candidate_info['vmax10m'] = vmaxkt
                     candidate_info['closed_isobar_delta'] = candidate['closed_isobar_delta']
                     candidate_info['mslp_value'] = candidate['mslp_value']
 
