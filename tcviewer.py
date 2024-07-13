@@ -150,19 +150,19 @@ annotations_result_val = {
 #   point tc_candidate[tc_point_index) passed to lambda with added parameter 'result_val'
 #       {result_val} is val from annotations_comparison_func_dict evaluation
 annotations_label_func_dict = {
-    'TC Start': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+    'TC Start': lambda point, result_val: f"{point['model_name']} " + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
         "\nSTART",
-    'Earliest Named': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+    'Earliest Named': lambda point, result_val: f"{point['model_name']} " + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
         "\nEARLIEST 34kt",
-    'Peak Vmax': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+    'Peak Vmax': lambda point, result_val: f"{point['model_name']} " + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
         f"\nVMAX_10m: {result_val:.1f} kt",
-    'Min MSLP': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+    'Min MSLP': lambda point, result_val: f"{point['model_name']} " + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
         f"\nMSLP: {result_val:.1f} hPa",
-    'Peak ROCI': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+    'Peak ROCI': lambda point, result_val: f"{point['model_name']} " + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
         f"\nROCI: {result_val:.0f} km",
-    'Peak Isobar Delta': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+    'Peak Isobar Delta': lambda point, result_val: f"{point['model_name']} " + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
         f"\nISOBAR_DELTA: {result_val:.0f} hPa",
-    'TC End': lambda point, result_val: f"{point['model_name'] }" + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
+    'TC End': lambda point, result_val: f"{point['model_name']} " + f"{point['valid_time'].strftime('%Y-%m-%d %HZ')}" +
         "\nEND"
 }
 
@@ -1240,6 +1240,8 @@ class DraggableAnnotation:
 
         self.dragging = False
 
+        self.visible = True
+
         # Extract essential properties from the original annotation
         text = self.original_annotation.get_text()
         xy = self.original_annotation.get_position()
@@ -1317,6 +1319,9 @@ class DraggableAnnotation:
         return bbox.contains(event.x, event.y)
 
     def on_press(self, event):
+        if not self.visible:
+            return
+
         if self != self.get_topmost_annotation(self.ax.draggable_annotations, event):
             return
 
@@ -1365,6 +1370,8 @@ class DraggableAnnotation:
         # Show original annotation and hide dragging annotation
         self.dragging_annotation.set_visible(False)
         self.original_annotation.set_visible(True)
+        # handle edge case of hide during drag
+        self.set_visible(self.visible)
 
         self.press = None
         self.background = None
@@ -1427,6 +1434,36 @@ class DraggableAnnotation:
         self.ax.draw_artist(self.line)
         self.ax.figure.canvas.blit(self.ax.bbox)
 
+    def isVisible(self):
+        return self.visible
+
+    def set_visible(self, visibilityTarget):
+        self.visible = visibilityTarget
+
+        # we will call set_visible after mouse release for that edge case of hide while dragging
+        if self.dragging:
+            return
+
+        try:
+            if self.line:
+                self.line.set_visible(visibilityTarget)
+        except:
+            traceback.print_exc()
+            pass
+
+        try:
+            if self.original_annotation:
+                self.original_annotation.set_visible(visibilityTarget)
+        except:
+            traceback.print_exc()
+
+        try:
+            if self.dragging_annotation:
+                self.dragging_annotation.set_visible(False)
+        except:
+            traceback.print_exc()
+            pass
+
     def remove(self):
         self.ax.figure.canvas.mpl_disconnect(self.cid_press)
         self.ax.figure.canvas.mpl_disconnect(self.cid_release)
@@ -1444,6 +1481,35 @@ class AnnotatedCircles():
         self.ax.draggable_annotations = None
         self.rtree_p = index.Property()
         self.rtree_idx = index.Index(properties=self.rtree_p)
+        self.annotated_circles = None
+
+    class AnnotatedCircle():
+        def __init__(self, draggable_annotation, circle_handle):
+            self.draggable_annotation_object = draggable_annotation
+            self.circle_handle_object = circle_handle
+            self.visible = True
+
+        def isVisible(self):
+            return self.visible
+
+        def set_visible(self, visibilityTarget):
+            if visibilityTarget == self.visible:
+                return
+
+            if self.draggable_annotation_object:
+                try:
+                    self.draggable_annotation_object.set_visible(visibilityTarget)
+                except:
+                    traceback.print_exc()
+                    pass
+            if self.circle_handle_object:
+                try:
+                    self.circle_handle_object.set_visible(visibilityTarget)
+                except:
+                    traceback.print_exc()
+                    pass
+
+            self.visible = visibilityTarget
 
     def get_annotations(self):
         return self.ax.draggable_annotations
@@ -1534,6 +1600,12 @@ class AnnotatedCircles():
         #self.annotations.append(draggable_annotation)
         self.ax.draggable_annotations.append(draggable_annotation)
 
+        annotated_circle = self.AnnotatedCircle(draggable_annotation, circle_handle)
+        if not self.annotated_circles:
+            self.annotated_circles = []
+        self.annotated_circles.append(annotated_circle)
+
+        return annotated_circle
         # draw later as we will likely add multiple circles
         #self.canvas.draw()
 
@@ -1635,9 +1707,15 @@ class App:
         # r-tree index
         self.rtree_p = index.Property()
         self.rtree_idx = index.Index(properties=self.rtree_p)
-        # Mapping from rtree point index to (tc_index, tc_candidate_point_index)
+        # Mapping from rtree point index to (internal_id, tc_index, tc_candidate_point_index)
         self.rtree_tuple_point_id = 0
         self.rtree_tuple_index_mapping = {}
+
+        # manually hidden tc candidates and annotations
+        self.hidden_tc_candidates = set()
+        self.scatter_objects = {}
+        self.line_collection_objects = {}
+        self.annotated_circle_objects = {}
 
         # circle patch for selected marker
         self.circle_handle = None
@@ -1686,17 +1764,17 @@ class App:
         self.update_tc_status_labels()
         self.clear_circle_patch()
 
-    def update_plotted_list(self, tc_candidate):
+    def update_plotted_list(self, internal_id, tc_candidate):
         # zero indexed
         tc_index = len(self.plotted_tc_candidates)
         for point_index, point in enumerate(tc_candidate):  # Iterate over each point in the track
             lat, lon = point['lat'], point['lon']
             # Can't use a tuple (tc_index, point_index) as the index so use a mapped index
             self.rtree_idx.insert(self.rtree_tuple_point_id, (lon, lat, lon, lat))
-            self.rtree_tuple_index_mapping[self.rtree_tuple_point_id] = (tc_index, point_index)
+            self.rtree_tuple_index_mapping[self.rtree_tuple_point_id] = (internal_id, tc_index, point_index)
             self.rtree_tuple_point_id += 1
 
-        self.plotted_tc_candidates.append(tc_candidate)
+        self.plotted_tc_candidates.append((internal_id, tc_candidate))
 
     def update_tc_status_labels(self, tc_index = None, tc_point_index = None, overlapped_point_num = 0, total_num_overlapped_points = 0):
         # may not have init interface yet
@@ -1712,7 +1790,7 @@ class App:
                 self.label_mouse_hover_info_isobar_delta.config(text="--- hPa")
             else:
                 # list of dicts (points in time) for tc candidate
-                tc_candidate = self.plotted_tc_candidates[tc_index]
+                internal_id, tc_candidate = self.plotted_tc_candidates[tc_index]
                 # dict at a point in time for tc candidate
                 tc_candidate_point = tc_candidate[tc_point_index]
                 model_name = tc_candidate_point['model_name']
@@ -1786,12 +1864,14 @@ class App:
         self.nearest_point_indices_overlapped = SortedCyclicEnumDict()
         for item in possible_matches:
             unmapped_point_index = item.id
-            tc_index, point_index = self.rtree_tuple_index_mapping[unmapped_point_index]
-            point = self.plotted_tc_candidates[tc_index][point_index]
+            internal_id, tc_index, point_index = self.rtree_tuple_index_mapping[unmapped_point_index]
+            point = self.plotted_tc_candidates[tc_index][1][point_index]
             item_is_overlapping = False
+            if internal_id in self.hidden_tc_candidates:
+                continue
             if len(self.nearest_point_indices_overlapped):
-                overlapping_tc_index, overlapping_point_index = self.nearest_point_indices_overlapped.get_first_key()
-                possible_overlapping_point = self.plotted_tc_candidates[overlapping_tc_index][overlapping_point_index]
+                overlapping_internal_id, overlapping_tc_index, overlapping_point_index = self.nearest_point_indices_overlapped.get_first_key()
+                possible_overlapping_point = self.plotted_tc_candidates[overlapping_tc_index][1][overlapping_point_index]
                 lon_diff = round(abs(possible_overlapping_point['lon'] - point['lon']), 3)
                 lat_diff = round(abs(possible_overlapping_point['lat'] - point['lat']), 3)
                 if lon_diff == 0.0 and lat_diff == 0.0:
@@ -1800,7 +1880,7 @@ class App:
             # check to see if it is an almost exact match (~3 decimals in degrees) to approximate whether it is an overlapped point
             if item_is_overlapping:
                 # this will likely be an overlapped point in the grid
-                self.nearest_point_indices_overlapped[(tc_index, point_index)] = point['valid_time']
+                self.nearest_point_indices_overlapped[(internal_id, tc_index, point_index)] = point['valid_time']
                 # min distance should not significantly change (we are using the first point as reference for overlapping)
             else:
                 distance = self.calculate_distance((lon, lat), (point['lon'], point['lat']))
@@ -1808,25 +1888,24 @@ class App:
                     # not an overlapping point but still closer to cursor, so update
                     # first clear any other points since this candidate is closer and does not have an overlapping point
                     self.nearest_point_indices_overlapped = SortedCyclicEnumDict()
-                    self.nearest_point_indices_overlapped[(tc_index, point_index)] = point['valid_time']
+                    self.nearest_point_indices_overlapped[(internal_id, tc_index, point_index)] = point['valid_time']
                     min_distance = distance
 
         # Update the labels if a nearest point is found within the threshold
         total_num_overlapped_points = len(self.nearest_point_indices_overlapped)
-        if total_num_overlapped_points:
+        if total_num_overlapped_points > 0:
             overlapped_point_num, nearest_point_index = self.nearest_point_indices_overlapped.next_enum_key_tuple()
-            tc_index, point_index = nearest_point_index
-            self.update_tc_status_labels(tc_index,point_index, overlapped_point_num, total_num_overlapped_points)
+            internal_id, tc_index, point_index = nearest_point_index
+            self.update_tc_status_labels(tc_index, point_index, overlapped_point_num, total_num_overlapped_points)
             # get the nearest_point
-            point = self.plotted_tc_candidates[tc_index][point_index]
+            point = self.plotted_tc_candidates[tc_index][1][point_index]
             lon = point['lon']
             lat = point['lat']
             self.update_circle_patch(lon=lon, lat=lat)
         else:
             # clear the label if no point is found? No.
             #   Not only will this prevent the constant reconfiguring of labels, it allows the user more flexibility
-            #self.update_tc_status_labels()
-
+            # self.update_tc_status_labels()
             # Do clear the circle though as it might be obtrusive
             self.clear_circle_patch()
 
@@ -1835,71 +1914,83 @@ class App:
         total_num_overlapped_points = len(self.nearest_point_indices_overlapped)
         if total_num_overlapped_points > 1:
             overlapped_point_num, nearest_point_index = self.nearest_point_indices_overlapped.next_enum_key_tuple()
-            tc_index, point_index = nearest_point_index
-            self.update_tc_status_labels(tc_index,point_index, overlapped_point_num, total_num_overlapped_points)
+            internal_id, tc_index, point_index = nearest_point_index
+            self.update_tc_status_labels(tc_index, point_index, overlapped_point_num, total_num_overlapped_points)
             # get the nearest_point
-            point = self.plotted_tc_candidates[tc_index][point_index]
+            point = self.plotted_tc_candidates[tc_index][1][point_index]
             lon = point['lon']
             lat = point['lat']
             self.update_circle_patch(lon=lon, lat=lat)
 
-    def is_extremum(self, extremum_key=None, current_extremum=None, potential=None):
-        if extremum_key is None:
-            # error
-            return False
-        if current_extremum is None and potential is None:
-            return False
-        if potential is None:
-            return False
-        if current_extremum is None:
-            return True
-        if extremum_key in ['vmax10m', 'roci', 'closed_isobar_delta', 'dt_end']:
-            return potential > current_extremum
-        elif extremum_key in ['mslp_value', 'dt_start']:
-            return potential < current_extremum
+    def hide_tc_candidate(self):
+        total_num_overlapped_points = len(self.nearest_point_indices_overlapped)
+        if total_num_overlapped_points == 0:
+            # unhide all
+            if len(self.hidden_tc_candidates) > 0:
+                if self.scatter_objects:
+                    for internal_id, scatters in self.scatter_objects.items():
+                        try:
+                            for scatter in scatters:
+                                scatter.set_visible(True)
+                        except:
+                            traceback.print_exc()
+
+                if self.line_collection_objects:
+                    for internal_id, line_collections in self.line_collection_objects.items():
+                        try:
+                            for line_collection in line_collections:
+                                line_collection.set_visible(True)
+                        except:
+                            traceback.print_exc()
+
+                if self.annotated_circle_objects:
+                    for internal_id, annotated_circles in self.annotated_circle_objects.items():
+                        try:
+                            for annotated_circle in annotated_circles:
+                                annotated_circle.set_visible(True)
+                        except:
+                            traceback.print_exc()
+
+                self.hidden_tc_candidates = set()
+                (lon,lat) = self.last_cursor_lon_lat
+                self.update_labels_for_mouse_hover(lat=lat, lon=lon)
+                self.fig.canvas.draw()
         else:
-            # unhandled case
-            return False
+            num, cursor_point_index = self.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
+            if cursor_point_index:
+                cursor_internal_id, tc_index, tc_point_index = cursor_point_index
+                self.hidden_tc_candidates.add(cursor_internal_id)
 
-    # defines how the annotated circle text is formatted
-    def format_extremum_label_lines(self, append = False, model_name = '', valid_time = None, extremum_key = None, extremum_val = None):
-        if valid_time is None or extremum_key is None or extremum_val is None or not(extremum_key in displayed_extremum_annotations):
-            return None, 0
-        prefix_line_str = None
-        if append == False:
-            # For first line of annotation of extremum, include Model name and Valid Time
-            model_name_prefix_str = ""
-            if model_name:
-                model_name_prefix_str = f"{model_name} "
+                if self.scatter_objects:
+                    for internal_id, scatters in self.scatter_objects.items():
+                        if cursor_internal_id == internal_id:
+                            try:
+                                for scatter in scatters:
+                                    scatter.set_visible(False)
+                            except:
+                                traceback.print_exc()
 
-            valid_time_str = valid_time.strftime('%Y-%m-%d %HZ')
-            prefix_line_str = f"{model_name_prefix_str}{valid_time_str}\n"
+                if self.line_collection_objects:
+                    for internal_id, line_collections in self.line_collection_objects.items():
+                        if cursor_internal_id == internal_id:
+                            try:
+                                for line_collection in line_collections:
+                                    line_collection.set_visible(False)
+                            except:
+                                traceback.print_exc()
 
-        extremum_label_line = None
-        color_level = 0
-        if extremum_key == "dt_start":
-            extremum_label_line = "START"
-            color_level = 1
-        elif extremum_key == "dt_end":
-            extremum_label_line = "END"
-        elif extremum_key == "vmax10m":
-            color_level = 2
-            extremum_label_line = f"VMAX_10m: {extremum_val:.1f} kt"
-        elif extremum_key == "mslp_value":
-            extremum_label_line = f"MSLP: {extremum_val:.1f} hPa"
-        elif extremum_key == "roci":
-            extremum_label_line = f"ROCI: {extremum_val:.0f} km"
-        elif extremum_key == "closed_isobar_delta":
-            extremum_label_line = f"ISOBAR_DELTA: {extremum_val:.0f} hPa"
+                if self.annotated_circle_objects:
+                    for internal_id, annotated_circles in self.annotated_circle_objects.items():
+                        if cursor_internal_id == internal_id:
+                            try:
+                                for annotated_circle in annotated_circles:
+                                    annotated_circle.set_visible(False)
+                            except:
+                                traceback.print_exc()
 
-        extremum_label_lines = None
-        if extremum_label_line:
-            if prefix_line_str:
-                extremum_label_lines = f"{prefix_line_str}{extremum_label_line}"
-            else:
-                extremum_label_lines = f"{extremum_label_line}"
-
-        return extremum_label_lines, color_level
+                (lon,lat) = self.last_cursor_lon_lat
+                self.update_labels_for_mouse_hover(lat=lat, lon=lon)
+                self.fig.canvas.draw()
 
     def clear_storm_extrema_annotations(self):
         if self.annotated_circles:
@@ -1908,7 +1999,7 @@ class App:
     def any_storm_points_in_bounds(self, tc_index):
         if not self.plotted_tc_candidates:
             return False
-        if tc_index > len(self.plotted_tc_candidates):
+        if (tc_index + 1) > len(self.plotted_tc_candidates):
             return False
         if not self.ax:
             return False
@@ -1917,13 +2008,15 @@ class App:
 
         xlim = self.ax.get_xlim()
         ylim = self.ax.get_ylim()
-
         try:
-            for point in self.plotted_tc_candidates[tc_index]:
-                lat = point['lat']
-                lon = point['lon']
-                any_in_bound = any_in_bound or (xlim[0] <= lon <= xlim[1] and ylim[0] <= lat <= ylim[1])
+            internal_id, tc_candidate = self.plotted_tc_candidates[tc_index]
+            for point in tc_candidate:
+                if len(self.hidden_tc_candidates) == 0 or internal_id not in self.hidden_tc_candidates:
+                    lat = point['lat']
+                    lon = point['lon']
+                    any_in_bound = any_in_bound or (xlim[0] <= lon <= xlim[1] and ylim[0] <= lat <= ylim[1])
         except:
+            traceback.print_exc()
             pass
 
         return any_in_bound
@@ -1936,9 +2029,10 @@ class App:
         if len(self.nearest_point_indices_overlapped) == 0:
             # annotate all storm extrema in current view
             for tc_index in range(len(self.plotted_tc_candidates)):
-                if len(self.plotted_tc_candidates[tc_index]):
+                internal_id, tc_candidate = self.plotted_tc_candidates[tc_index]
+                if len(tc_candidate):
                     if self.any_storm_points_in_bounds(tc_index):
-                        point_index = (tc_index, 0)
+                        point_index = (internal_id, tc_index, 0)
                         self.annotate_single_storm_extrema(point_index=point_index)
         else:
             # annotate storm extrema of previously selected
@@ -1946,100 +2040,21 @@ class App:
             self.annotate_single_storm_extrema(point_index=cursor_point_index)
 
     def annotate_single_storm_extrema(self, point_index = None):
-        tc_index, tc_point_index = point_index
-
-        # tuple of (storm) extremum (along whole path) and corresponding tc_point_index
-        #   this is the order the extrema will appear if they share the same tc_point_index
-        extrema = {
-            'dt_start': (None, None),
-            'dt_end': (None, None),
-            'vmax10m': (None, None),
-            'mslp_value': (None, None),
-            'roci': (None, None),
-            'closed_isobar_delta': (None, None),
-        }
-        for tc_point_index, point in enumerate(self.plotted_tc_candidates[tc_index]):
-            for extremum_key, extremum_val_tuple in extrema.items():
-                extremum_val, extremum_index = extremum_val_tuple
-                point_keys = point.keys()
-                point_extremum_val = None
-                if extremum_key == 'vmax10m':
-                    if 'vmax10m_in_roci' in point_keys and point['vmax10m_in_roci']:
-                        point_extremum_val = point['vmax10m_in_roci']
-                    else:
-                        if extremum_key in point_keys:
-                            point_extremum_val = point[extremum_key]
-                else:
-                    if extremum_key in ['dt_start', 'dt_end']:
-                        if 'valid_time' in point_keys:
-                            point_extremum_val = point['valid_time']
-                    elif extremum_key in point_keys:
-                        point_extremum_val = point[extremum_key]
-                is_extremum = self.is_extremum(extremum_key=extremum_key, current_extremum=extremum_val, potential=point_extremum_val)
-                if is_extremum:
-                    # replace previous extremum with the point at tc_point_index
-                    extrema[extremum_key] = (point_extremum_val, tc_point_index)
-
-        # annotate the extrema for the storm
-        point_index_labels = {}
-        # since some extremum may show up for the same point, we need to combine the extremum labels first (by point_index)
-        prev_color_level = 0
-        for extremum_key, extremum_val_tuple in extrema.items():
-            extremum_val, extremum_index = extremum_val_tuple
-            if extremum_index is None or extremum_val is None:
-                continue
-            extremum_point = self.plotted_tc_candidates[tc_index][extremum_index]
-            append = False
-            if extremum_index in point_index_labels:
-                append = True
-
-            extremum_point_keys = extremum_point.keys()
-            model_name = None
-            valid_time = None
-            if 'model_name' in extremum_point_keys:
-                model_name = extremum_point['model_name']
-            if 'valid_time' in extremum_point_keys:
-                valid_time = extremum_point['valid_time']
-            extremum_lines, new_color_level = self.format_extremum_label_lines(append=append, model_name=model_name, valid_time=valid_time, extremum_key=extremum_key, extremum_val=extremum_val)
-            if extremum_lines:
-                if append:
-                    prev_lines, prev_color_level = point_index_labels[extremum_index]
-                    if new_color_level > prev_color_level:
-                        lines_color_level = new_color_level
-                    else:
-                        lines_color_level = prev_color_level
-                    new_lines = f"{prev_lines}\n{extremum_lines}"
-                    point_index_labels[extremum_index] = (new_lines, lines_color_level)
-                else:
-                    prev_color_level = new_color_level
-                    point_index_labels[extremum_index] = (extremum_lines, prev_color_level)
-
-        # finally add the annotated circle for each label
-        added = False
-        for label_point_index, (point_label, color_level) in point_index_labels.items():
-            point = self.plotted_tc_candidates[tc_index][label_point_index]
-            added = True
-            self.annotated_circles.add(lat=point['lat'], lon=point['lon'], label=point_label, label_color=annotate_color_levels[color_level])
-        if added:
-            self.fig.canvas.draw()
-
-    def annotate_single_storm_extrema(self, point_index = None):
-        if point_index is None or len(point_index) != 2:
+        if point_index is None or len(point_index) != 3:
             return
-        tc_index, tc_point_index = point_index
-
+        internal_id, tc_index, tc_point_index = point_index
         if not self.plotted_tc_candidates or (tc_index + 1) > len(self.plotted_tc_candidates):
             return
 
         results = {}
         for short_name in displayed_functional_annotations:
-            result_tuple = annotations_result_val[short_name](self.plotted_tc_candidates[tc_index])
+            result_tuple = annotations_result_val[short_name](self.plotted_tc_candidates[tc_index][1])
             if not result_tuple:
                 continue
             point_idx, result_val = result_tuple
-            if not point_idx:
+            if point_idx is None:
                 continue
-            if not result_val:
+            if result_val is None:
                 continue
             results[point_idx] = (short_name, result_val)
 
@@ -2060,7 +2075,7 @@ class App:
             if result_val is None or short_name is None:
                 continue
 
-            result_point = self.plotted_tc_candidates[tc_index][result_idx]
+            result_point = self.plotted_tc_candidates[tc_index][1][result_idx]
             append = False
             if result_idx in point_index_labels:
                 append = True
@@ -2093,9 +2108,13 @@ class App:
         # finally add the annotated circle for each label
         added = False
         for label_point_index, (point_label, color_level) in point_index_labels.items():
-            point = self.plotted_tc_candidates[tc_index][label_point_index]
+            point = self.plotted_tc_candidates[tc_index][1][label_point_index]
             added = True
-            self.annotated_circles.add(lat=point['lat'], lon=point['lon'], label=point_label, label_color=annotate_color_levels[color_level])
+            annotated_circle = self.annotated_circles.add(lat=point['lat'], lon=point['lon'], label=point_label, label_color=annotate_color_levels[color_level])
+            if internal_id not in self.annotated_circle_objects:
+                self.annotated_circle_objects[internal_id] = []
+            self.annotated_circle_objects[internal_id].append(annotated_circle)
+
         if added:
             self.fig.canvas.draw()
 
@@ -2118,6 +2137,7 @@ class App:
             self.display_map()
             if not self.have_deck_data:
                 self.update_deck_data()
+            self.hidden_tc_candidates = set()
             self.display_deck_data()
 
     def create_widgets(self):
@@ -2371,6 +2391,7 @@ class App:
 
     def reload(self):
         if self.mode == "ADECK":
+            self.hidden_tc_candidates = set()
             self.display_map()
             self.update_deck_data()
             self.display_deck_data()
@@ -2385,6 +2406,7 @@ class App:
                     model_cycle = model_cycles['next']
             if model_cycle:
                 # clear map
+                self.hidden_tc_candidates = set()
                 self.display_map()
                 self.update_genesis(model_cycle)
 
@@ -2468,7 +2490,6 @@ class App:
         valid_day = start_of_day.isoformat()
 
         most_recent_timestamp = None
-        numc = 0
 
         colors = [
             '#ffff00',
@@ -2513,10 +2534,12 @@ class App:
         ]
 
         self.clear_plotted_list()
-
+        numc = 0
         for storm_atcf_id, tc in tc_candidates.items():
             numc += 1
+            numd = 0
             for model_name, disturbance_candidates in tc.items():
+                numd += 1
                 if disturbance_candidates:
                     prev_lat = None
                     prev_lon = None
@@ -2524,6 +2547,16 @@ class App:
                     prev_lon_repeat3 = None
                     numdisturb = len(disturbance_candidates)
                     num = 0
+                    # check if should be hidden
+                    internal_id = (numc, numd)
+                    if numdisturb > 0:
+                        #TODO conditionally hidden by interface (first forecast valid time > user selected horizon (latest first valid time))
+                        #valid_time_str = disturbance_candidates[0][1]['valid_time']
+                        #valid_time_datetime.fromisoformat(valid_time_str)
+
+                        # check for manually hidden
+                        if len(self.hidden_tc_candidates) != 0 and internal_id in self.hidden_tc_candidates:
+                            continue
 
                     lat_lon_with_time_step_list = []
                     for valid_time, candidate in disturbance_candidates.items():
@@ -2583,7 +2616,7 @@ class App:
 
                         lat_lon_with_time_step_list.append(candidate_info)
 
-                    self.update_plotted_list(lat_lon_with_time_step_list)
+                    self.update_plotted_list(internal_id, lat_lon_with_time_step_list)
 
                     # do in reversed order so most recent items get rendered on top
                     for i, (start, end) in reversed(list(enumerate(time_step_ranges))):
@@ -2610,7 +2643,10 @@ class App:
                                 #self.ax.plot([point['lon_repeat']], [point['lat']], marker=marker, color=colors[i], markersize=radius, alpha=opacity)
 
                         for vmaxmarker in lons.keys():
-                            self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker, facecolors='none', edgecolors=colors[i], s=marker_sizes[vmaxmarker]**2, alpha=opacity, antialiased=False)
+                            scatter = self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker, facecolors='none', edgecolors=colors[i], s=marker_sizes[vmaxmarker]**2, alpha=opacity, antialiased=False)
+                            if internal_id not in self.scatter_objects:
+                                self.scatter_objects[internal_id] = []
+                            self.scatter_objects[internal_id].append(scatter)
 
                     # do in reversed order so most recent items get rendered on top
                     for i, (start, end) in reversed(list(enumerate(time_step_ranges))):
@@ -2634,7 +2670,10 @@ class App:
                         # Create a LineCollection
                         lc = LineCollection(line_segments, color=colors[i], linewidth=strokewidth, alpha=opacity)
                         # Add the LineCollection to the axes
-                        self.ax.add_collection(lc)
+                        line_collection = self.ax.add_collection(lc)
+                        if internal_id not in self.line_collection_objects:
+                            self.line_collection_objects[internal_id] = []
+                        self.line_collection_objects[internal_id].append(line_collection)
 
                         name = 'Tracks'
 
@@ -2655,7 +2694,6 @@ class App:
             self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color='white',
                         fontsize=12, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
                                                                       edgecolor='#FFFFFF', facecolor='#000000', alpha=1.0))
-            #self.ax.scatter([x_pos + 200], [y_pos], marker=marker, edgecolors='#BBDDCC', facecolors='#446655', s=200.0, alpha=1.0, antialiased=False, transform=self.ax.transAxes)
 
         self.fig.canvas.draw()
         self.label_adeck_mode.config(text=f"ADECK MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime('%Y-%m-%d') + f". Models: {num_models}/{num_all_models}")
@@ -2669,6 +2707,7 @@ class App:
 
         if model_cycle:
             # clear map
+            self.hidden_tc_candidates = set()
             self.display_map()
             self.update_genesis(model_cycle)
 
@@ -2690,6 +2729,7 @@ class App:
         if model_cycle:
             if model_cycle != self.genesis_model_cycle_time:
                 self.display_map()
+                self.hidden_tc_candidates = set()
                 self.update_genesis(model_cycle)
 
     def next_genesis_cycle(self):
@@ -2710,6 +2750,7 @@ class App:
         if model_cycle:
             if model_cycle != self.genesis_model_cycle_time:
                 self.display_map()
+                self.hidden_tc_candidates = set()
                 self.update_genesis(model_cycle)
 
     def update_genesis(self, model_cycle):
@@ -2757,7 +2798,6 @@ class App:
         model_init_times, tc_candidates = get_tc_candidates_at_or_before_init_time(most_recent_model_cycle)
 
         most_recent_timestamp = None
-        numc = 0
 
         colors = [
             '#ffff00',
@@ -2802,7 +2842,7 @@ class App:
         ]
 
         self.clear_plotted_list()
-
+        numc = 0
         for tc in tc_candidates:
             numc += 1
             numcandidates = len(tc_candidates)
@@ -2825,6 +2865,17 @@ class App:
                 prev_lon_repeat3 = None
                 numdisturb = len(disturbance_candidates)
                 num = 0
+
+            # check if should be hidden
+            if numdisturb > 0:
+                #TODO conditionally hidden by interface (first forecast valid time > user selected horizon (latest first valid time))
+                #valid_time_str = disturbance_candidates[0][1]['valid_time']
+                #valid_time_datetime.fromisoformat(valid_time_str)
+
+                # check for manually hidden
+                internal_id = numc
+                if len(self.hidden_tc_candidates) != 0 and internal_id in self.hidden_tc_candidates:
+                    continue
 
                 lat_lon_with_time_step_list = []
                 for time_step_str, valid_time_str, candidate in disturbance_candidates:
@@ -2905,7 +2956,7 @@ class App:
 
                     """
 
-                self.update_plotted_list(lat_lon_with_time_step_list)
+                self.update_plotted_list(internal_id, lat_lon_with_time_step_list)
 
                 # do in reversed order so most recent items get rendered on top
                 for i, (start, end) in reversed(list(enumerate(time_step_ranges))):
@@ -2931,8 +2982,10 @@ class App:
                             #self.ax.plot([point['lon_repeat']], [point['lat']], marker=marker, color=colors[i], markersize=radius, alpha=opacity)
 
                     for vmaxmarker in lons.keys():
-                        #self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker, facecolors='none', edgecolors=colors[i], s=radius**2, alpha=opacity, antialiased=False)
-                        self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker, facecolors='none', edgecolors=colors[i], s=marker_sizes[vmaxmarker]**2, alpha=opacity, antialiased=False)
+                        scatter = self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker, facecolors='none', edgecolors=colors[i], s=marker_sizes[vmaxmarker]**2, alpha=opacity, antialiased=False)
+                        if internal_id not in self.scatter_objects:
+                            self.scatter_objects[internal_id] = []
+                        self.scatter_objects[internal_id].append(scatter)
 
                 # do in reversed order so most recent items get rendered on top
                 for i, (start, end) in reversed(list(enumerate(time_step_ranges))):
@@ -2956,7 +3009,10 @@ class App:
                     # Create a LineCollection
                     lc = LineCollection(line_segments, color=colors[i], linewidth=strokewidth, alpha=opacity)
                     # Add the LineCollection to the axes
-                    self.ax.add_collection(lc)
+                    line_collection = self.ax.add_collection(lc)
+                    if internal_id not in self.line_collection_objects:
+                        self.line_collection_objects[internal_id] = []
+                    self.line_collection_objects[internal_id].append(line_collection)
 
                     name = 'Tracks'
 
@@ -2977,7 +3033,6 @@ class App:
             self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color='white',
                         fontsize=12, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
                                                                       edgecolor='#FFFFFF', facecolor='#000000', alpha=1.0))
-            #self.ax.scatter([x_pos + 200], [y_pos], marker=marker, edgecolors='#BBDDCC', facecolors='#446655', s=200.0, alpha=1.0, antialiased=False, transform=self.ax.transAxes)
 
         self.fig.canvas.draw()
         self.label_genesis_mode.config(text="GENESIS MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime('%Y-%m-%d'))
@@ -3058,6 +3113,9 @@ class App:
         self.ax.yaxis.set_major_formatter(lat_formatter)
 
     def display_map(self):
+        self.scatter_objects = {}
+        self.line_collection_objects = {}
+
         if self.canvas:
             self.canvas.get_tk_widget().pack_forget()
 
@@ -3147,6 +3205,9 @@ class App:
 
         if event.key == 'n':
             self.cycle_to_next_overlapped_point()
+
+        if event.key == 'h':
+            self.hide_tc_candidate()
 
         if event.key == 'x':
             # annotate storm extrema
