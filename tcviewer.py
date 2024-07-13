@@ -1563,7 +1563,7 @@ class AnnotatedCircles():
 
     def add(self, lat=None, lon=None, label=None, label_color=DEFAULT_ANNOTATE_TEXT_COLOR):
         if lat is None or lon is None or label is None or self.ax is None:
-            return
+            return None
         if self.circle_handles is None:
             self.circle_handles = []
         #if self.annotation_handles is None:
@@ -1572,7 +1572,7 @@ class AnnotatedCircles():
             self.ax.draggable_annotations = []
 
         if self.has_overlap(lat=lat, lon=lon):
-            return
+            return None
 
         lon_offset, lat_offset = self.calculate_offset_pixels()
         # calculate radius of pixels in degrees
@@ -1655,6 +1655,8 @@ class AnnotatedCircles():
         if self.rtree_idx:
             cleared = True
             self.rtree_idx = index.Index(properties=self.rtree_p)
+        if self.annotated_circles:
+            self.annotated_circles = []
 
 class App:
     def __init__(self, root):
@@ -1932,6 +1934,7 @@ class App:
             lat = point['lat']
             self.update_circle_patch(lon=lon, lat=lat)
 
+    # hide selected, or show all if none selected
     def hide_tc_candidate(self):
         total_num_overlapped_points = len(self.nearest_point_indices_overlapped)
         if total_num_overlapped_points == 0:
@@ -1957,7 +1960,8 @@ class App:
                     for internal_id, annotated_circles in self.annotated_circle_objects.items():
                         try:
                             for annotated_circle in annotated_circles:
-                                annotated_circle.set_visible(True)
+                                if annotated_circle:
+                                    annotated_circle.set_visible(True)
                         except:
                             traceback.print_exc()
 
@@ -2120,7 +2124,13 @@ class App:
         for label_point_index, (point_label, color_level) in point_index_labels.items():
             point = self.plotted_tc_candidates[tc_index][1][label_point_index]
             added = True
+            # check if already annotated
+            #   there is a question of how we want to use annotations (one or many per (nearby or same) point?)
+            #   in AnnotatedCircles, we use has_overlap() to prevent that
             annotated_circle = self.annotated_circles.add(lat=point['lat'], lon=point['lon'], label=point_label, label_color=annotate_color_levels[color_level])
+            # handle case to make sure we don't add doubles or nearby
+            if annotated_circle is None:
+                continue
             if internal_id not in self.annotated_circle_objects:
                 self.annotated_circle_objects[internal_id] = []
             self.annotated_circle_objects[internal_id].append(annotated_circle)
