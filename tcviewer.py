@@ -19,6 +19,7 @@
 # VIEW NEXT OVERLAPPED HOVER POINT STATUS = n key  (this will not redraw points of overlapped storms, only update hover text)
 # CIRCLE & ANNOTATE STORM EXTREMA = x key  (annotates either the selected storm in circle patch, or all storms in current view (zoom))
 # CLEAR ALL STORM EXTREMA ANNOTATIONS = c key
+# HIDE (MOUSE HOVERED) STORMS / SHOW ALL HIDDEN = h key
 
 ####### CONFIG
 
@@ -1796,8 +1797,14 @@ class App:
                 model_name = tc_candidate_point['model_name']
                 lat = tc_candidate_point['lat']
                 lon = tc_candidate_point['lon']
-                valid_time = tc_candidate_point['valid_time'].strftime('%Y-%m-%d %HZ')
-                init_time = tc_candidate_point['init_time'].strftime('%Y-%m-%d %HZ')
+                if 'valid_time' in tc_candidate_point:
+                    valid_time = tc_candidate_point['valid_time'].strftime('%Y-%m-%d %HZ')
+                else:
+                    valid_time = None
+                if 'init_time' in tc_candidate_point:
+                    init_time = tc_candidate_point['init_time'].strftime('%Y-%m-%d %HZ')
+                else:
+                    init_time = None
                 vmax10m = None
                 if 'vmax10m_in_roci' in tc_candidate_point and tc_candidate_point['vmax10m_in_roci']:
                     vmax10m = tc_candidate_point['vmax10m_in_roci']
@@ -1820,7 +1827,10 @@ class App:
                 if init_time:
                     self.label_mouse_hover_info_model_init.config(text=f"{model_name:>4} {init_time}")
                 else:
-                    self.label_mouse_hover_info_model_init.config(text="YYYY-MM-DD hhZ")
+                    if model_name == "TCVITALS" and valid_time:
+                        self.label_mouse_hover_info_model_init.config(text=f"{model_name:>4} {valid_time}")
+                    else:
+                        self.label_mouse_hover_info_model_init.config(text="YYYY-MM-DD hhZ")
                 if vmax10m:
                     self.label_mouse_hover_info_vmax10m.config(text=f"{vmax10m:>5.1f} kt")
                 else:
