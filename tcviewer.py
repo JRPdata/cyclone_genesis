@@ -84,16 +84,18 @@ annotate_color_levels = {
 #   displayable options are in annotations_result_val
 
 displayed_functional_annotations = [
-    "Earliest Named"
+    "TC Start",
+    "Earliest Named",
 ]
 
 '''
 displayed_functional_annotations = [
     "TC Start",
-    "Vmax_10m",
+    "Earliest Named",
     "Peak Vmax",
     "Peak Isobar Delta",
-    'Peak ROCI'
+    'Peak ROCI',
+    "TC End"
 ]
 '''
 
@@ -123,12 +125,12 @@ annotations_comparison_func_dict = {
         ((i, x[param_keys[0]]) for i, x in enumerate(lst)
             if x.get(param_keys[0]) is not None
                 and
-                max(
+                min(
                     y.get(param_keys[0]) for y in lst
                     ) is not None
                 and
                 x.get(param_keys[0]) ==
-                    max(
+                    min(
                         y.get(param_keys[0]) for y in lst
                     )
         ), None) if lst and param_keys else None
@@ -2175,7 +2177,9 @@ class App:
                 continue
             if result_val is None:
                 continue
-            results[point_idx] = (short_name, result_val)
+            if point_idx not in results:
+                results[point_idx] = []
+            results[point_idx].append((short_name, result_val))
 
         if not results:
             return
@@ -2187,42 +2191,42 @@ class App:
         for result_idx in sorted(results.keys()):
             if result_idx is None:
                 continue
-            results_tuple = results[result_idx]
-            if results_tuple is None:
-                continue
-            short_name, result_val = results_tuple
-            if result_val is None or short_name is None:
-                continue
+            for results_tuple in results[result_idx]:
+                if results_tuple is None:
+                    continue
+                short_name, result_val = results_tuple
+                if result_val is None or short_name is None:
+                    continue
 
-            result_point = self.plotted_tc_candidates[tc_index][1][result_idx]
-            append = False
-            if result_idx in point_index_labels:
-                append = True
+                result_point = self.plotted_tc_candidates[tc_index][1][result_idx]
+                append = False
+                if result_idx in point_index_labels:
+                    append = True
 
-            label_str = annotations_label_func_dict[short_name](result_point, result_val)
-            new_color_level = annotations_color_level[short_name]
+                label_str = annotations_label_func_dict[short_name](result_point, result_val)
+                new_color_level = annotations_color_level[short_name]
 
-            if label_str:
-                if append:
-                    prev_lines, prev_color_level = point_index_labels[result_idx]
-                    if new_color_level > prev_color_level:
-                        lines_color_level = new_color_level
+                if label_str:
+                    if append:
+                        prev_lines, prev_color_level = point_index_labels[result_idx]
+                        if new_color_level > prev_color_level:
+                            lines_color_level = new_color_level
+                        else:
+                            lines_color_level = prev_color_level
+
+                        new_lines = f"{prev_lines}\n{label_str}"
+
+                        # remove any duplicates in the new string to be appended
+                        prev_lines = prev_lines.splitlines()
+                        new_lines = label_str.splitlines()
+                        new_lines = [line for line in new_lines if line not in prev_lines]
+                        prev_lines.extend(new_lines)
+                        appended_str = "\n".join(prev_lines)
+
+                        point_index_labels[result_idx] = (appended_str, lines_color_level)
                     else:
-                        lines_color_level = prev_color_level
-
-                    new_lines = f"{prev_lines}\n{label_str}"
-
-                    # remove any duplicates in the new string to be appended
-                    prev_lines = prev.splitlines()
-                    new_lines = label_str.splitlines()
-                    new_lines = [line for line in new_lines if line not in prev_lines]
-                    prev_lines.extend(new_lines)
-                    appended_str = "\n".join(prev_lines)
-
-                    point_index_labels[result_idx] = (appended_str, lines_color_level)
-                else:
-                    prev_color_level = new_color_level
-                    point_index_labels[result_idx] = (label_str, prev_color_level)
+                        prev_color_level = new_color_level
+                        point_index_labels[result_idx] = (label_str, prev_color_level)
 
         # finally add the annotated circle for each label
         added = False
