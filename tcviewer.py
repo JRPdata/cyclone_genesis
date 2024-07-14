@@ -2439,9 +2439,6 @@ class App:
         self.add_marker_button = ttk.Button(self.tools_frame, text="ADD MARKER", command=self.add_marker, style="TButton")
         self.add_marker_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.add_marker_button = ttk.Button(self.tools_frame, text="ADD MARKER", command=self.add_marker, style="TButton")
-        self.add_marker_button.pack(side=tk.LEFT, padx=5, pady=5)
-
         self.label_mouse_coords_prefix = ttk.Label(self.tools_frame, text="Cursor position:", style="TLabel")
         self.label_mouse_coords_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
