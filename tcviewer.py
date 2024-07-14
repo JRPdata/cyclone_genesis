@@ -21,6 +21,14 @@
 # CLEAR (ALL OR SINGLE BOX) STORM EXTREMA ANNOTATIONS = c key
 # HIDE (MOUSE HOVERED) STORMS / SHOW ALL HIDDEN = h key
 
+# Click on (colored) legend for valid time days to cycle between what to display
+#   (relative to (00Z) start of earliest model init day)
+#   clicking on a legend box with a white edge toggles between:
+#       1: (default) display all storm track valid times prior to selected (changes successive legend edges bright pink)
+#       2: hide all storms with tracks with the first valid day later than selected (changes successive edges dark pink)
+#       3: hide all points with tracks later than valid day
+#   clicking on a pink/dark pink edge switches it to (1) white edge for all prior and (2) pink edge for days after
+
 ####### CONFIG
 
 # how often (in minutes) to check for stale data in three classes: tcvitals, adeck, bdecks
@@ -83,13 +91,13 @@ annotate_color_levels = {
 # what short names (keys) from annotations_result_val are actually annotated (order is as below for multiple lines at a point)
 #   displayable options are in annotations_result_val
 
-displayed_functional_annotations = [
+DISPLAYED_FUNCTIONAL_ANNOTATIONS = [
     "TC Start",
-    "Earliest Named",
+    "Earliest Named"
 ]
 
-'''
-displayed_functional_annotations = [
+# not a config. This is what is displayed in modal dialog for options. Placed here in case of user extensions.
+displayed_functional_annotation_options = [
     "TC Start",
     "Earliest Named",
     "Peak Vmax",
@@ -97,7 +105,6 @@ displayed_functional_annotations = [
     'Peak ROCI',
     "TC End"
 ]
-'''
 
 # custom comparison functions for annotations
 #   passing the lst of points (disturbance candidates) for the tc_candidate
@@ -211,6 +218,10 @@ from rtree import index
 import cartopy.geodesic as cgeo
 from shapely.geometry import LineString
 import numpy as np
+
+# config dialog
+from tkinter import simpledialog
+from tkinter import colorchooser
 
 # for tracking modification date of source files
 from dateutil import parser
@@ -1768,7 +1779,7 @@ class AnnotatedCircles():
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("Cartopy and Tkinter App")
+        self.root.title("tcviewer")
         self.root.attributes('-fullscreen', True)
         self.root.configure(bg="black")
 
@@ -1839,6 +1850,75 @@ class App:
 
         # annotated circles (for storm extrema)
         self.annotated_circles_object = None
+
+        # settings for plotting
+        self.time_step_marker_colors = [
+            '#ffff00',
+            '#ba0a0a', '#e45913', '#fb886e', '#fdd0a2',
+            '#005b1c', '#07a10b', '#9cd648', '#a5ee96',
+            '#0d3860', '#2155c4', '#33aaff', '#7acaff',
+            '#710173', '#b82cae', '#c171cf', '#ffb9ee',
+            '#636363', '#969696', '#bfbfbf', '#e9e9e9'
+        ]
+        self.time_step_legend_fg_colors = [
+            '#000000',
+            '#ffffff', '#ffffff', '#000000', '#000000',
+            '#ffffff', '#ffffff', '#000000', '#000000',
+            '#ffffff', '#ffffff', '#000000', '#000000',
+            '#ffffff', '#ffffff', '#000000', '#000000',
+            '#ffffff', '#000000', '#000000', '#000000'
+        ]
+        # Will change when clicked
+        self.time_step_opacity = [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+        ]
+        # Define 6 different time_step ranges and their corresponding colors
+        self.time_step_ranges = [
+            (float('-inf'),-1),
+            (0, 23),
+            (24,47),
+            (48,71),
+            (72,95),
+            (96,119),
+            (120,143),
+            (144,167),
+            (168,191),
+            (192,215),
+            (216,239),
+            (240,263),
+            (264,287),
+            (288,311),
+            (312,335),
+            (336,359),
+            (360,383),
+            (384,407),
+            (408,431),
+            (432,455),
+            (456, float('inf'))
+        ]
+        self.time_step_legend_objects = []
+
+        self.load_settings()
 
         self.create_widgets()
         self.display_map()
@@ -2161,6 +2241,7 @@ class App:
             self.annotate_single_storm_extrema(point_index=cursor_point_index)
 
     def annotate_single_storm_extrema(self, point_index = None):
+        global annotate_color_levels
         if point_index is None or len(point_index) != 3:
             return
         internal_id, tc_index, tc_point_index = point_index
@@ -2168,7 +2249,7 @@ class App:
             return
 
         results = {}
-        for short_name in displayed_functional_annotations:
+        for short_name in DISPLAYED_FUNCTIONAL_ANNOTATIONS:
             result_tuple = annotations_result_val[short_name](self.plotted_tc_candidates[tc_index][1])
             if not result_tuple:
                 continue
@@ -2318,6 +2399,9 @@ class App:
         self.switch_to_genesis_button = ttk.Button(self.adeck_mode_frame, text="SWITCH TO GENESIS MODE", command=self.switch_mode, style="TButton")
         self.switch_to_genesis_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
+        self.adeck_config_button = ttk.Button(self.adeck_mode_frame, text="CONFIG \u2699", command=self.show_config_adeck_dialog, style="TButton")
+        self.adeck_config_button.pack(side=tk.RIGHT, padx=5, pady=5)
+
     def create_genesis_mode_widgets(self):
         self.genesis_mode_frame = ttk.Frame(self.top_frame, style="TopFrame.TFrame")
 
@@ -2345,8 +2429,15 @@ class App:
         self.switch_to_adeck_button = ttk.Button(self.genesis_mode_frame, text="SWITCH TO ADECK MODE", command=self.switch_mode, style="TButton")
         self.switch_to_adeck_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
+        self.genesis_config_button = ttk.Button(self.genesis_mode_frame, text="CONFIG \u2699", command=self.show_config_genesis_dialog, style="TButton")
+        self.genesis_config_button.pack(side=tk.RIGHT, padx=5, pady=5)
+
+
     def create_tools_widgets(self):
         #self.tools_frame = ttk.Frame(self.tools_frame, style="Tools.TFrame")
+
+        self.add_marker_button = ttk.Button(self.tools_frame, text="ADD MARKER", command=self.add_marker, style="TButton")
+        self.add_marker_button.pack(side=tk.LEFT, padx=5, pady=5)
 
         self.add_marker_button = ttk.Button(self.tools_frame, text="ADD MARKER", command=self.add_marker, style="TButton")
         self.add_marker_button.pack(side=tk.LEFT, padx=5, pady=5)
@@ -2520,10 +2611,8 @@ class App:
 
     def reload(self):
         if self.mode == "ADECK":
-            self.hidden_tc_candidates = set()
-            self.display_map()
             self.update_deck_data()
-            self.display_deck_data()
+            self.redraw_map_with_data()
         elif self.mode == "GENESIS":
             self.display_map()
             model_cycle = self.genesis_model_cycle_time
@@ -2535,12 +2624,15 @@ class App:
                     model_cycle = model_cycles['next']
             if model_cycle:
                 # clear map
-                self.hidden_tc_candidates = set()
-                self.display_map()
-                self.update_genesis(model_cycle)
+                self.redraw_map_with_data(model_cycle=model_cycle)
 
-    def adeck(self):
-        pass  # Placeholder for adeck function
+    def redraw_map_with_data(self, model_cycle = None):
+        self.hidden_tc_candidates = set()
+        self.display_map()
+        if self.mode == "GENESIS" and model_cycle:
+            self.update_genesis(model_cycle)
+        elif self.mode == "ADECK":
+            self.display_deck_data()
 
     def get_selected_model_list(self):
         selected_text = self.adeck_selected.get()
@@ -2620,48 +2712,6 @@ class App:
 
         most_recent_timestamp = None
 
-        colors = [
-            '#ffff00',
-            '#ba0a0a', '#e45913', '#fb886e', '#fdd0a2',
-            '#005b1c', '#07a10b', '#9cd648', '#a5ee96',
-            '#0d3860', '#2155c4', '#33aaff', '#7acaff',
-            '#710173', '#b82cae', '#c171cf', '#ffb9ee',
-            '#636363', '#969696', '#bfbfbf', '#e9e9e9'
-        ]
-        label_fg_colors = [
-            '#000000',
-            '#ffffff', '#ffffff', '#000000', '#000000',
-            '#ffffff', '#ffffff', '#000000', '#000000',
-            '#ffffff', '#ffffff', '#000000', '#000000',
-            '#ffffff', '#ffffff', '#000000', '#000000',
-            '#ffffff', '#000000', '#000000', '#000000'
-        ]
-
-        # Define 6 different time_step ranges and their corresponding colors
-        time_step_ranges = [
-            (float('-inf'),-1),
-            (0, 23),
-            (24,47),
-            (48,71),
-            (72,95),
-            (96,119),
-            (120,143),
-            (144,167),
-            (168,191),
-            (192,215),
-            (216,239),
-            (240,263),
-            (264,287),
-            (288,311),
-            (312,335),
-            (336,359),
-            (360,383),
-            (384,407),
-            (408,431),
-            (432,455),
-            (456, float('inf'))
-        ]
-
         self.clear_plotted_list()
         numc = 0
         for storm_atcf_id, tc in tc_candidates.items():
@@ -2688,6 +2738,8 @@ class App:
                             continue
 
                     lat_lon_with_time_step_list = []
+                    # handle when we are hiding certain time steps or whether the storm itself should be hidden based on time step
+                    have_displayed_points = False
                     for valid_time, candidate in disturbance_candidates.items():
                         num += 1
                         if 'time_step' in candidate.keys():
@@ -2743,12 +2795,24 @@ class App:
                         prev_lon = lon
                         prev_lon_repeat1 = lon
 
-                        lat_lon_with_time_step_list.append(candidate_info)
+                        # check whether we want to display it (first valid time limit)
+                        for i, (start, end) in list(enumerate(self.time_step_ranges)):
+                            hours_after = candidate_info['hours_after_valid_day']
+                            if start <= hours_after <= end:
+                                if self.time_step_opacity[i] == 1.0:
+                                    lat_lon_with_time_step_list.append(candidate_info)
+                                    have_displayed_points = True
+                                elif have_displayed_points and self.time_step_opacity[i] == 0.6:
+                                    lat_lon_with_time_step_list.append(candidate_info)
+                                else:
+                                    # opacity == 0.3 case (hide all points beyond legend valid time)
+                                    break
 
-                    self.update_plotted_list(internal_id, lat_lon_with_time_step_list)
+                    if lat_lon_with_time_step_list:
+                        self.update_plotted_list(internal_id, lat_lon_with_time_step_list)
 
                     # do in reversed order so most recent items get rendered on top
-                    for i, (start, end) in reversed(list(enumerate(time_step_ranges))):
+                    for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
                         opacity = 1.0
                         radius = 6
                         lons = {}
@@ -2772,14 +2836,14 @@ class App:
                                 #self.ax.plot([point['lon_repeat']], [point['lat']], marker=marker, color=colors[i], markersize=radius, alpha=opacity)
 
                         for vmaxmarker in lons.keys():
-                            scatter = self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker, facecolors='none', edgecolors=colors[i], s=marker_sizes[vmaxmarker]**2, alpha=opacity, antialiased=False)
+                            scatter = self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker, facecolors='none', edgecolors=self.time_step_marker_colors[i], s=marker_sizes[vmaxmarker]**2, alpha=opacity, antialiased=False)
                             if internal_id not in self.scatter_objects:
                                 self.scatter_objects[internal_id] = []
                             self.scatter_objects[internal_id].append(scatter)
 
                     # do in reversed order so most recent items get rendered on top
-                    for i, (start, end) in reversed(list(enumerate(time_step_ranges))):
-                        line_color = colors[i]
+                    for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
+                        line_color = self.time_step_marker_colors[i]
                         opacity = 1.0
                         strokewidth = 0.5
 
@@ -2797,7 +2861,7 @@ class App:
                                     """
 
                         # Create a LineCollection
-                        lc = LineCollection(line_segments, color=colors[i], linewidth=strokewidth, alpha=opacity)
+                        lc = LineCollection(line_segments, color=self.time_step_marker_colors[i], linewidth=strokewidth, alpha=opacity)
                         # Add the LineCollection to the axes
                         line_collection = self.ax.add_collection(lc)
                         if internal_id not in self.line_collection_objects:
@@ -2806,16 +2870,25 @@ class App:
 
                         name = 'Tracks'
 
-        labels_positive = [f' D+{str(i): >2} ' for i in range(len(colors)-1)]  # Labels corresponding to colors
+        labels_positive = [f' D+{str(i): >2} ' for i in range(len(self.time_step_marker_colors)-1)]  # Labels corresponding to colors
         labels = [' D-   ']
         labels.extend(labels_positive)
 
-        for i, (color, label) in enumerate(zip(reversed(colors), reversed(labels))):
-            x_pos, y_pos = 100, 150 + i*20
+        self.time_step_legend_objects = []
 
-            self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color=list(reversed(label_fg_colors))[i],
+        for i, (color, label) in enumerate(zip(reversed(self.time_step_marker_colors), reversed(labels))):
+            x_pos, y_pos = 100, 150 + i*20
+            time_step_opacity = list(reversed(self.time_step_opacity))[i]
+            if time_step_opacity == 1.0:
+                edgecolor = "#FFFFFF"
+            elif time_step_opacity == 0.6:
+                edgecolor = "#FF77B0"
+            else:
+                edgecolor = "#A63579"
+            legend_object = self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color=list(reversed(self.time_step_legend_fg_colors))[i],
                         fontsize=8, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
-                                                                      edgecolor='#FFFFFF', facecolor=color, alpha=1.0))
+                                                                      edgecolor=edgecolor, facecolor=color, alpha=1.0))
+            self.time_step_legend_objects.append(legend_object)
 
         # Draw the second legend items inline using display coordinates
         for i, label in enumerate(reversed(vmax_labels)):
@@ -2836,9 +2909,7 @@ class App:
 
         if model_cycle:
             # clear map
-            self.hidden_tc_candidates = set()
-            self.display_map()
-            self.update_genesis(model_cycle)
+            self.redraw_map_with_data(model_cycle=model_cycle)
 
     def prev_genesis_cycle(self):
         if self.genesis_model_cycle_time is None:
@@ -2857,9 +2928,7 @@ class App:
 
         if model_cycle:
             if model_cycle != self.genesis_model_cycle_time:
-                self.display_map()
-                self.hidden_tc_candidates = set()
-                self.update_genesis(model_cycle)
+                self.redraw_map_with_data(model_cycle=model_cycle)
 
     def next_genesis_cycle(self):
         if self.genesis_model_cycle_time is None:
@@ -2878,9 +2947,7 @@ class App:
 
         if model_cycle:
             if model_cycle != self.genesis_model_cycle_time:
-                self.display_map()
-                self.hidden_tc_candidates = set()
-                self.update_genesis(model_cycle)
+                self.redraw_map_with_data(model_cycle=model_cycle)
 
     def update_genesis(self, model_cycle):
         #vmax_kt_threshold = [(34.0, 'v'), (64.0, '^'), (83.0, 's'), (96.0, 'p'), (113.0, 'o'), (137.0, 'D'), (float('inf'), '+')]
@@ -2928,48 +2995,6 @@ class App:
 
         most_recent_timestamp = None
 
-        colors = [
-            '#ffff00',
-            '#ba0a0a', '#e45913', '#fb886e', '#fdd0a2',
-            '#005b1c', '#07a10b', '#9cd648', '#a5ee96',
-            '#0d3860', '#2155c4', '#33aaff', '#7acaff',
-            '#710173', '#b82cae', '#c171cf', '#ffb9ee',
-            '#636363', '#969696', '#bfbfbf', '#e9e9e9'
-        ]
-        label_fg_colors = [
-            '#000000',
-            '#ffffff', '#ffffff', '#000000', '#000000',
-            '#ffffff', '#ffffff', '#000000', '#000000',
-            '#ffffff', '#ffffff', '#000000', '#000000',
-            '#ffffff', '#ffffff', '#000000', '#000000',
-            '#ffffff', '#000000', '#000000', '#000000'
-        ]
-
-        # Define 6 different time_step ranges and their corresponding colors
-        time_step_ranges = [
-            (float('-inf'),-1),
-            (0, 23),
-            (24,47),
-            (48,71),
-            (72,95),
-            (96,119),
-            (120,143),
-            (144,167),
-            (168,191),
-            (192,215),
-            (216,239),
-            (240,263),
-            (264,287),
-            (288,311),
-            (312,335),
-            (336,359),
-            (360,383),
-            (384,407),
-            (408,431),
-            (432,455),
-            (456, float('inf'))
-        ]
-
         self.clear_plotted_list()
         numc = 0
         for tc in tc_candidates:
@@ -3007,6 +3032,8 @@ class App:
                     continue
 
                 lat_lon_with_time_step_list = []
+                # handle when we are hiding certain time steps or whether the storm itself should be hidden based on time step
+                have_displayed_points = False
                 for time_step_str, valid_time_str, candidate in disturbance_candidates:
                     num += 1
                     time_step_int = int(time_step_str)
@@ -3049,7 +3076,19 @@ class App:
                     prev_lon = lon
                     prev_lon_repeat1 = lon
 
-                    lat_lon_with_time_step_list.append(candidate_info)
+                    # check whether we want to display it (first valid time limit)
+                    for i, (start, end) in list(enumerate(self.time_step_ranges)):
+                        hours_after = candidate_info['hours_after_valid_day']
+                        if start <= hours_after <= end:
+                            if self.time_step_opacity[i] == 1.0:
+                                lat_lon_with_time_step_list.append(candidate_info)
+                                have_displayed_points = True
+                            elif have_displayed_points and self.time_step_opacity[i] == 0.6:
+                                lat_lon_with_time_step_list.append(candidate_info)
+                            else:
+                                # opacity == 0.3 case (hide all points beyond legend valid time)
+                                break
+
                     """
                     # add copies to extend the map left and right
                     ccopy = candidate_info.copy()
@@ -3085,10 +3124,11 @@ class App:
 
                     """
 
-                self.update_plotted_list(internal_id, lat_lon_with_time_step_list)
+                if lat_lon_with_time_step_list:
+                    self.update_plotted_list(internal_id, lat_lon_with_time_step_list)
 
                 # do in reversed order so most recent items get rendered on top
-                for i, (start, end) in reversed(list(enumerate(time_step_ranges))):
+                for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
                     opacity = 1.0
                     radius = 6
                     lons = {}
@@ -3111,14 +3151,14 @@ class App:
                             #self.ax.plot([point['lon_repeat']], [point['lat']], marker=marker, color=colors[i], markersize=radius, alpha=opacity)
 
                     for vmaxmarker in lons.keys():
-                        scatter = self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker, facecolors='none', edgecolors=colors[i], s=marker_sizes[vmaxmarker]**2, alpha=opacity, antialiased=False)
+                        scatter = self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker, facecolors='none', edgecolors=self.time_step_marker_colors[i], s=marker_sizes[vmaxmarker]**2, alpha=opacity, antialiased=False)
                         if internal_id not in self.scatter_objects:
                             self.scatter_objects[internal_id] = []
                         self.scatter_objects[internal_id].append(scatter)
 
                 # do in reversed order so most recent items get rendered on top
-                for i, (start, end) in reversed(list(enumerate(time_step_ranges))):
-                    line_color = colors[i]
+                for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
+                    line_color = self.time_step_marker_colors[i]
                     opacity = 1.0
                     strokewidth = 0.5
 
@@ -3136,7 +3176,7 @@ class App:
                                 """
 
                     # Create a LineCollection
-                    lc = LineCollection(line_segments, color=colors[i], linewidth=strokewidth, alpha=opacity)
+                    lc = LineCollection(line_segments, color=self.time_step_marker_colors[i], linewidth=strokewidth, alpha=opacity)
                     # Add the LineCollection to the axes
                     line_collection = self.ax.add_collection(lc)
                     if internal_id not in self.line_collection_objects:
@@ -3145,16 +3185,26 @@ class App:
 
                     name = 'Tracks'
 
-        labels_positive = [f' D+{str(i): >2} ' for i in range(len(colors)-1)]  # Labels corresponding to colors
+        labels_positive = [f' D+{str(i): >2} ' for i in range(len(self.time_step_marker_colors)-1)]  # Labels corresponding to colors
         labels = [' D-   ']
         labels.extend(labels_positive)
 
-        for i, (color, label) in enumerate(zip(reversed(colors), reversed(labels))):
+        self.time_step_legend_objects = []
+
+        for i, (color, label) in enumerate(zip(reversed(self.time_step_marker_colors), reversed(labels))):
             x_pos, y_pos = 100, 150 + i*20
 
-            self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color=list(reversed(label_fg_colors))[i],
+            time_step_opacity = list(reversed(self.time_step_opacity))[i]
+            if time_step_opacity == 1.0:
+                edgecolor = "#FFFFFF"
+            elif time_step_opacity == 0.6:
+                edgecolor = "#FF77B0"
+            else:
+                edgecolor = "#A63579"
+            legend_object = self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color=list(reversed(self.time_step_legend_fg_colors))[i],
                         fontsize=8, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
-                                                                      edgecolor='#FFFFFF', facecolor=color, alpha=1.0))
+                                                                      edgecolor=edgecolor, facecolor=color, alpha=1.0))
+            self.time_step_legend_objects.append(legend_object)
 
         # Draw the second legend items inline using display coordinates
         for i, label in enumerate(reversed(vmax_labels)):
@@ -3410,10 +3460,56 @@ class App:
                                     if annotation and annotation.contains_point(event):
                                         return
 
+                        changed_opacity = False
+                        changed_opacity_index = 0
+                        # the time_step legend is ordered bottom up (furthest valid time first)
+                        new_opacity = 1.0
+                        if self.time_step_legend_objects:
+                            opacity = self.time_step_opacity[0]
+
+                            for i, time_step_legend_object in list(enumerate(reversed(self.time_step_legend_objects))):
+                                bbox = time_step_legend_object.get_window_extent()
+                                if bbox.contains(event.x, event.y):
+                                    changed_opacity = True
+                                    # clicked on legend
+                                    changed_opacity_index = i
+                                    # cycle between:
+                                    #   1.0:    all visible
+                                    #   0.6:    hide all storms tracks with start valid_time later than selected
+                                    #   0.3:    hide all points beyond valid_time later than selected
+                                    next_opacity_index = min(changed_opacity_index + 1, len(self.time_step_opacity) - 1)
+                                    if self.time_step_opacity[i] != 1.0:
+                                        # not cycling
+                                        new_opacity = 0.6
+                                    else:
+                                        if self.time_step_opacity[next_opacity_index] == 1.0:
+                                            new_opacity = 0.6
+                                        elif self.time_step_opacity[next_opacity_index] == 0.6:
+                                            new_opacity = 0.3
+                                        else:
+                                            new_opacity = 1.0
+                                    break
+
+                            if changed_opacity:
+                                for i, time_step_legend_object in list(enumerate(reversed(self.time_step_legend_objects))):
+                                    if i > changed_opacity_index:
+                                        self.time_step_opacity[i] = new_opacity
+                                    else:
+                                        self.time_step_opacity[i] = 1.0
+
                         self.zoom_rect = [event.xdata, event.ydata]
                         if self.rect_patch:
                             self.rect_patch.remove()
                             self.rect_patch = None
+
+                        if changed_opacity:
+                            # update map as we have changed what is visible
+                            model_cycle = None
+                            if self.mode == "GENESIS":
+                                model_cycle = self.genesis_model_cycle_time
+
+                            self.redraw_map_with_data(model_cycle=model_cycle)
+
                     elif event.button == 3:  # Right click
                         self.zoom_out()
 
@@ -3484,7 +3580,7 @@ class App:
         if self.circle_handle:
             self.circle_handle.remove()
 
-        self.circle_handle = Circle((lon, lat), radius=self.calculate_radius_pixels(), color='pink', fill=False, linestyle='dotted', linewidth=2, alpha=0.8,
+        self.circle_handle = Circle((lon, lat), radius=self.calculate_radius_pixels(), color=DEFAULT_ANNOTATE_MARKER_COLOR, fill=False, linestyle='dotted', linewidth=2, alpha=0.8,
                                     transform=ccrs.PlateCarree())
         self.ax.add_patch(self.circle_handle)
         self.fig.canvas.draw()
@@ -3825,6 +3921,199 @@ class App:
                 self.clear_storm_extrema_annotations()
                 self.update_axes()
                 self.fig.canvas.draw()
+
+    def show_config_genesis_dialog(self):
+        self.show_config_dialog()
+
+    def show_config_adeck_dialog(self):
+        self.show_config_dialog()
+
+    def show_config_dialog(self):
+        global displayed_functional_annotation_options
+        global annotate_color_levels
+        global DISPLAYED_FUNCTIONAL_ANNOTATIONS
+        global DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS
+        global ZOOM_IN_STEP_FACTOR
+        global MIN_GRID_LINE_SPACING_INCHES
+        global DEFAULT_ANNOTATE_MARKER_COLOR
+        global DEFAULT_ANNOTATE_TEXT_COLOR
+        global ANNOTATE_DT_START_COLOR
+        global ANNOTATE_EARLIEST_NAMED_COLOR
+        global ANNOTATE_VMAX_COLOR
+        settings = {
+            'DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS': tk.IntVar(value=DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS),
+            'ZOOM_IN_STEP_FACTOR': tk.DoubleVar(value=ZOOM_IN_STEP_FACTOR),
+            'MIN_GRID_LINE_SPACING_INCHES': tk.DoubleVar(value=MIN_GRID_LINE_SPACING_INCHES),
+            'DEFAULT_ANNOTATE_MARKER_COLOR': tk.StringVar(value=DEFAULT_ANNOTATE_MARKER_COLOR),
+            'DEFAULT_ANNOTATE_TEXT_COLOR': tk.StringVar(value=DEFAULT_ANNOTATE_TEXT_COLOR),
+            'ANNOTATE_DT_START_COLOR': tk.StringVar(value=ANNOTATE_DT_START_COLOR),
+            'ANNOTATE_EARLIEST_NAMED_COLOR': tk.StringVar(value=ANNOTATE_EARLIEST_NAMED_COLOR),
+            'ANNOTATE_VMAX_COLOR': tk.StringVar(value=ANNOTATE_VMAX_COLOR),
+        }
+        dialog = ConfigDialog(self.root, displayed_functional_annotation_options, DISPLAYED_FUNCTIONAL_ANNOTATIONS, settings)
+        if dialog.result:
+            result = dialog.result
+            updated_annotated_colors = False
+            for key, vals in result.items():
+                if key == 'annotation_label_options':
+                    DISPLAYED_FUNCTIONAL_ANNOTATIONS = [option for option in displayed_functional_annotation_options if option in vals]
+                elif key == 'settings':
+                    for global_setting_name, val in vals.items():
+                        if global_setting_name in settings.keys():
+                            if 'ANNOTATE' and 'COLOR' in global_setting_name:
+                                updated_annotated_colors = True
+                            globals()[global_setting_name] = val
+            if updated_annotated_colors:
+                # must update the color levels from which we actually pick the colors
+                annotate_color_levels = {
+                    0: DEFAULT_ANNOTATE_TEXT_COLOR,
+                    1: ANNOTATE_DT_START_COLOR,
+                    2: ANNOTATE_EARLIEST_NAMED_COLOR,
+                    3: ANNOTATE_VMAX_COLOR
+                }
+
+            # Save settings to file
+            with open('settings_tcviewer.json', 'w') as f:
+                json.dump(result, f, indent=4)
+
+        # fix focus back to root
+        self.canvas.get_tk_widget().focus_set()
+
+    def load_settings(self):
+        try:
+            global displayed_functional_annotation_options
+            global annotate_color_levels
+            global DISPLAYED_FUNCTIONAL_ANNOTATIONS
+            global DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS
+            global ZOOM_IN_STEP_FACTOR
+            global MIN_GRID_LINE_SPACING_INCHES
+            global DEFAULT_ANNOTATE_MARKER_COLOR
+            global DEFAULT_ANNOTATE_TEXT_COLOR
+            global ANNOTATE_DT_START_COLOR
+            global ANNOTATE_EARLIEST_NAMED_COLOR
+            global ANNOTATE_VMAX_COLOR
+            with open('settings_tcviewer.json', 'r') as f:
+                settings = json.load(f)
+                for key, val in settings.items():
+                    if key == 'annotation_label_options':
+                        DISPLAYED_FUNCTIONAL_ANNOTATIONS = [option for option in displayed_functional_annotation_options if option in val]
+                    elif key == 'settings':
+                        for global_setting_name, val in val.items():
+                            globals()[global_setting_name] = val
+                annotate_color_levels = {
+                    0: DEFAULT_ANNOTATE_TEXT_COLOR,
+                    1: ANNOTATE_DT_START_COLOR,
+                    2: ANNOTATE_EARLIEST_NAMED_COLOR,
+                    3: ANNOTATE_VMAX_COLOR
+                }
+        except FileNotFoundError:
+            pass
+
+class ConfigDialog(simpledialog.Dialog):
+    def __init__(self, master, annotation_label_options, selected_annotation_label_options, settings):
+        self.annotation_label_options = annotation_label_options
+        self.selected_annotation_label_options = selected_annotation_label_options
+        self.settings = settings
+        super().__init__(master, title="Settings")  # Set the title here
+
+    def restore_defaults(self):
+        import os
+        os.remove('settings_tcviewer.json')
+        self.cancel()
+
+    def buttonbox(self):
+        box = tk.Frame(self)
+        w = tk.Button(box, text="Restore All Defaults (requires restart)", command=self.restore_defaults)
+        w.pack(side=tk.LEFT, padx=5, pady=5)
+        w = tk.Button(box, text="OK", command=self.ok)
+        w.pack(side=tk.LEFT, padx=5, pady=5)
+        w = tk.Button(box, text="Cancel", command=self.cancel)
+        w.pack(side=tk.LEFT, padx=5, pady=5)
+        self.bind("<Return>", self.ok)
+        self.bind("<Escape>", self.cancel)
+        box.pack()
+
+    def body(self, master):
+        notebook = ttk.Notebook(master)
+        notebook.pack(fill="both", expand=True)
+
+        # Create a frame for each tab
+        map_settings_frame = tk.Frame(notebook)
+        notebook.add(map_settings_frame, text="Map")
+
+        annotation_colors_frame = tk.Frame(notebook)
+        notebook.add(annotation_colors_frame, text="Annotation Colors")
+
+        extrema_annotations_frame = tk.Frame(notebook)
+        notebook.add(extrema_annotations_frame, text="Annotation Labels")
+
+        # Add your widgets for the "Map Settings" tab here
+        tk.Label(map_settings_frame, text="Circle patch radius (pixels):").pack()
+        tk.Entry(map_settings_frame, textvariable=self.settings['DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS']).pack()
+        tk.Label(map_settings_frame, text="Zoom in step factor:").pack()
+        tk.Entry(map_settings_frame, textvariable=self.settings['ZOOM_IN_STEP_FACTOR']).pack()
+        tk.Label(map_settings_frame, text="Min grid line spacing (inches):").pack()
+        tk.Entry(map_settings_frame, textvariable=self.settings['MIN_GRID_LINE_SPACING_INCHES']).pack()
+
+        # Add your widgets for the "Annotation Colors" tab here
+        tk.Label(annotation_colors_frame, text="(Circle hover) Marker color:").pack()
+        self.default_annotate_marker_color_label = tk.Label(annotation_colors_frame, text="", width=10, bg=self.settings['DEFAULT_ANNOTATE_MARKER_COLOR'].get())
+        self.default_annotate_marker_color_label.pack()
+        self.default_annotate_marker_color_label.bind("<Button-1>", lambda event: self.choose_color('DEFAULT_ANNOTATE_MARKER_COLOR'))
+
+        tk.Label(annotation_colors_frame, text="Default annotation text color:").pack()
+        self.default_annotate_text_color_label = tk.Label(annotation_colors_frame, text="", width=10, bg=self.settings['DEFAULT_ANNOTATE_TEXT_COLOR'].get())
+        self.default_annotate_text_color_label.pack()
+        self.default_annotate_text_color_label.bind("<Button-1>", lambda event: self.choose_color('DEFAULT_ANNOTATE_TEXT_COLOR'))
+
+        tk.Label(annotation_colors_frame, text="TC start text color:").pack()
+        self.annotate_dt_start_color_label = tk.Label(annotation_colors_frame, text="", width=10, bg=self.settings['ANNOTATE_DT_START_COLOR'].get())
+        self.annotate_dt_start_color_label.pack()
+        self.annotate_dt_start_color_label.bind("<Button-1>", lambda event: self.choose_color('ANNOTATE_DT_START_COLOR'))
+
+        tk.Label(annotation_colors_frame, text="Earliest named text color:").pack()
+        self.annotate_earliest_named_color_label = tk.Label(annotation_colors_frame, text="", width=10, bg=self.settings['ANNOTATE_EARLIEST_NAMED_COLOR'].get())
+        self.annotate_earliest_named_color_label.pack()
+        self.annotate_earliest_named_color_label.bind("<Button-1>", lambda event: self.choose_color('ANNOTATE_EARLIEST_NAMED_COLOR'))
+
+        tk.Label(annotation_colors_frame, text="Vmax text color:").pack()
+        self.annotate_vmax_color_label = tk.Label(annotation_colors_frame, text="", width=10, bg=self.settings['ANNOTATE_VMAX_COLOR'].get())
+        self.annotate_vmax_color_label.pack()
+        self.annotate_vmax_color_label.bind("<Button-1>", lambda event: self.choose_color('ANNOTATE_VMAX_COLOR'))
+
+        self.color_labels = {
+            'DEFAULT_ANNOTATE_MARKER_COLOR': self.default_annotate_marker_color_label,
+            'DEFAULT_ANNOTATE_TEXT_COLOR': self.default_annotate_text_color_label,
+            'ANNOTATE_DT_START_COLOR': self.annotate_dt_start_color_label,
+            'ANNOTATE_EARLIEST_NAMED_COLOR': self.annotate_earliest_named_color_label,
+            'ANNOTATE_VMAX_COLOR': self.annotate_vmax_color_label,
+        }
+
+        # Add your widgets for the "Extrema Annotations" tab here
+        self.annotation_label_checkboxes = {}
+        for option in self.annotation_label_options:
+            var = tk.IntVar()
+            cb = tk.Checkbutton(extrema_annotations_frame, text=option, variable=var)
+            cb.pack(anchor=tk.W)
+            self.annotation_label_checkboxes[option] = var
+            if option in self.selected_annotation_label_options:
+                var.set(1)
+
+        return master
+
+    def choose_color(self, setting_name):
+        color_obj = self.settings[setting_name]
+        if color_obj:
+            color = colorchooser.askcolor(color=color_obj.get())[1]
+            if color:
+                color_obj.set(color)
+                self.color_labels[setting_name].config(bg=color)
+
+    def apply(self):
+        self.result = {
+            'annotation_label_options': [option for option, var in self.annotation_label_checkboxes.items() if var.get()],
+            'settings': {key: var.get() for key, var in self.settings.items()}
+        }
 
 if __name__ == "__main__":
     root = tk.Tk()
