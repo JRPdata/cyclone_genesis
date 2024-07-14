@@ -18,7 +18,7 @@
 # ERASE MEASURE = right click
 # VIEW NEXT OVERLAPPED HOVER POINT STATUS = n key  (this will not redraw points of overlapped storms, only update hover text)
 # CIRCLE & ANNOTATE STORM EXTREMA = x key  (annotates either the selected storm in circle patch, or all storms in current view (zoom))
-# CLEAR ALL STORM EXTREMA ANNOTATIONS = c key
+# CLEAR (ALL OR SINGLE BOX) STORM EXTREMA ANNOTATIONS = c key
 # HIDE (MOUSE HOVERED) STORMS / SHOW ALL HIDDEN = h key
 
 ####### CONFIG
@@ -1243,6 +1243,8 @@ class DraggableAnnotation:
 
         self.visible = True
 
+        self.annotated_circle = None
+
         # Extract essential properties from the original annotation
         text = self.original_annotation.get_text()
         xy = self.original_annotation.get_position()
@@ -1284,12 +1286,17 @@ class DraggableAnnotation:
     def is_dragging(self):
         return self.dragging
 
+    def set_circle_annotation(self, circle_annotation):
+        self.circle_annotation = circle_annotation
+
     @classmethod
     def get_topmost_annotation(cls, annotations, event):
         # need a separate is dragging flag as bbox is unstable when we are blitting
         #  (as we it can become invisible during the setup for blitting (in an async event with the other handlers)
         #  the bbox will result erroneously in a 1 pixel box causing the wrong annotation to drag
-        valid_annotations = [ann for ann in annotations if ann.is_dragging() or ann.contains_point(event)]
+        if not annotations:
+            return None
+        valid_annotations = [ann for ann in annotations if ann and (ann.is_dragging() or ann.contains_point(event))]
         if not valid_annotations:
             return None
         max_zorder = max(valid_annotations, key=lambda ann: ann.zorder).zorder
@@ -1316,11 +1323,17 @@ class DraggableAnnotation:
         return radius_degrees
 
     def contains_point(self, event):
-        bbox = self.original_annotation.get_window_extent()
-        return bbox.contains(event.x, event.y)
+        if self.original_annotation and self.original_annotation.get_visible():
+            bbox = self.original_annotation.get_window_extent()
+            return bbox.contains(event.x, event.y)
+        else:
+            return False
 
     def on_press(self, event):
         if not self.visible:
+            return
+
+        if not self.ax.draggable_annotations:
             return
 
         if self != self.get_topmost_annotation(self.ax.draggable_annotations, event):
@@ -1435,6 +1448,19 @@ class DraggableAnnotation:
         self.ax.draw_artist(self.line)
         self.ax.figure.canvas.blit(self.ax.bbox)
 
+    def has_focus(self, event):
+        if not self.visible:
+            return False
+
+        if self != self.get_topmost_annotation(self.ax.draggable_annotations, event):
+            return False
+
+        contains, attrd = self.original_annotation.contains(event)
+        if not contains:
+            return False
+
+        return True
+
     def isVisible(self):
         return self.visible
 
@@ -1475,20 +1501,56 @@ class DraggableAnnotation:
         self.dragging_annotation.remove()
 
 class AnnotatedCircles():
-    def __init__(self, ax):
-        self.ax = ax
-        self.circle_handles = None
-        #self.annotation_handles = None
-        self.ax.draggable_annotations = None
-        self.rtree_p = index.Property()
-        self.rtree_idx = index.Index(properties=self.rtree_p)
-        self.annotated_circles = None
+    ax = None
+    circle_handles = None
+    rtree_p = index.Property()
+    rtree_idx = index.Index(properties=rtree_p)
+    annotated_circles = None
+    # only increment counter so we only have unique ids
+    counter = 0
+
+    def __init__(self, fig_ax):
+        AnnotatedCircles.ax = fig_ax
+        AnnotatedCircles.circle_handles = None
+        AnnotatedCircles.ax.draggable_annotations = None
+        AnnotatedCircles.rtree_p = index.Property()
+        AnnotatedCircles.rtree_idx = index.Index(properties=AnnotatedCircles.rtree_p)
+        AnnotatedCircles.annotated_circles = None
+        AnnotatedCircles.counter = 0
+
+    def add_point(self, coords):
+        AnnotatedCircles.counter += 1
+        AnnotatedCircles.rtree_idx.insert(AnnotatedCircles.counter, coords)
+        return AnnotatedCircles.counter
+
+    def delete_point(self, id):
+        # past the entire map
+        coords = (-1000.0, -1000, 1000.0, 1000.0)
+        # need the precise bbox to delete from an item from the rtree
+        # find the matching item first
+        matching_item = None
+        for item in AnnotatedCircles.rtree_idx.intersection(coords, objects=True):
+            if item.id == id:
+                matching_item = item
+                break
+
+        if not matching_item:
+            return
+
+        # Delete the item using its own coordinates
+        AnnotatedCircles.rtree_idx.delete(item.id, item.bbox)
 
     class AnnotatedCircle():
-        def __init__(self, draggable_annotation, circle_handle):
+        def __init__(self, draggable_annotation, circle_handle, rtree_id):
             self.draggable_annotation_object = draggable_annotation
             self.circle_handle_object = circle_handle
             self.visible = True
+            # id in the index for rtree_idx
+            self.rtree_id = rtree_id
+
+        def annotation_has_focus(self, event):
+            if self.draggable_annotation_object:
+                return self.draggable_annotation_object.has_focus(event)
 
         def isVisible(self):
             return self.visible
@@ -1512,18 +1574,57 @@ class AnnotatedCircles():
 
             self.visible = visibilityTarget
 
-    def get_annotations(self):
-        return self.ax.draggable_annotations
+        def remove(self):
+            removed = False
+            if self.draggable_annotation_object:
+                try:
+                    self.draggable_annotation_object.remove()
+
+                    removed = True
+                except:
+                    traceback.print_exc()
+                    pass
+                #self.annotation_handles = None
+                draggable_annotations = AnnotatedCircles.get_draggable_annotations(self)
+                if draggable_annotations:
+                    draggable_annotations.remove(self.draggable_annotation_object)
+                self.draggable_annotation_object = None
+            if self.circle_handle_object:
+                try:
+                    self.circle_handle_object.remove()
+                    removed = True
+                except:
+                    traceback.print_exc()
+                    pass
+                circle_handles = AnnotatedCircles.get_circle_handles(self)
+                if circle_handles:
+                    circle_handles.remove(self.circle_handle_object)
+                self.circle_handle_object = None
+            if removed:
+                AnnotatedCircles.delete_point(self, self.rtree_id)
+
+                if AnnotatedCircles.annotated_circles:
+                    AnnotatedCircles.annotated_circles.remove(self)
+
+    def get_draggable_annotations(self):
+        if AnnotatedCircles.ax and hasattr(AnnotatedCircles.ax, 'draggable_annotations'):
+            return AnnotatedCircles.ax.draggable_annotations
+        return None
+
+    def get_circle_handles(self):
+        if AnnotatedCircles.circle_handles:
+            return AnnotatedCircles.circle_handles
+        return None
 
     # calculate radius of pixels in degrees
     def calculate_radius_pixels(self):
         # Get current extent of the map in degrees and pixels
-        extent = self.ax.get_extent()
+        extent = AnnotatedCircles.ax.get_extent()
         lon_diff = extent[1] - extent[0]
         lat_diff = extent[3] - extent[2]
 
         # Get window extent in pixels
-        window_extent = self.ax.get_window_extent()
+        window_extent = AnnotatedCircles.ax.get_window_extent()
         lon_pixels = window_extent.width
         lat_pixels = window_extent.height
 
@@ -1539,12 +1640,12 @@ class AnnotatedCircles():
     # calculate annotation offset of pixels in degrees (of where to place the annotation next to the circle)
     def calculate_offset_pixels(self):
         # Get current extent of the map in degrees and pixels
-        extent = self.ax.get_extent()
+        extent = AnnotatedCircles.ax.get_extent()
         lon_diff = extent[1] - extent[0]
         lat_diff = extent[3] - extent[2]
 
         # Get window extent in pixels
-        window_extent = self.ax.get_window_extent()
+        window_extent = AnnotatedCircles.ax.get_window_extent()
         lon_pixels = window_extent.width
         lat_pixels = window_extent.height
 
@@ -1564,12 +1665,12 @@ class AnnotatedCircles():
     def add(self, lat=None, lon=None, label=None, label_color=DEFAULT_ANNOTATE_TEXT_COLOR):
         if lat is None or lon is None or label is None or self.ax is None:
             return None
-        if self.circle_handles is None:
-            self.circle_handles = []
+        if AnnotatedCircles.circle_handles is None:
+            AnnotatedCircles.circle_handles = []
         #if self.annotation_handles is None:
         #    self.annotation_handles = []
-        if self.ax.draggable_annotations is None:
-            self.ax.draggable_annotations = []
+        if not hasattr(AnnotatedCircles.ax, 'draggable_annotations') or AnnotatedCircles.ax.draggable_annotations is None:
+            AnnotatedCircles.ax.draggable_annotations = []
 
         if self.has_overlap(lat=lat, lon=lon):
             return None
@@ -1579,9 +1680,9 @@ class AnnotatedCircles():
         radius_pixels_degrees = self.calculate_radius_pixels()
         circle_handle = Circle((lon, lat), radius=radius_pixels_degrees, color=DEFAULT_ANNOTATE_MARKER_COLOR, fill=False, linestyle='dotted', linewidth=2, alpha=0.8,
                                     transform=ccrs.PlateCarree())
-        self.ax.add_patch(circle_handle)
-        self.rtree_idx.insert(len(self.rtree_idx), (lon, lat, lon, lat))
-        self.circle_handles.append(circle_handle)
+        AnnotatedCircles.ax.add_patch(circle_handle)
+        rtree_id = self.add_point((lon, lat, lon, lat))
+        AnnotatedCircles.circle_handles.append(circle_handle)
 
         bbox_props = {
             'boxstyle': 'round,pad=0.3',
@@ -1591,34 +1692,36 @@ class AnnotatedCircles():
         }
 
         # Original annotation creation with DraggableAnnotation integration
-        annotation_handle = self.ax.annotate(label, xy=(lon, lat), xytext=(lon + lon_offset, lat + lat_offset), textcoords='data', color=label_color,
+        annotation_handle = AnnotatedCircles.ax.annotate(label, xy=(lon, lat), xytext=(lon + lon_offset, lat + lat_offset), textcoords='data', color=label_color,
                             fontsize=12, ha='left', va='bottom', bbox=bbox_props)
 
         # Create DraggableAnnotation instance
-        draggable_annotation = DraggableAnnotation(annotation_handle, (lon, lat), self.ax, bbox_props)
+        draggable_annotation = DraggableAnnotation(annotation_handle, (lon, lat), AnnotatedCircles.ax, bbox_props)
 
         # Store the DraggableAnnotation instance
         #self.annotations.append(draggable_annotation)
-        self.ax.draggable_annotations.append(draggable_annotation)
 
-        annotated_circle = self.AnnotatedCircle(draggable_annotation, circle_handle)
-        if not self.annotated_circles:
-            self.annotated_circles = []
-        self.annotated_circles.append(annotated_circle)
+        annotated_circle = self.AnnotatedCircle(draggable_annotation, circle_handle, rtree_id)
+        if not AnnotatedCircles.annotated_circles:
+            AnnotatedCircles.annotated_circles = []
+        AnnotatedCircles.annotated_circles.append(annotated_circle)
+        # create a way access the annotated_circle from the draggable annotation
+        draggable_annotation.set_circle_annotation(annotated_circle)
+        AnnotatedCircles.ax.draggable_annotations.append(draggable_annotation)
 
         return annotated_circle
         # draw later as we will likely add multiple circles
         #self.canvas.draw()
 
     def has_overlap(self, lat=None, lon=None):
-        if lat is None or lon is None or len(self.rtree_idx) == 0:
+        if lat is None or lon is None or len(AnnotatedCircles.rtree_idx) == 0:
             return False
         # Define a bounding box around the annotated circle for initial query (in degrees)
         buffer = ANNOTATE_CIRCLE_OVERLAP_IN_DEGREES  # Adjust this value based on desired precision
         bounding_box = (lon - buffer, lat - buffer, lon + buffer, lat + buffer)
 
         # Query the R-tree for points within the bounding box
-        possible_matches = list(self.rtree_idx.intersection(bounding_box, objects=True))
+        possible_matches = list(AnnotatedCircles.rtree_idx.intersection(bounding_box, objects=True))
 
         if possible_matches:
             return True
@@ -1628,35 +1731,37 @@ class AnnotatedCircles():
     def clear(self):
         cleared = False
         #if self.annotation_handles:
-        if self.ax.draggable_annotations:
+        if not AnnotatedCircles.ax or not hasattr(AnnotatedCircles.ax, 'draggable_annotations'):
+            return
+        if AnnotatedCircles.ax.draggable_annotations:
             cleared = True
             try:
                 #for annotation_handle in self.annotation_handles:
                 #    annotation_handle.remove()
-                for annotation in self.ax.draggable_annotations:
+                for annotation in AnnotatedCircles.ax.draggable_annotations:
                     annotation.remove()
             except:
                 traceback.print_exc()
                 pass
             #self.annotation_handles = None
-            self.ax.draggable_annotations = None
-        if self.circle_handles:
+            AnnotatedCircles.ax.draggable_annotations = None
+        if AnnotatedCircles.circle_handles:
             cleared = True
             try:
-                for circle_handle in self.circle_handles:
+                for circle_handle in AnnotatedCircles.circle_handles:
                     circle_handle.remove()
             except:
                 traceback.print_exc()
                 pass
-            self.circle_handles = None
-        if self.rtree_p:
+            AnnotatedCircles.circle_handles = None
+        if AnnotatedCircles.rtree_p:
             cleared = True
-            self.rtree_p = index.Property()
-        if self.rtree_idx:
+            AnnotatedCircles.rtree_p = index.Property()
+        if AnnotatedCircles.rtree_idx:
             cleared = True
-            self.rtree_idx = index.Index(properties=self.rtree_p)
-        if self.annotated_circles:
-            self.annotated_circles = []
+            AnnotatedCircles.rtree_idx = index.Index(properties=AnnotatedCircles.rtree_p)
+        if AnnotatedCircles.annotated_circles:
+            AnnotatedCircles.annotated_circles = []
 
 class App:
     def __init__(self, root):
@@ -1731,7 +1836,7 @@ class App:
         self.nearest_point_indices_overlapped = SortedCyclicEnumDict()
 
         # annotated circles (for storm extrema)
-        self.annotated_circles = None
+        self.annotated_circles_object = None
 
         self.create_widgets()
         self.display_map()
@@ -2007,8 +2112,8 @@ class App:
                 self.fig.canvas.draw()
 
     def clear_storm_extrema_annotations(self):
-        if self.annotated_circles:
-            self.annotated_circles.clear()
+        if self.annotated_circles_object:
+            self.annotated_circles_object.clear()
 
     def any_storm_points_in_bounds(self, tc_index):
         if not self.plotted_tc_candidates:
@@ -2127,7 +2232,7 @@ class App:
             # check if already annotated
             #   there is a question of how we want to use annotations (one or many per (nearby or same) point?)
             #   in AnnotatedCircles, we use has_overlap() to prevent that
-            annotated_circle = self.annotated_circles.add(lat=point['lat'], lon=point['lon'], label=point_label, label_color=annotate_color_levels[color_level])
+            annotated_circle = self.annotated_circles_object.add(lat=point['lat'], lon=point['lon'], label=point_label, label_color=annotate_color_levels[color_level])
             # handle case to make sure we don't add doubles or nearby
             if annotated_circle is None:
                 continue
@@ -3197,7 +3302,7 @@ class App:
         divider = Divider(self.fig, (0, 0, 1, 1), h, v, aspect=False)
         self.ax.set_axes_locator(divider.new_locator(nx=1, ny=1))
         self.clear_storm_extrema_annotations()
-        self.annotated_circles = AnnotatedCircles(self.ax)
+        self.annotated_circles_object = AnnotatedCircles(self.ax)
         self.canvas.draw()
         self.display_custom_boundaries()
 
@@ -3234,8 +3339,40 @@ class App:
             self.annotate_storm_extrema()
 
         if event.key == 'c':
-            # annotate storm extrema
-            self.clear_storm_extrema_annotations()
+            # clear storm extrema annotation(s)
+            # check if any annotations has focus
+            if self.annotated_circle_objects:
+                any_has_focus = False
+                for internal_id, annotated_circles in self.annotated_circle_objects.items():
+                    removed_circle = None
+                    if not annotated_circles:
+                        continue
+                    try:
+                        for annotated_circle in annotated_circles:
+                            if annotated_circle:
+                                if annotated_circle.annotation_has_focus(event):
+                                    any_has_focus = True
+                                    # we can't let annotation object pick it up,
+                                    #  since this causes a race condition since we are removing it
+                                    removed_circle = annotated_circle
+                                    any_has_focus = True
+                                    annotated_circle.remove()
+                                    break
+                    except:
+                        traceback.print_exc()
+
+                    if any_has_focus:
+                        annotated_circles.remove(removed_circle)
+                        if len(annotated_circles) == 0:
+                            del(self.annotated_circle_objects[internal_id])
+                        else:
+                            self.annotated_circle_objects[internal_id] = annotated_circles
+                        break
+
+                if not any_has_focus:
+                    self.clear_storm_extrema_annotations()
+            else:
+                self.clear_storm_extrema_annotations()
             self.fig.canvas.draw()
 
     def on_key_release(self, event):
@@ -3262,8 +3399,8 @@ class App:
                         self.reset_measurement()
                 else:
                     if event.button == 1:  # Left click
-                        if self.annotated_circles:
-                            annotations = self.annotated_circles.get_annotations()
+                        if self.annotated_circles_object:
+                            annotations = AnnotatedCircles.get_draggable_annotations(self.annotated_circles_object)
                             if annotations:
                                 for annotation in annotations:
                                     if annotation and annotation.contains_point(event):
@@ -3594,15 +3731,6 @@ class App:
                 self.update_axes()
                 self.fig.canvas.draw()
 
-                """            x0, y0, x1, y1 = self.zoom_rect
-                            if x0 != x1 and y0 != y1:
-                                extent = [min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)]
-                                self.ax.set_extent(extent, crs=ccrs.PlateCarree())
-
-                                self.clear_storm_extrema_annotations()
-                                self.update_axes()
-                                self.fig.canvas.draw()
-                """
     def zoom_out(self, max_zoom=False, step_zoom=False):
         extent = self.ax.get_extent()
         lon_diff = extent[1] - extent[0]
