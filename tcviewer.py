@@ -20,6 +20,7 @@
 # CIRCLE & ANNOTATE STORM EXTREMA = x key  (annotates either the selected storm in circle patch, or all storms in current view (zoom))
 # CLEAR (ALL OR SINGLE BOX) STORM EXTREMA ANNOTATIONS = c key
 # HIDE (MOUSE HOVERED) STORMS / SHOW ALL HIDDEN = h key
+# SAVE SCREENSHOT = p key
 
 # Click on (colored) legend for valid time days to cycle between what to display
 #   (relative to (00Z) start of earliest model init day)
@@ -206,6 +207,9 @@ bdeck_urls = [
 
 ### END CONFIG ###
 ##################
+
+# for screenshots
+from PIL import ImageGrab
 
 # for cycling overlapped points
 from collections import OrderedDict
@@ -1919,6 +1923,8 @@ class App:
         self.time_step_legend_objects = []
 
         self.load_settings()
+
+        self.root.bind("p", self.take_screenshot)
 
         self.create_widgets()
         self.display_map()
@@ -3947,7 +3953,10 @@ class App:
             'ANNOTATE_EARLIEST_NAMED_COLOR': tk.StringVar(value=ANNOTATE_EARLIEST_NAMED_COLOR),
             'ANNOTATE_VMAX_COLOR': tk.StringVar(value=ANNOTATE_VMAX_COLOR),
         }
-        dialog = ConfigDialog(self.root, displayed_functional_annotation_options, DISPLAYED_FUNCTIONAL_ANNOTATIONS, settings)
+        root_width = self.root.winfo_screenwidth()
+        root_height = self.root.winfo_screenheight()
+
+        dialog = ConfigDialog(self.root, displayed_functional_annotation_options, DISPLAYED_FUNCTIONAL_ANNOTATIONS, settings, root_width, root_height)
         if dialog.result:
             result = dialog.result
             updated_annotated_colors = False
@@ -4006,43 +4015,132 @@ class App:
         except FileNotFoundError:
             pass
 
-class ConfigDialog(simpledialog.Dialog):
-    def __init__(self, master, annotation_label_options, selected_annotation_label_options, settings):
+    def take_screenshot(self, *args):
+        # Get the current UTC date and time
+        current_time = datetime.utcnow().strftime("%Y-%m-%d-%H-%M-%S")
+
+        # Create the screenshots folder if it doesn't exist
+        if not os.path.exists("screenshots"):
+            os.makedirs("screenshots")
+
+        # Capture the screenshot
+        screenshot = ImageGrab.grab()
+
+        # Save the screenshot as a PNG file
+        screenshot.save(f"screenshots/{current_time}.png")
+
+        # Create a custom dialog window
+        dialog = tk.Toplevel(self.root, bg="#000000")
+        dialog.title("tcviewer")
+        dialog.geometry("200x100")  # Set the dialog size
+
+        # Center the dialog
+        x = (root.winfo_screenwidth() - 200) // 2
+        y = (root.winfo_screenheight() - 100) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        label = tk.Label(dialog, text="Screenshot saved", bg="#000000", fg="#FFFFFF")
+        label.pack(pady=10)
+        button = tk.Button(dialog, text="OK", command=dialog.destroy)
+        button.pack(pady=10)
+
+        # Set focus on the OK button
+        button.focus_set()
+
+        # Bind the Enter key to the button's command
+        dialog.bind("<Return>", lambda event: button.invoke())
+
+        dialog.bind("<Escape>", lambda event: dialog.destroy())
+
+        # Bind the FocusOut event to the dialog's destroy method
+        dialog.bind("<FocusOut>", lambda event: dialog.destroy())
+
+# use toplevel rather than simple dialog as with this we can center the dialog
+class ConfigDialog(tk.Toplevel):
+    def __init__(self, parent, annotation_label_options, selected_annotation_label_options, settings, root_width, root_height):
+        self.result = None
         self.annotation_label_options = annotation_label_options
         self.selected_annotation_label_options = selected_annotation_label_options
         self.settings = settings
-        super().__init__(master, title="Settings")  # Set the title here
+        self.root_width = root_width
+        self.root_height = root_height
+
+        sd = super().__init__(parent)  # Set the title her
+        self.title('Settings')
+        # this is required so we can center the dialog on the window
+        self.transient(parent)
+        self.parent = parent
+
+        self.body_frame = tk.Frame(self)
+        self.body_frame.pack(padx=5, pady=5)
+
+        self.button_frame = tk.Frame(self)
+        self.button_frame.pack(padx=5, pady=5)
+
+        self.body(self.body_frame, )
+        self.buttonbox(self.button_frame)
+
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.grab_set()
+        self.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
+        self.wait_visibility()
+        self.center_window()
+        self.wait_window(self)
+
+    def center_window(self):
+        self.update_idletasks()
+
+        # Get the dimensions of the dialog
+        dialog_width = self.winfo_width()
+        dialog_height = self.winfo_height()
+
+        # Get the dimensions of the parent window
+        parent_width = self.parent.winfo_width()
+        parent_height = self.parent.winfo_height()
+
+        # Calculate the position to center the dialog on the parent window
+        x = self.parent.winfo_x() + (parent_width // 2) - (dialog_width // 2)
+        y = self.parent.winfo_y() + (parent_height // 2) - (dialog_height // 2)
+
+        # Set the position of the dialog
+        self.geometry(f'{dialog_width}x{dialog_height}+{x}+{y}')
 
     def restore_defaults(self):
         import os
         os.remove('settings_tcviewer.json')
         self.cancel()
 
-    def buttonbox(self):
-        box = tk.Frame(self)
-        w = tk.Button(box, text="Restore All Defaults (requires restart)", command=self.restore_defaults)
+    def buttonbox(self, master):
+        self.buttonbox = tk.Frame(master)
+        w = tk.Button(self.buttonbox, text="Restore All Defaults (requires restart)", command=self.restore_defaults)
         w.pack(side=tk.LEFT, padx=5, pady=5)
-        w = tk.Button(box, text="OK", command=self.ok)
-        w.pack(side=tk.LEFT, padx=5, pady=5)
-        w = tk.Button(box, text="Cancel", command=self.cancel)
+        ok_w = tk.Button(self.buttonbox, text="OK", command=self.ok)
+        ok_w.pack(side=tk.LEFT, padx=5, pady=5)
+        w = tk.Button(self.buttonbox, text="Cancel", command=self.cancel)
         w.pack(side=tk.LEFT, padx=5, pady=5)
         self.bind("<Return>", self.ok)
         self.bind("<Escape>", self.cancel)
-        box.pack()
+        # Set focus on the OK button
+        ok_w.focus_set()
+
+        self.buttonbox.pack()
+        return self.buttonbox
 
     def body(self, master):
-        notebook = ttk.Notebook(master)
-        notebook.pack(fill="both", expand=True)
+        frame = ttk.Frame(master)
+        frame.pack(fill="both", expand=True)
+        self.notebook = ttk.Notebook(frame)
+        self.notebook.pack(fill="both", expand=True)
 
         # Create a frame for each tab
-        map_settings_frame = tk.Frame(notebook)
-        notebook.add(map_settings_frame, text="Map")
+        map_settings_frame = tk.Frame(self.notebook)
+        self.notebook.add(map_settings_frame, text="Map")
 
-        annotation_colors_frame = tk.Frame(notebook)
-        notebook.add(annotation_colors_frame, text="Annotation Colors")
+        annotation_colors_frame = tk.Frame(self.notebook)
+        self.notebook.add(annotation_colors_frame, text="Annotation Colors")
 
-        extrema_annotations_frame = tk.Frame(notebook)
-        notebook.add(extrema_annotations_frame, text="Annotation Labels")
+        extrema_annotations_frame = tk.Frame(self.notebook)
+        self.notebook.add(extrema_annotations_frame, text="Annotation Labels")
 
         # Add your widgets for the "Map Settings" tab here
         tk.Label(map_settings_frame, text="Circle patch radius (pixels):").pack()
@@ -4096,7 +4194,8 @@ class ConfigDialog(simpledialog.Dialog):
             if option in self.selected_annotation_label_options:
                 var.set(1)
 
-        return master
+    def get_height(self):
+        height = self.master.winfo_height()
 
     def choose_color(self, setting_name):
         color_obj = self.settings[setting_name]
@@ -4111,6 +4210,16 @@ class ConfigDialog(simpledialog.Dialog):
             'annotation_label_options': [option for option, var in self.annotation_label_checkboxes.items() if var.get()],
             'settings': {key: var.get() for key, var in self.settings.items()}
         }
+
+    def ok(self, event=None):
+        self.withdraw()
+        self.update_idletasks()
+        self.apply()
+        self.cancel()
+
+    def cancel(self, event=None):
+        self.parent.focus_set()
+        self.destroy()
 
 if __name__ == "__main__":
     root = tk.Tk()
@@ -4135,5 +4244,8 @@ if __name__ == "__main__":
     style.configure("ToolsFrame.TFrame", background=default_bg)
     style.configure("CanvasFrame.TFrame", background=default_bg)
 
+    style.configure("TMessaging", background=default_bg, foreground=default_fg)
+
     app = App(root)
+
     root.mainloop()
