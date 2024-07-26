@@ -1,9 +1,9 @@
 # an experimental TC plotter (standa-alone full screen viewer) for intensity models and genesis
 ######
 #   uses a-deck,b-deck,tcvitals (from NHC,UCAR) and tc genesis candidates (tc_candidates.db)
+from typing import Any
 
 #### EXPERIMENTAL: DO NOT USE OR RELY ON THIS!
-
 ## NOTES
 # ADECK MODE: 'ALL' excludes GEFS members (only GEFS members visible in specific combo selection)
 
@@ -39,6 +39,16 @@
 #      timer resets after manual reloads
 TIMER_INTERVAL_MINUTES = 30
 
+# Plot relative vorticity contours (cyclonic/anti-cyclonic) and labels
+RVOR_CYCLONIC_CONTOURS = True
+RVOR_CYCLONIC_LABELS = True
+RVOR_ANTICYCLONIC_CONTOURS = True
+RVOR_ANTICYCLONIC_LABELS = True
+# RVOR LEVELS TO DISPLAY SIMULTANEOUSLY
+SELECTED_PRESSURE_LEVELS = [925, 850, 700, 500, 200]
+MINIMUM_CONTOUR_PX_X = 20
+MINIMUM_CONTOUR_PX_Y = 20
+
 # On mouse hover, select points to display status within a 0.1 degree bounding box
 MOUSE_SELECT_IN_DEGREES = 0.5
 
@@ -59,6 +69,22 @@ GRID_LINE_SPACING_DEGREES  = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 60.0, 90
 # Choose the smallest option to meet the minimum grid line spacing requirement (otherwise will use largest of above)
 MIN_GRID_LINE_SPACING_INCHES = 0.75
 
+CYCLONIC_PRESSURE_LEVEL_COLORS = {
+    '925': '#af2eff',
+    '850': '#ff00ec',
+    '700': '#ff7dfc',
+    '500': '#fdc6ff',
+    '200': '#fef1ff'
+}
+
+ANTI_CYCLONIC_PRESSURE_LEVEL_COLORS = {
+    '925': '#2295b3',
+    '850': '#00b6f5',
+    '700': '#60e9ff',
+    '500': '#78fff7',
+    '200': '#b9faff'
+}
+
 DEFAULT_ANNOTATE_MARKER_COLOR = "#FFCCCC"
 DEFAULT_ANNOTATE_TEXT_COLOR = "#FFCCCC"
 ANNOTATE_DT_START_COLOR = "#00FF00"
@@ -67,7 +93,7 @@ ANNOTATE_VMAX_COLOR = "#FF60F0"
 
 # importance assigned to colors
 #  higher is more important and will switch to more important color for a point with multiple labels
-annotate_color_levels = {
+ANNOTATE_COLOR_LEVELS = {
     0: DEFAULT_ANNOTATE_TEXT_COLOR,
     1: ANNOTATE_DT_START_COLOR,
     2: ANNOTATE_EARLIEST_NAMED_COLOR,
@@ -96,6 +122,10 @@ DISPLAYED_FUNCTIONAL_ANNOTATIONS = [
     "TC Start",
     "Earliest Named"
 ]
+
+##### END CONFIG
+
+##### CODING TWEAKS (Extend what extrema are annotated)
 
 # not a config. This is what is displayed in modal dialog for options. Placed here in case of user extensions.
 displayed_functional_annotation_options = [
@@ -212,7 +242,7 @@ bdeck_urls = [
 from PIL import ImageGrab
 
 # for cycling overlapped points
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 
 # for mouse hover features
 from rtree import index
@@ -277,7 +307,7 @@ tcvitals_basin_to_atcf_basin = {
 # Load the shapefile using Geopandas
 # from census shapefiles
 #shapefile_path = "tl_2023_us_cbsa/tl_2023_us_cbsa.shp"
-
+shapefile_path = None
 try:
     gdf = gpd.read_file(shapefile_path)
     # Filter the GeoDataFrame to only include the Houston-The Woodlands-Sugar Land, TX Metro Area
@@ -288,6 +318,36 @@ try:
     custom_gdf = houston_gdf.to_crs(ccrs.PlateCarree().proj4_init)
 except:
     custom_gdf = None
+
+
+#### CUSTOM OVERLAY
+# plot relative vorticity contours
+
+shapefile_paths = {
+    'rvor_c_poly': 'rvor_contours/rvor_cyclonic_contours.shp',
+    'rvor_c_points': 'rvor_contours/rvor_cyclonic_labels.shp',
+    'rvor_ac_poly': 'rvor_contours/rvor_anticyclonic_contours.shp',
+    'rvor_ac_points': 'rvor_contours/rvor_anticyclonic_labels.shp'
+}
+
+# disable rvor
+shapefile_paths = {}
+
+overlay_gdfs = {}
+try:
+    for name, shapefile_path in shapefile_paths.items():
+        gdf = gpd.read_file(shapefile_path)
+        # Filter the GeoDataFrame to only include the Houston-The Woodlands-Sugar Land, TX Metro Area
+        if gdf.empty:
+            print(shapefile_path)
+            raise ValueError("Empty shapefile")
+        # Ensure the CRS matches that of the Cartopy map (PlateCarree)
+        custom_gdf = gdf.to_crs(ccrs.PlateCarree().proj4_init)
+        overlay_gdfs[name] = custom_gdf
+except:
+    traceback.print_exc()
+
+#### END CUSTOM OVERLAY
 
 matplotlib.use('Agg')
 matplotlib.rcParams['figure.dpi'] = CHART_DPI
@@ -1781,11 +1841,14 @@ class AnnotatedCircles():
             AnnotatedCircles.annotated_circles = []
 
 class App:
+
     def __init__(self, root):
         self.root = root
         self.root.title("tcviewer")
         self.root.attributes('-fullscreen', True)
         self.root.configure(bg="black")
+
+        self.global_extent = [-180, 180, -90, 90]
 
         self.mode = "ADECK"
         self.recent_storms = None
@@ -1922,12 +1985,193 @@ class App:
         ]
         self.time_step_legend_objects = []
 
+        # a pair of dicts of selected rvor levels' contours, with contour ids as keys
+        self.overlay_rvor_contour_objs = []
+        self.overlay_rvor_label_objs = []
+        self.overlay_rvor_contour_dict = None
+        self.init_rvor_contour_dict()
+        self.overlay_rvor_contour_visible = True
+        self.overlay_rvor_label_visible = True
+        self.overlay_rvor_label_last_alpha = 1.0
+
         self.load_settings()
 
         self.root.bind("p", self.take_screenshot)
 
+        self.root.bind("l", self.toggle_rvor_labels)
+        self.root.bind("v", self.toggle_rvor_contours)
+        #self.root.bind("v", self.toggle_rvor_contours)
+        self.rvor_dialog_open = False
+        self.root.bind("V", self.show_rvor_dialog)
+
         self.create_widgets()
+
         self.display_map()
+
+    def updated_rvor_levels(self):
+        # Update the global variable with the new values
+        global SELECTED_PRESSURE_LEVELS
+        
+        new_SELECTED_PRESSURE_LEVELS = [level for level, var in self.level_vars.items() if var.get()]
+
+        if SELECTED_PRESSURE_LEVELS == new_SELECTED_PRESSURE_LEVELS:
+            return
+
+        SELECTED_PRESSURE_LEVELS = new_SELECTED_PRESSURE_LEVELS
+
+        contours = self.overlay_rvor_contour_dict['contour_objs']
+        labels = self.overlay_rvor_contour_dict['label_objs']
+        for objs_dict in [contours, labels]:
+            for _, obj_list in objs_dict.items():
+                #for obj in obj_list:
+                # don't remove bbox as that will automatically get removed
+                try:
+                    obj_list[0].remove()
+                except:
+                    traceback.print_exc()
+        self.ax.set_yscale('linear')
+        self.display_custom_overlay()
+        self.fig.canvas.draw()
+
+    def on_rvor_dialog_close(self, dialog):
+        self.rvor_dialog_open = False
+        dialog.destroy()
+        # focus back on app
+        self.canvas.get_tk_widget().focus_set()
+
+    def show_rvor_dialog(self, event=None):
+        if not self.rvor_dialog_open:
+            self.rvor_dialog_open = True
+        else:
+            return
+        # Create the toplevel dialog
+        global SELECTED_PRESSURE_LEVELS
+        dialog = tk.Toplevel(self.root)
+        dialog.protocol("WM_DELETE_WINDOW", lambda: self.on_rvor_dialog_close(dialog))
+        dialog.title("Selected RVOR levels:")
+        height = 300
+        width = 250
+        dialog.geometry(f"{width}x{height}")  # Set the width to 300 and height to 250
+        dialog.geometry(f"+{root.winfo_x() - width // 2 + root.winfo_width() // 2}+{root.winfo_y() - height // 2 + root.winfo_height() // 2}")
+        # modal
+        dialog.grab_set()
+
+        # Create a frame to hold the checkboxes
+        frame = tk.Frame(dialog)
+        frame.pack(fill="both", expand=True)
+
+        # Create the checkboxes and their corresponding variables
+        self.level_vars = {}
+        chk_first = None
+        for i, level in enumerate([925, 850, 700, 500, 200], start=1):
+            val = 1 if level in SELECTED_PRESSURE_LEVELS else 0
+            var = tk.IntVar(value=val)
+            chk = tk.Checkbutton(frame, text=f"{level} mb", variable=var, pady = 5)
+            var.set(val)
+            if not chk_first:
+                chk_first = chk
+            chk.grid(row=i, column=0, sticky="n")
+
+            # Center the labels
+            frame.columnconfigure(0, weight=1)
+            chk.columnconfigure(0, weight=1)
+            self.level_vars[level] = var
+
+
+        # Focus on the first checkbox
+        frame.focus_set()
+        frame.focus()  # Set focus on the frame
+        chk_first.focus_set()
+
+        # OK button
+        ok_btn = tk.Button(dialog, text="OK", command=lambda: [self.updated_rvor_levels(), self.on_rvor_dialog_close(dialog)])
+        ok_btn.pack(fill="x", pady=5)
+
+        # Cancel button
+        cancel_btn = tk.Button(dialog, text="Cancel", command=dialog.destroy)
+        cancel_btn.config(width=ok_btn.cget("width"))  # Set the width of the Cancel button to match the OK button
+        cancel_btn.pack(fill="x", pady=5)
+
+        dialog.bind("<Return>", lambda e: [self.updated_rvor_levels(), self.on_rvor_dialog_close(dialog)])
+        dialog.bind("<Escape>", lambda e: self.on_rvor_dialog_close(dialog))
+
+    def rvor_labels_new_extent(self):
+        self.update_rvor_contour_renderable_after_zoom()
+        extent = self.ax.get_extent(ccrs.PlateCarree())
+        contour_visible = self.overlay_rvor_contour_visible
+        not_at_global_extent = not (
+            extent[0] == self.global_extent[0] and
+            extent[1] == self.global_extent[1] and
+            extent[2] == self.global_extent[2] and
+            extent[3] == self.global_extent[3]
+        )
+        label_visible = contour_visible and self.overlay_rvor_label_visible and not_at_global_extent
+        if label_visible:
+            alpha_label_visible = 1.0
+        else:
+            alpha_label_visible = 0.0
+        #if self.overlay_rvor_label_last_alpha != alpha_label_visible:
+        try:
+            renderable_ids = self.overlay_rvor_contour_dict['renderable_ids']
+            for contour_id, obj_list in self.overlay_rvor_contour_dict['label_objs'].items():
+                # limit detail for labels based on zoom extent
+                is_renderable = (contour_id in renderable_ids)
+                is_visible = label_visible and is_renderable
+                for obj in obj_list:
+                    obj.set_visible(is_visible)
+        except:
+            traceback.print_exc()
+            pass
+
+        self.overlay_rvor_label_last_alpha = alpha_label_visible
+
+    def toggle_rvor_contours(self, *args):
+        new_vis = not self.overlay_rvor_contour_visible
+        try:
+            renderable_ids = self.overlay_rvor_contour_dict['renderable_ids']
+            for contour_id, objs_list in self.overlay_rvor_contour_dict['contour_objs'].items():
+                # is_renderable = (contour_id in renderable_ids)
+                # is_visible = new_vis and is_renderable
+                # don't limit contour detail by extent (only limit labels)
+                is_visible = new_vis
+                for obj in objs_list:
+                    obj.set_visible(is_visible)
+            self.overlay_rvor_label_visible = new_vis
+            for contour_id, objs_list in self.overlay_rvor_contour_dict['label_objs'].items():
+                is_renderable = (contour_id in renderable_ids)
+                is_visible = new_vis and is_renderable
+                for obj in objs_list:
+                    obj.set_visible(is_visible)
+        except:
+            traceback.print_exc()
+            pass
+        self.overlay_rvor_contour_visible = new_vis
+        self.ax.set_yscale('linear')
+        self.fig.canvas.draw()
+
+    def toggle_rvor_labels(self, *args):
+        new_vis = not self.overlay_rvor_label_visible
+        if new_vis:
+            new_alpha = 1.0
+        else:
+            new_alpha = 0.0
+        try:
+            renderable_ids = self.overlay_rvor_contour_dict['renderable_ids']
+            for contour_id, obj_list in self.overlay_rvor_contour_dict['label_objs'].items():
+                is_renderable = (contour_id in renderable_ids)
+                is_visible = new_vis and is_renderable
+                for obj in obj_list:
+                    obj.set_visible(is_visible)
+        except:
+            traceback.print_exc()
+            pass
+        self.overlay_rvor_label_last_alpha = new_alpha
+        self.overlay_rvor_label_visible = new_vis
+        # fixes bug in matplotlib after modifying many artists (especially test boxes)
+        self.ax.set_yscale('linear')
+        self.fig.canvas.draw()
+        after_draw_extent = self.ax.get_extent(ccrs.PlateCarree())
+        after_draw_size_px = self.ax.get_figure().get_size_inches() * self.ax.get_figure().dpi
 
     # calculate radius of pixels in degrees
     def calculate_radius_pixels(self):
@@ -2247,7 +2491,7 @@ class App:
             self.annotate_single_storm_extrema(point_index=cursor_point_index)
 
     def annotate_single_storm_extrema(self, point_index = None):
-        global annotate_color_levels
+        global ANNOTATE_COLOR_LEVELS
         if point_index is None or len(point_index) != 3:
             return
         internal_id, tc_index, tc_point_index = point_index
@@ -2323,7 +2567,7 @@ class App:
             # check if already annotated
             #   there is a question of how we want to use annotations (one or many per (nearby or same) point?)
             #   in AnnotatedCircles, we use has_overlap() to prevent that
-            annotated_circle = self.annotated_circles_object.add(lat=point['lat'], lon=point['lon'], label=point_label, label_color=annotate_color_levels[color_level])
+            annotated_circle = self.annotated_circles_object.add(lat=point['lat'], lon=point['lon'], label=point_label, label_color=ANNOTATE_COLOR_LEVELS[color_level])
             # handle case to make sure we don't add doubles or nearby
             if annotated_circle is None:
                 continue
@@ -2334,14 +2578,162 @@ class App:
         if added:
             self.fig.canvas.draw()
 
-    def display_custom_boundaries(self):
+    def display_custom_boundaries(self, label_column=None):
         if custom_gdf is not None:
             for geometry in custom_gdf.geometry:
                 if isinstance(geometry, Polygon):
                     self.ax.add_geometries([geometry], crs=ccrs.PlateCarree(), edgecolor='magenta', facecolor='none', linewidth=2)
                 else:
-                    for polygon in geometry:
-                        self.ax.add_geometries([polygon], crs=ccrs.PlateCarree(), edgecolor='magenta', facecolor='none', linewidth=2)
+                    self.ax.add_geometries([geometry], crs=ccrs.PlateCarree(), edgecolor='magenta', facecolor='none', linewidth=2)
+
+        if label_column:
+            for idx, row in custom_gdf.iterrows():
+                x, y = row.geometry.x, row.geometry.y
+                self.ax.text(x, y, row[label_column], transform=ccrs.PlateCarree(), fontsize=8, color='magenta')
+
+    def init_rvor_contour_dict(self):
+        self.overlay_rvor_contour_dict = defaultdict(dict)
+        self.overlay_rvor_contour_dict['ids'] = set()
+        self.overlay_rvor_contour_dict['renderable_ids'] = set()
+        self.overlay_rvor_contour_dict['contour_span_lons'] = {}
+        self.overlay_rvor_contour_dict['contour_span_lats'] = {}
+        self.overlay_rvor_contour_dict['contour_objs'] = defaultdict(dict)
+        self.overlay_rvor_contour_dict['label_objs'] = defaultdict(dict)
+
+    # display custom rvor overlay from shape files
+    def display_custom_overlay(self):
+        if not overlay_gdfs:
+            return
+        self.init_rvor_contour_dict()
+
+        global RVOR_CYCLONIC_CONTOURS
+        global RVOR_CYCLONIC_LABELS
+        global RVOR_ANTICYCLONIC_LABELS
+        global RVOR_ANTICYCLONIC_CONTOURS
+        global SELECTED_PRESSURE_LEVELS
+        if SELECTED_PRESSURE_LEVELS == []:
+            return
+
+        extent, min_span_lat_deg, min_span_lon_deg = self.get_contour_min_span_deg()
+
+        do_overlay_shapes = {
+            'rvor_c_poly': RVOR_CYCLONIC_CONTOURS,
+            'rvor_c_points': RVOR_CYCLONIC_LABELS,
+            'rvor_ac_poly': RVOR_ANTICYCLONIC_CONTOURS,
+            'rvor_ac_points': RVOR_ANTICYCLONIC_LABELS
+        }
+
+        renderable_ids = self.overlay_rvor_contour_dict['renderable_ids']
+        for gdf_name, do_overlay in do_overlay_shapes.items():
+            if not do_overlay:
+                continue
+            all_levels_gdf = overlay_gdfs.get(gdf_name, None)
+            if all_levels_gdf is None:
+                continue
+
+            gdf = all_levels_gdf[all_levels_gdf['level'].isin(SELECTED_PRESSURE_LEVELS)]
+
+            # Filter contours based on span
+            for _, row in gdf.iterrows():
+                contour_id = row['contour_id']
+                span_lon = row['span_lon']
+                span_lat = row['span_lat']
+                if span_lon >= min_span_lon_deg and span_lat >= min_span_lat_deg:
+                    renderable_ids.add(contour_id)
+                self.overlay_rvor_contour_dict['ids'].add(contour_id)
+                self.overlay_rvor_contour_dict['contour_span_lons'][contour_id] = span_lon
+                self.overlay_rvor_contour_dict['contour_span_lats'][contour_id] = span_lat
+
+        # Draw contours and labels based on the filtered IDs
+        for gdf_name, do_overlay in do_overlay_shapes.items():
+            if not do_overlay:
+                continue
+            all_levels_gdf = overlay_gdfs.get(gdf_name, None)
+            if all_levels_gdf is None:
+                continue
+
+            cyclonic = (gdf_name[5] == 'c')
+
+            # requiring that changing pressure levels to remove and re-add all the artists
+            gdf = all_levels_gdf[all_levels_gdf['level'].isin(SELECTED_PRESSURE_LEVELS)]
+
+            # global visibility based on current display settings (keyboard shortcuts) and if global extent or not
+            contour_visible = self.overlay_rvor_contour_visible
+            not_at_global_extent = not (
+                extent[0] == self.global_extent[0] and
+                extent[1] == self.global_extent[1] and
+                extent[2] == self.global_extent[2] and
+                extent[3] == self.global_extent[3]
+            )
+            label_visible = contour_visible and self.overlay_rvor_label_visible and not_at_global_extent
+            if label_visible:
+                alpha_label_visible = 1.0
+            else:
+                alpha_label_visible = 0.0
+            self.overlay_rvor_label_last_alpha = alpha_label_visible
+
+            if cyclonic:
+                edge_colors = CYCLONIC_PRESSURE_LEVEL_COLORS
+            else:
+                edge_colors = ANTI_CYCLONIC_PRESSURE_LEVEL_COLORS
+
+            for _, row in gdf.iterrows():
+                contour_id = row['contour_id']
+                # is renderable based on the level of detail (size of contour relative to current extent)
+                is_renderable = contour_id in renderable_ids
+                geom = row['geometry']
+                if isinstance(geom, Polygon):
+                    # Draw contours
+                    edge_color = edge_colors[str(row['level'])]
+                    #is_visible = contour_visible and is_renderable
+                    # only limit labels to to detail
+                    is_visible = contour_visible
+                    obj = self.ax.add_geometries([geom], crs=ccrs.PlateCarree(), edgecolor=edge_color, facecolor='none', linewidth=2, visible=is_visible)
+                    self.overlay_rvor_contour_dict['contour_objs'][contour_id] = [obj]
+                else:
+                    # Draw labels
+                    edge_color = edge_colors[str(row['level'])]
+                    is_visible = label_visible and is_renderable
+                    x, y = geom.x, geom.y
+                    label = row['label']
+                    #obj = self.ax.text(x, y, label, transform=ccrs.PlateCarree(), color='black', fontsize=12, ha='center', va='center', bbox=dict(facecolor=edge_color, edgecolor='black', pad=2), alpha=alpha_label_visible)
+                    obj = self.ax.text(x, y, label, transform=ccrs.PlateCarree(), color='black', fontsize=12, ha='center', va='center', bbox=dict(facecolor=edge_color, edgecolor='black', pad=2), visible=is_visible)
+                    obj_bbox = obj.get_bbox_patch()
+                    #obj_bbox.set_alpha(alpha_label_visible)
+                    obj_bbox.set_visible(is_visible)
+                    self.overlay_rvor_contour_dict['label_objs'][contour_id] = [obj, obj_bbox]
+
+        self.ax.set_yscale('linear')
+
+    def update_rvor_contour_renderable_after_zoom(self):
+        if self.overlay_rvor_contour_dict and 'ids' in self.overlay_rvor_contour_dict:
+            extent, min_span_lat_deg, min_span_lon_deg = self.get_contour_min_span_deg()
+            renderable_ids = set()
+            span_lons = self.overlay_rvor_contour_dict['contour_span_lons']
+            span_lats = self.overlay_rvor_contour_dict['contour_span_lats']
+            for contour_id in self.overlay_rvor_contour_dict['ids']:
+                span_lon = span_lons[contour_id]
+                span_lat = span_lats[contour_id]
+                if span_lon >= min_span_lon_deg and span_lat >= min_span_lat_deg:
+                    renderable_ids.add(contour_id)
+            self.overlay_rvor_contour_dict['renderable_ids'] = renderable_ids
+
+    def get_contour_min_span_deg(self):
+        global MINIMUM_CONTOUR_PX_X
+        global MINIMUM_CONTOUR_PX_Y
+        # Get the current extent in degrees
+        extent = self.ax.get_extent(ccrs.PlateCarree())
+        min_lon, max_lon, min_lat, max_lat = extent
+        span_lon_extent = max_lon - min_lon
+        span_lat_extent = max_lat - min_lat
+        # Determine the minimum span in degrees for display
+        ax_width, ax_height = self.ax.get_figure().get_size_inches() * self.ax.get_figure().dpi
+        lon_pixel_ratio = span_lon_extent / ax_width
+        lat_pixel_ratio = span_lat_extent / ax_height
+        minimum_contour_extent = [MINIMUM_CONTOUR_PX_X, MINIMUM_CONTOUR_PX_Y]  # Minimum in pixels for lon, lat
+        min_span_lon_deg = minimum_contour_extent[0] * lon_pixel_ratio
+        min_span_lat_deg = minimum_contour_extent[1] * lat_pixel_ratio
+        return extent, min_span_lat_deg, min_span_lon_deg
 
     def combo_selected_models_event(self, event):
         current_value = self.adeck_selected_combobox.get()
@@ -3241,6 +3633,7 @@ class App:
                 self.ax._gridliners.remove(gl)
             except:
                 pass
+        self.ax.set_yscale('linear')
 
         gl = self.ax.gridlines(draw_labels=["bottom", "left"], x_inline=False, y_inline=False, auto_inline=False, color='white', alpha=0.5, linestyle='--')
         # Move axis labels inside the subplot
@@ -3314,10 +3707,11 @@ class App:
 
         self.fig = plt.figure(figsize=(screen_width / CHART_DPI, screen_height / CHART_DPI), dpi=CHART_DPI, facecolor='black')
 
-        #self.ax = self.fig.add_subplot(111, projection=ccrs.PlateCarree())
+        # self.fig.add_subplot(111, projection=ccrs.PlateCarree())
         self.ax = plt.axes(projection=ccrs.PlateCarree())
 
-        #self.ax.autoscale_view(scalex=True,scaley=True)
+        self.ax.autoscale_view(scalex=False,scaley=False)
+        self.ax.set_yscale('linear')
         self.ax.set_facecolor('black')
 
         # Draw a rectangle patch around the subplot to visualize its boundaries
@@ -3334,7 +3728,7 @@ class App:
         #self.fig.patch.set_linewidth(2)
 
         #self.ax.stock_img()
-        self.ax.set_extent([-180, 180, -90, 90])
+        self.ax.set_extent(self.global_extent)
         self.ax.add_feature(cfeature.COASTLINE, edgecolor='yellow', linewidth=0.5)
 
         self.update_axes()
@@ -3362,6 +3756,7 @@ class App:
         self.annotated_circles_object = AnnotatedCircles(self.ax)
         self.canvas.draw()
         self.display_custom_boundaries()
+        self.display_custom_overlay()
 
     def on_key_press(self, event):
         if event.key == 'shift':
@@ -3417,7 +3812,7 @@ class App:
                                     break
                     except:
                         traceback.print_exc()
-
+                    self.ax.set_yscale('linear')
                     if any_has_focus:
                         annotated_circles.remove(removed_circle)
                         if len(annotated_circles) == 0:
@@ -3425,6 +3820,7 @@ class App:
                         else:
                             self.annotated_circle_objects[internal_id] = annotated_circles
                         break
+                    self.ax.set_yscale('linear')
 
                 if not any_has_focus:
                     self.clear_storm_extrema_annotations()
@@ -3514,7 +3910,7 @@ class App:
                             self.redraw_map_with_data(model_cycle=model_cycle)
 
                     elif event.button == 3:  # Right click
-                        self.zoom_out()
+                        self.zoom_out(step_zoom=True)
 
     def on_release(self, event):
         xlim = self.ax.get_xlim()
@@ -3546,6 +3942,7 @@ class App:
                             self.distance_text.remove()
                         except:
                             pass
+                    self.ax.set_yscale('linear')
 
                     self.line = self.ax.plot([self.start_point[0], self.end_point[0]],
                                              [self.start_point[1], self.end_point[1]],
@@ -3583,6 +3980,8 @@ class App:
         if self.circle_handle:
             self.circle_handle.remove()
 
+        self.ax.set_yscale('linear')
+
         self.circle_handle = Circle((lon, lat), radius=self.calculate_radius_pixels(), color=DEFAULT_ANNOTATE_MARKER_COLOR, fill=False, linestyle='dotted', linewidth=2, alpha=0.8,
                                     transform=ccrs.PlateCarree())
         self.ax.add_patch(self.circle_handle)
@@ -3595,6 +3994,7 @@ class App:
         if self.circle_handle:
             self.circle_handle.remove()
             self.circle_handle = None
+            self.ax.set_yscale('linear')
             self.fig.canvas.draw()
 
         self.last_circle_lon = None
@@ -3778,6 +4178,8 @@ class App:
             self.clear_storm_extrema_annotations()
             self.update_axes()
             self.fig.canvas.draw()
+            self.rvor_labels_new_extent()
+            self.fig.canvas.draw()
 
         elif self.zoom_rect and (None not in self.zoom_rect) and len(self.zoom_rect) == 4:
             x0, y0, x1, y1 = self.zoom_rect
@@ -3832,6 +4234,8 @@ class App:
 
                 self.clear_storm_extrema_annotations()
                 self.update_axes()
+                self.fig.canvas.draw()
+                self.rvor_labels_new_extent()
                 self.fig.canvas.draw()
 
     def zoom_out(self, max_zoom=False, step_zoom=False):
@@ -3894,6 +4298,8 @@ class App:
                 self.clear_storm_extrema_annotations()
                 self.update_axes()
                 self.fig.canvas.draw()
+                self.rvor_labels_new_extent()
+                self.fig.canvas.draw()
 
         else:
             # Define zoom factor or step size
@@ -3924,6 +4330,8 @@ class App:
                 self.clear_storm_extrema_annotations()
                 self.update_axes()
                 self.fig.canvas.draw()
+                self.rvor_labels_new_extent()
+                self.fig.canvas.draw()
 
     def show_config_genesis_dialog(self):
         self.show_config_dialog()
@@ -3933,7 +4341,13 @@ class App:
 
     def show_config_dialog(self):
         global displayed_functional_annotation_options
-        global annotate_color_levels
+        global ANNOTATE_COLOR_LEVELS
+        global RVOR_CYCLONIC_CONTOURS
+        global RVOR_CYCLONIC_LABELS
+        global RVOR_ANTICYCLONIC_LABELS
+        global RVOR_ANTICYCLONIC_CONTOURS
+        global MINIMUM_CONTOUR_PX_X
+        global MINIMUM_CONTOUR_PX_Y
         global DISPLAYED_FUNCTIONAL_ANNOTATIONS
         global DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS
         global ZOOM_IN_STEP_FACTOR
@@ -3944,6 +4358,12 @@ class App:
         global ANNOTATE_EARLIEST_NAMED_COLOR
         global ANNOTATE_VMAX_COLOR
         settings = {
+            'RVOR_CYCLONIC_CONTOURS': tk.BooleanVar(value=RVOR_CYCLONIC_CONTOURS),
+            'RVOR_CYCLONIC_LABELS': tk.BooleanVar(value=RVOR_CYCLONIC_LABELS),
+            'RVOR_ANTICYCLONIC_LABELS': tk.BooleanVar(value=RVOR_ANTICYCLONIC_LABELS),
+            'RVOR_ANTICYCLONIC_CONTOURS': tk.BooleanVar(value=RVOR_ANTICYCLONIC_CONTOURS),
+            'MINIMUM_CONTOUR_PX_X': tk.IntVar(value=MINIMUM_CONTOUR_PX_X),
+            'MINIMUM_CONTOUR_PX_Y': tk.IntVar(value=MINIMUM_CONTOUR_PX_Y),
             'DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS': tk.IntVar(value=DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS),
             'ZOOM_IN_STEP_FACTOR': tk.DoubleVar(value=ZOOM_IN_STEP_FACTOR),
             'MIN_GRID_LINE_SPACING_INCHES': tk.DoubleVar(value=MIN_GRID_LINE_SPACING_INCHES),
@@ -3971,7 +4391,7 @@ class App:
                             globals()[global_setting_name] = val
             if updated_annotated_colors:
                 # must update the color levels from which we actually pick the colors
-                annotate_color_levels = {
+                ANNOTATE_COLOR_LEVELS = {
                     0: DEFAULT_ANNOTATE_TEXT_COLOR,
                     1: ANNOTATE_DT_START_COLOR,
                     2: ANNOTATE_EARLIEST_NAMED_COLOR,
@@ -3988,7 +4408,7 @@ class App:
     def load_settings(self):
         try:
             global displayed_functional_annotation_options
-            global annotate_color_levels
+            global ANNOTATE_COLOR_LEVELS
             global DISPLAYED_FUNCTIONAL_ANNOTATIONS
             global DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS
             global ZOOM_IN_STEP_FACTOR
@@ -4006,7 +4426,7 @@ class App:
                     elif key == 'settings':
                         for global_setting_name, val in val.items():
                             globals()[global_setting_name] = val
-                annotate_color_levels = {
+                ANNOTATE_COLOR_LEVELS = {
                     0: DEFAULT_ANNOTATE_TEXT_COLOR,
                     1: ANNOTATE_DT_START_COLOR,
                     2: ANNOTATE_EARLIEST_NAMED_COLOR,
@@ -4136,13 +4556,16 @@ class ConfigDialog(tk.Toplevel):
         map_settings_frame = tk.Frame(self.notebook)
         self.notebook.add(map_settings_frame, text="Map")
 
+        # Create a frame for each tab
+        overlay_settings_frame = tk.Frame(self.notebook)
+        self.notebook.add(overlay_settings_frame, text="Overlay")
+
         annotation_colors_frame = tk.Frame(self.notebook)
         self.notebook.add(annotation_colors_frame, text="Annotation Colors")
 
         extrema_annotations_frame = tk.Frame(self.notebook)
         self.notebook.add(extrema_annotations_frame, text="Annotation Labels")
 
-        # Add your widgets for the "Map Settings" tab here
         tk.Label(map_settings_frame, text="Circle patch radius (pixels):").pack()
         tk.Entry(map_settings_frame, textvariable=self.settings['DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS']).pack()
         tk.Label(map_settings_frame, text="Zoom in step factor:").pack()
@@ -4150,7 +4573,29 @@ class ConfigDialog(tk.Toplevel):
         tk.Label(map_settings_frame, text="Min grid line spacing (inches):").pack()
         tk.Entry(map_settings_frame, textvariable=self.settings['MIN_GRID_LINE_SPACING_INCHES']).pack()
 
-        # Add your widgets for the "Annotation Colors" tab here
+        overlay_var_text = {
+            'RVOR_CYCLONIC_CONTOURS': 'RVOR Cyclonic Contours',
+            'RVOR_CYCLONIC_LABELS': 'RVOR Cyclonic Labels',
+            'RVOR_ANTICYCLONIC_CONTOURS': 'RVOR Anti-Cyclonic Contours',
+            'RVOR_ANTICYCLONIC_LABELS': 'RVOR Anti-cyclonic Labels',
+        }
+
+        for varname, option in overlay_var_text.items():
+            var = self.settings[varname]
+            cb = tk.Checkbutton(overlay_settings_frame, text=option, variable=self.settings[varname])
+            cb.pack(anchor=tk.W)
+
+        tk.Label(overlay_settings_frame, text="Min. contour pixels X:").pack()
+        tk.Entry(overlay_settings_frame, textvariable=self.settings['MINIMUM_CONTOUR_PX_X']).pack()
+
+        tk.Label(overlay_settings_frame, text="Min. contour pixels Y:").pack()
+        tk.Entry(overlay_settings_frame, textvariable=self.settings['MINIMUM_CONTOUR_PX_Y']).pack()
+
+        tk.Label(map_settings_frame, text="Zoom in step factor:").pack()
+        tk.Entry(map_settings_frame, textvariable=self.settings['ZOOM_IN_STEP_FACTOR']).pack()
+        tk.Label(map_settings_frame, text="Min grid line spacing (inches):").pack()
+        tk.Entry(map_settings_frame, textvariable=self.settings['MIN_GRID_LINE_SPACING_INCHES']).pack()
+
         tk.Label(annotation_colors_frame, text="(Circle hover) Marker color:").pack()
         self.default_annotate_marker_color_label = tk.Label(annotation_colors_frame, text="", width=10, bg=self.settings['DEFAULT_ANNOTATE_MARKER_COLOR'].get())
         self.default_annotate_marker_color_label.pack()
