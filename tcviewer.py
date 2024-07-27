@@ -2011,7 +2011,7 @@ class App:
     def updated_rvor_levels(self):
         # Update the global variable with the new values
         global SELECTED_PRESSURE_LEVELS
-        
+
         new_SELECTED_PRESSURE_LEVELS = [level for level, var in self.level_vars.items() if var.get()]
 
         if SELECTED_PRESSURE_LEVELS == new_SELECTED_PRESSURE_LEVELS:
@@ -3729,6 +3729,24 @@ class App:
 
         #self.ax.stock_img()
         self.ax.set_extent(self.global_extent)
+
+        # Add state boundary lines
+        states = cfeature.NaturalEarthFeature(
+            category='cultural',
+            name='admin_1_states_provinces',
+            scale='50m',
+            facecolor='none'
+        )
+
+        self.ax.add_feature(states, edgecolor='gray')
+        
+        country_borders = cfeature.NaturalEarthFeature(
+            category='cultural',
+            name='admin_0_countries',
+            scale='50m',
+            facecolor='none'
+        )
+        self.ax.add_feature(country_borders, edgecolor='white', linewidth=0.5)
         self.ax.add_feature(cfeature.COASTLINE, edgecolor='yellow', linewidth=0.5)
 
         self.update_axes()
