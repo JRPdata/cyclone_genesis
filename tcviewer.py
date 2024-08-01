@@ -21,6 +21,9 @@ from typing import Any
 # CLEAR (ALL OR SINGLE BOX) STORM EXTREMA ANNOTATIONS = c key
 # HIDE (MOUSE HOVERED) STORMS / SHOW ALL HIDDEN = h key
 # SAVE SCREENSHOT = p key
+# TOGGLE RVOR CONTOURS = v key
+# TOGGLE RVOR CONTOUR LABELS = l key
+# SHOW RVOR LEVELS CHOOSER = V key
 
 # Click on (colored) legend for valid time days to cycle between what to display
 #   (relative to (00Z) start of earliest model init day)
@@ -124,6 +127,9 @@ DISPLAYED_FUNCTIONAL_ANNOTATIONS = [
 ]
 
 ##### END CONFIG
+
+# Maximum number of hours old before not loading rvor contours
+MAX_RVOR_HOURS_OLD = 6
 
 ##### CODING TWEAKS (Extend what extrema are annotated)
 
@@ -331,19 +337,24 @@ shapefile_paths = {
 }
 
 # disable rvor
-shapefile_paths = {}
+#shapefile_paths = {}
 
 overlay_gdfs = {}
 try:
-    for name, shapefile_path in shapefile_paths.items():
-        gdf = gpd.read_file(shapefile_path)
-        # Filter the GeoDataFrame to only include the Houston-The Woodlands-Sugar Land, TX Metro Area
-        if gdf.empty:
-            print(shapefile_path)
-            raise ValueError("Empty shapefile")
-        # Ensure the CRS matches that of the Cartopy map (PlateCarree)
-        custom_gdf = gdf.to_crs(ccrs.PlateCarree().proj4_init)
-        overlay_gdfs[name] = custom_gdf
+    shapefiles_are_recent = all(
+        os.path.exists(path) and
+        datetime.fromtimestamp(os.path.getmtime(path)) > datetime.now() - timedelta(hours=MAX_RVOR_HOURS_OLD)
+        for path in shapefile_paths.values()
+    )
+    if shapefiles_are_recent:
+        for name, shapefile_path in shapefile_paths.items():
+            gdf = gpd.read_file(shapefile_path)
+            # Filter the GeoDataFrame to only include the Houston-The Woodlands-Sugar Land, TX Metro Area
+            if gdf.empty:
+                raise ValueError("Empty shapefile")
+            # Ensure the CRS matches that of the Cartopy map (PlateCarree)
+            custom_gdf2 = gdf.to_crs(ccrs.PlateCarree().proj4_init)
+            overlay_gdfs[name] = custom_gdf2
 except:
     traceback.print_exc()
 
@@ -2605,7 +2616,6 @@ class App:
         if not overlay_gdfs:
             return
         self.init_rvor_contour_dict()
-
         global RVOR_CYCLONIC_CONTOURS
         global RVOR_CYCLONIC_LABELS
         global RVOR_ANTICYCLONIC_LABELS
@@ -3739,7 +3749,7 @@ class App:
         )
 
         self.ax.add_feature(states, edgecolor='gray')
-        
+
         country_borders = cfeature.NaturalEarthFeature(
             category='cultural',
             name='admin_0_countries',
