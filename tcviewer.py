@@ -774,8 +774,13 @@ def get_recent_storms(tcvitals_urls):
     dt_mods_tcvitals = {}
     current_time = datetime.utcnow()
     for url in tcvitals_urls:
-        response = requests.get(url)
-        if response.status_code == 200:
+        response = None
+        try:
+            response = requests.get(url)
+        except:
+            pass
+
+        if response and response.status_code == 200:
             dt_mod = get_modification_date_from_header(response.headers)
             lines = response.text.splitlines()
             for line in lines:
@@ -2299,7 +2304,9 @@ class App:
                     vmax10m = tc_candidate_point['vmax10m']
                 mslp = tc_candidate_point['mslp_value']
                 roci = tc_candidate_point['roci']
-                isobar_delta = tc_candidate_point['closed_isobar_delta']
+                isobar_delta = None
+                if 'closed_isobar_delta' in tc_candidate_point:
+                    isobar_delta = tc_candidate_point['closed_isobar_delta']
 
                 self.label_mouse_hover_matches.config(text=f"{overlapped_point_num}/{total_num_overlapped_points}")
                 if total_num_overlapped_points > 1:
@@ -3216,7 +3223,10 @@ class App:
                         else:
                             candidate_info['vmax10m_in_roci'] = None
                             candidate_info['vmax10m'] = None
-                        candidate_info['closed_isobar_delta'] = candidate['closed_isobar_delta']
+                        if 'closed_isobar_delta' in candidate and candidate['closed_isobar_delta']:
+                            candidate_info['closed_isobar_delta'] = candidate['closed_isobar_delta']
+                        else:
+                            candidate_info['closed_isobar_delta'] = None
                         if 'mslp' in candidate and candidate['mslp']:
                             candidate_info['mslp_value'] = candidate['mslp']
                         else:
@@ -3501,6 +3511,7 @@ class App:
                     candidate_info['vmax10m_in_roci'] = vmaxkt
                     candidate_info['vmax10m'] = vmaxkt
                     candidate_info['mslp_value'] = candidate['mslp_value']
+                    candidate_info['closed_isobar_delta'] = candidate['closed_isobar_delta']
 
                     if prev_lon:
                         prev_lon_f = float(prev_lon)
@@ -4124,15 +4135,17 @@ class App:
                         # out of bound motion
                         return
                     if type(x0) == type(x1) == type(y0) == type(y1):
-                        if self.rect_patch:
-                            try:
-                                self.rect_patch.remove()
-                            except:
-                                pass
                         width = x1 - x0
                         height = y1 - y0
-                        self.rect_patch = Rectangle((x0, y0), width, height, fill=False, color='yellow', linestyle='--')
-                        self.ax.add_patch(self.rect_patch)
+                        if self.rect_patch:
+                            self.rect_patch.set_xy((x0, y0))
+                            self.rect_patch.set_width(width)
+                            self.rect_patch.set_height(height)
+                        else:
+                            rect = Rectangle((x0, y0), width, height,
+                                                        fill=False, color='yellow', linestyle='--')
+                            self.rect_patch = self.ax.add_patch(rect)
+
                         self.fig.canvas.draw_idle()
 
     def reset_measurement(self):
