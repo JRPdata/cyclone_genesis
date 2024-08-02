@@ -337,7 +337,7 @@ shapefile_paths = {
 }
 
 # disable rvor
-#shapefile_paths = {}
+shapefile_paths = {}
 
 overlay_gdfs = {}
 try:
@@ -881,6 +881,27 @@ def ab_deck_line_to_dict(line):
                     raw_data['vmax10m'] = raw_data['vmax']
         else:
             raw_data['vmax10m'] = None
+
+        mslp = None
+
+        if 'mslp' in raw_data.keys():
+            if type(raw_data['mslp']) is int:
+                mslp = raw_data['mslp']
+                if mslp > 0:
+                    raw_data['mslp_value'] = mslp
+
+        outer_slp = None
+        if 'pouter' in raw_data.keys():
+            if type(raw_data['pouter']) is int:
+                outer_slp = raw_data['pouter']
+                if outer_slp > 0:
+                    raw_data['outer_slp'] = outer_slp
+
+        raw_data['closed_isobar_delta'] = None
+        if mslp and outer_slp:
+            if mslp > 0 and outer_slp > 0:
+                raw_data['closed_isobar_delta'] = outer_slp - mslp
+
         valid_datetime = init_datetime + timedelta(hours=raw_data['time_step'])
         raw_data['init_time'] = init_datetime.isoformat()
         raw_data['valid_time'] = valid_datetime.isoformat()
@@ -1256,11 +1277,27 @@ def tcvitals_line_to_dict(line):
         except:
             storm_vitals['vmax10m'] = None
 
+        mslp = None
         try:
             mslp = int(storm_vitals['central_pressure'])
-            storm_vitals['mslp'] = mslp
+            storm_vitals['mslp'] = int(mslp)
         except:
             storm_vitals['mslp'] = None
+
+        outer_slp = None
+        try:
+            outer_slp = int(storm_vitals['environmental_pressure'])
+            storm_vitals['outer_slp'] = int(outer_slp)
+        except:
+            storm_vitals['outer_slp'] = None
+
+        storm_vitals['closed_isobar_delta'] = None
+        try:
+            if mslp and outer_slp:
+                if mslp > 0 and outer_slp > 0:
+                    storm_vitals['closed_isobar_delta'] = outer_slp - mslp
+        except:
+            pass
 
     return storm_vitals
 
@@ -3175,10 +3212,11 @@ class App:
                             candidate_info['roci'] = None
                         if 'vmax10m' in candidate and candidate['vmax10m']:
                             candidate_info['vmax10m_in_roci'] = candidate['vmax10m']
+                            candidate_info['vmax10m'] = candidate['vmax10m']
                         else:
                             candidate_info['vmax10m_in_roci'] = None
                             candidate_info['vmax10m'] = None
-                        candidate_info['closed_isobar_delta'] = None
+                        candidate_info['closed_isobar_delta'] = candidate['closed_isobar_delta']
                         if 'mslp' in candidate and candidate['mslp']:
                             candidate_info['mslp_value'] = candidate['mslp']
                         else:
@@ -3462,7 +3500,6 @@ class App:
                     vmaxkt = candidate['vmax10m_in_roci'] * 1.9438452
                     candidate_info['vmax10m_in_roci'] = vmaxkt
                     candidate_info['vmax10m'] = vmaxkt
-                    candidate_info['closed_isobar_delta'] = candidate['closed_isobar_delta']
                     candidate_info['mslp_value'] = candidate['mslp_value']
 
                     if prev_lon:
