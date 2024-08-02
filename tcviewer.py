@@ -259,6 +259,9 @@ import cartopy.geodesic as cgeo
 from shapely.geometry import LineString
 import numpy as np
 
+#zoom box blitting
+from matplotlib.transforms import Bbox as pltbbox
+
 # config dialog
 from tkinter import simpledialog
 from tkinter import colorchooser
@@ -1912,8 +1915,9 @@ class App:
         self.adeck_storm = None
 
         self.genesis_model_cycle_time = None
-        self.zoom_rect = None
-        self.rect_patch = None
+
+        self.zoom_selection_box = None
+        self.event_manager = EventManager()
         self.last_cursor_lon_lat = (0.0, 0.0)
 
         self.lastgl = None
@@ -2817,7 +2821,7 @@ class App:
         self.update_mode()
 
         self.canvas_frame = ttk.Frame(self.root, style="CanvasFrame.TFrame")
-        self.canvas_frame.pack(fill=tk.X, expand=True)
+        self.canvas_frame.pack(fill=tk.X, expand=True, anchor=tk.NW)
 
         self.canvas = None
         self.fig = None
@@ -3696,6 +3700,7 @@ class App:
         gl = self.ax.gridlines(draw_labels=["bottom", "left"], x_inline=False, y_inline=False, auto_inline=False, color='white', alpha=0.5, linestyle='--')
         # Move axis labels inside the subplot
         self.ax.tick_params(axis='both', direction='in', labelsize=16)
+        # https://github.com/SciTools/cartopy/issues/1642
         gl.xpadding = -10     # Ideally, this would move labels inside the map, but results in hidden labels
         gl.ypadding = -10     # Ideally, this would move labels inside the map, but results in hidden labels
 
@@ -3767,6 +3772,7 @@ class App:
 
         # self.fig.add_subplot(111, projection=ccrs.PlateCarree())
         self.ax = plt.axes(projection=ccrs.PlateCarree())
+        self.ax.set_anchor("NW")
 
         self.ax.autoscale_view(scalex=False,scaley=False)
         self.ax.set_yscale('linear')
@@ -3811,7 +3817,7 @@ class App:
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.canvas_frame)
         self.canvas.draw()
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, anchor=tk.NW)
 
         self.cid_press = self.canvas.mpl_connect("button_press_event", self.on_click)
         self.cid_release = self.canvas.mpl_connect("button_release_event", self.on_release)
@@ -3833,6 +3839,7 @@ class App:
         self.canvas.draw()
         self.display_custom_boundaries()
         self.display_custom_overlay()
+        self.axes_size = self.ax.get_figure().get_size_inches() * self.ax.get_figure().dpi
 
     def on_key_press(self, event):
         if event.key == 'shift':
@@ -3840,12 +3847,10 @@ class App:
 
         if event.key == 'escape':
             # abort a zoom
-            # Remove the rectangle patch
-            if self.rect_patch:
-                self.rect_patch.remove()
-                self.rect_patch = None
-            self.zoom_rect = None
-            self.fig.canvas.draw()
+            if self.zoom_selection_box is not None:
+                self.zoom_selection_box.destroy()
+                self.zoom_selection_box = None
+            # self.fig.canvas.draw()
 
         if event.key == '0':
             self.zoom_out(max_zoom=True)
@@ -3972,11 +3977,6 @@ class App:
                                     else:
                                         self.time_step_opacity[i] = 1.0
 
-                        self.zoom_rect = [event.xdata, event.ydata]
-                        if self.rect_patch:
-                            self.rect_patch.remove()
-                            self.rect_patch = None
-
                         if changed_opacity:
                             # update map as we have changed what is visible
                             model_cycle = None
@@ -3984,6 +3984,16 @@ class App:
                                 model_cycle = self.genesis_model_cycle_time
 
                             self.redraw_map_with_data(model_cycle=model_cycle)
+
+                        else:
+                            # zooming
+                            try:
+                                self.zoom_selection_box = SelectionBox(self.ax, self.event_manager)
+                                # handle case we are not blocking (something other action is blocking)
+                                self.zoom_selection_box.update_box(event.xdata, event.ydata, event.xdata, event.ydata)
+                            except:
+                                # some other action is blocking
+                                pass
 
                     elif event.button == 3:  # Right click
                         self.zoom_out(step_zoom=True)
@@ -4031,23 +4041,14 @@ class App:
                     self.reset_measurement()
                     self.fig.canvas.draw()
         else:
-            if event.button == 1 and self.zoom_rect:  # Left click release
+            if event.button == 1 and self.zoom_selection_box:  # Left click release
                 if event.xdata is None or event.ydata is None or not inbound:
-                    if self.rect_patch is None:
-                        self.zoom_rect = None
+                    if not self.zoom_selection_box.is_2d():
+                        self.zoom_selection_box.destroy()
+                        self.zoom_selection_box = None
                         return
-                    x1 = self.zoom_rect[0] + self.rect_patch.get_width()
-                    y1 = self.zoom_rect[1] + self.rect_patch.get_height()
-                    self.zoom_rect.extend([x1, y1])
-                else:
-                    self.zoom_rect.extend([event.xdata, event.ydata])
 
-                # Remove the rectangle patch after zoom operation
-                if self.rect_patch:
-                    self.rect_patch.remove()
-                    self.rect_patch = None
                 self.zoom_in()
-                self.zoom_rect = None
 
     def update_circle_patch(self, lon=None, lat=None):
         if self.last_circle_lon == lon and self.last_circle_lat == lat:
@@ -4127,26 +4128,20 @@ class App:
 
                     self.fig.canvas.draw()
             else:
-                if self.zoom_rect:
-                    x0, y0 = self.zoom_rect
+                if self.zoom_selection_box:
+                    x0 = self.zoom_selection_box.lon1
+                    y0 = self.zoom_selection_box.lat1
                     if inbound:
                         x1, y1 = event.xdata, event.ydata
                     else:
                         # out of bound motion
                         return
                     if type(x0) == type(x1) == type(y0) == type(y1):
-                        width = x1 - x0
-                        height = y1 - y0
-                        if self.rect_patch:
-                            self.rect_patch.set_xy((x0, y0))
-                            self.rect_patch.set_width(width)
-                            self.rect_patch.set_height(height)
-                        else:
-                            rect = Rectangle((x0, y0), width, height,
-                                                        fill=False, color='yellow', linestyle='--')
-                            self.rect_patch = self.ax.add_patch(rect)
+                        if self.zoom_selection_box is not None:
+                            self.zoom_selection_box.update_box(x0, y0, x1, y1)
 
-                        self.fig.canvas.draw_idle()
+                        # blitting object will redraw using cached buffer
+                        # self.fig.canvas.draw_idle()
 
     def reset_measurement(self):
         if self.line:
@@ -4259,62 +4254,75 @@ class App:
             self.rvor_labels_new_extent()
             self.fig.canvas.draw()
 
-        elif self.zoom_rect and (None not in self.zoom_rect) and len(self.zoom_rect) == 4:
-            x0, y0, x1, y1 = self.zoom_rect
-            if x0 != x1 and y0 != y1:
-                extent = [min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)]
+        #elif self.zoom_rect and (None not in self.zoom_rect) and len(self.zoom_rect) == 4:
+        # 2d checks if valid rect and that x's aren't close and y's aren't close
+        elif self.zoom_selection_box:
+            if not self.zoom_selection_box.is_2d():
+                self.zoom_selection_box.destroy()
+                self.zoom_selection_box = None
+                return
 
-                # Calculate the aspect ratio of the zoom rectangle
-                zoom_aspect_ratio = (extent[3] - extent[2]) / (extent[1] - extent[0])
+            x0 = self.zoom_selection_box.lon1
+            y0 = self.zoom_selection_box.lat1
+            x1 = self.zoom_selection_box.lon2
+            y1 = self.zoom_selection_box.lat2
 
-                # Calculate the aspect ratio of the canvas frame
-                frame_width_pixels = self.canvas_frame.winfo_width()
-                frame_height_pixels = self.canvas_frame.winfo_height()
-                frame_aspect_ratio = frame_height_pixels / frame_width_pixels
+            self.zoom_selection_box.destroy()
+            self.zoom_selection_box = None
 
-                lat_extent = None
-                lon_extent = None
-                # Determine the dimension to set the extent and the dimension to expand
-                if zoom_aspect_ratio < frame_aspect_ratio:
-                    # Set the longitude extent and expand the latitude extent
-                    lon_extent = extent[0], extent[1]
-                    lat_center = (extent[2] + extent[3]) / 2
-                    lat_height = (lon_extent[1] - lon_extent[0]) * frame_aspect_ratio
-                    lat_min = lat_max = None
-                    if lat_center + (lat_height / 2) > 90.0:
-                        lat_max = 90.0
-                        lat_min = lat_max - lat_height
-                    elif lat_center - (lat_height / 2) < -90.0:
-                        lat_min = -90.0
-                        lat_max = lat_min + lat_height
-                    else:
-                        lat_min = lat_center - (lat_height / 2)
-                        lat_max = lat_center + (lat_height / 2)
-                    lat_extent = [lat_min, lat_max]
+            extent = [min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)]
+
+            # Calculate the aspect ratio of the zoom rectangle
+            zoom_aspect_ratio = (extent[3] - extent[2]) / (extent[1] - extent[0])
+
+            # Calculate the aspect ratio of the canvas frame
+            frame_width_pixels = self.canvas_frame.winfo_width()
+            frame_height_pixels = self.canvas_frame.winfo_height()
+            frame_aspect_ratio = frame_height_pixels / frame_width_pixels
+
+            lat_extent = None
+            lon_extent = None
+            # Determine the dimension to set the extent and the dimension to expand
+            if zoom_aspect_ratio < frame_aspect_ratio:
+                # Set the longitude extent and expand the latitude extent
+                lon_extent = extent[0], extent[1]
+                lat_center = (extent[2] + extent[3]) / 2
+                lat_height = (lon_extent[1] - lon_extent[0]) * frame_aspect_ratio
+                lat_min = lat_max = None
+                if lat_center + (lat_height / 2) > 90.0:
+                    lat_max = 90.0
+                    lat_min = lat_max - lat_height
+                elif lat_center - (lat_height / 2) < -90.0:
+                    lat_min = -90.0
+                    lat_max = lat_min + lat_height
                 else:
-                    # Set the latitude extent and expand the longitude extent
-                    lat_extent = extent[2], extent[3]
-                    lon_center = (extent[0] + extent[1]) / 2
-                    lon_width = (lat_extent[1] - lat_extent[0]) / frame_aspect_ratio
-                    lon_min = lon_max = None
-                    if lon_center + (lon_width / 2) > 180.0:
-                        lon_max = 180.0
-                        lon_min = lon_max - lon_width
-                    elif lon_center - (lon_width / 2) < -180.0:
-                        lon_min = -180.0
-                        lon_max = lon_min + lon_width
-                    else:
-                        lon_min = lon_center - (lon_width / 2)
-                        lon_max = lon_center + (lon_width / 2)
-                    lon_extent = [lon_min, lon_max]
+                    lat_min = lat_center - (lat_height / 2)
+                    lat_max = lat_center + (lat_height / 2)
+                lat_extent = [lat_min, lat_max]
+            else:
+                # Set the latitude extent and expand the longitude extent
+                lat_extent = extent[2], extent[3]
+                lon_center = (extent[0] + extent[1]) / 2
+                lon_width = (lat_extent[1] - lat_extent[0]) / frame_aspect_ratio
+                lon_min = lon_max = None
+                if lon_center + (lon_width / 2) > 180.0:
+                    lon_max = 180.0
+                    lon_min = lon_max - lon_width
+                elif lon_center - (lon_width / 2) < -180.0:
+                    lon_min = -180.0
+                    lon_max = lon_min + lon_width
+                else:
+                    lon_min = lon_center - (lon_width / 2)
+                    lon_max = lon_center + (lon_width / 2)
+                lon_extent = [lon_min, lon_max]
 
-                self.ax.set_extent([lon_extent[0], lon_extent[1], lat_extent[0], lat_extent[1]], crs=ccrs.PlateCarree())
+            self.ax.set_extent([lon_extent[0], lon_extent[1], lat_extent[0], lat_extent[1]], crs=ccrs.PlateCarree())
 
-                self.clear_storm_extrema_annotations()
-                self.update_axes()
-                self.fig.canvas.draw()
-                self.rvor_labels_new_extent()
-                self.fig.canvas.draw()
+            self.clear_storm_extrema_annotations()
+            self.update_axes()
+            self.fig.canvas.draw()
+            self.rvor_labels_new_extent()
+            self.fig.canvas.draw()
 
     def zoom_out(self, max_zoom=False, step_zoom=False):
         extent = self.ax.get_extent()
@@ -4552,6 +4560,88 @@ class App:
 
         # Bind the FocusOut event to the dialog's destroy method
         dialog.bind("<FocusOut>", lambda event: dialog.destroy())
+
+
+# blitting box for map (for zooms / selections)
+class SelectionBox:
+    def __init__(self, ax):
+        block_for_zoom = self.event_manager.block('zoom')
+        if not block_for_zoom:
+            raise ValueError("Failed to block events for SelectionBox")
+        else:
+            self.ax = ax
+            self.box = None
+            self.lon1, self.lat1, self.lon2, self.lat2 = None, None, None, None
+            self.has_latlons = False
+            self.bg = ax.figure.canvas.copy_from_bbox(ax.bbox)  # Save background
+
+    def restore_region(self):
+        self.ax.figure.canvas.restore_region(self.bg)
+
+    def is_2d(self):
+        if self.lon1 and self.lon2 and self.lat1 and self.lat2:
+            return not(np.isclose(self.lon1, self.lon2) or np.isclose(self.lat1, self.lat2))
+        else:
+            return False
+
+    def draw_box(self):
+        if self.box:
+            try:
+                self.box.remove()
+            except:
+                pass
+        self.box = self.ax.plot(
+            [self.lon1, self.lon2, self.lon2, self.lon1, self.lon1],
+            [self.lat1, self.lat1, self.lat2, self.lat2, self.lat1],
+            color='yellow', linestyle='--', transform=ccrs.PlateCarree())
+        for artist in self.box:
+            self.ax.draw_artist(artist)
+        self.ax.figure.canvas.blit(self.ax.bbox)
+
+    def update_box(self, lon1, lat1, lon2, lat2):
+        self.remove()
+        self.restore_region()  # Restore first
+        self.lon1, self.lat1, self.lon2, self.lat2 = lon1, lat1, lon2, lat2
+        if lon1 and lat1 and lon2 and lat2:
+            self.has_latlons = True
+            self.draw_box()  # Draw the box
+        self.ax.figure.canvas.blit(self.ax.bbox)
+
+    def remove(self):
+        if self.box:
+            try:
+                for artist in self.box:
+                    artist.remove()
+            except:
+                pass
+
+    def destroy(self):
+        self.remove()
+        self.restore_region()  # Restore regions without drawing
+        self.ax.figure.canvas.blit(self.ax.bbox)
+        self.event_manager.unblock_events()
+
+# for mutex blocking of mouse hover events
+class EventManager:
+    def __init__(self):
+        self.blocked = False
+        self.blocking_purpose = None
+
+    def block_events(self, purpose):
+        if self.blocked:
+            return False
+        self.blocked = True
+        self.blocking_purpose = purpose
+        return True
+
+    def unblock_events(self):
+        if not self.blocked:
+            raise ValueError("Events are not blocked")
+        self.blocked = False
+        self.blocking_purpose = None
+
+    def get_blocking_purpose(self):
+        return self.blocking_purpose
 
 # use toplevel rather than simple dialog as with this we can center the dialog
 class ConfigDialog(tk.Toplevel):
