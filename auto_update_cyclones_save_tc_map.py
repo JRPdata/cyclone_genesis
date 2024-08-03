@@ -57,18 +57,18 @@ debug_isobar_images = False
 debug_save_vorticity = False
 
 # output calculation timing for debugging & optimization
-debug_calc_exec_time = True
+debug_calc_exec_time = False
 
 # write networkx graphs (original and reduced) of TC tracks (in graphs/ folder)
-write_graphs = True
+write_graphs = False
 
 graphs_folder = '/home/db/Documents/JRPdata/cyclone-genesis/graphs'
 
 # save disturbance maps
-save_disturbance_maps = True
+save_disturbance_maps = False
 
 # save disturbance maps
-save_tc_maps = True
+save_tc_maps = False
 
 import json
 import pygrib
@@ -3504,20 +3504,20 @@ last_model_init_times = []
 while True:
     #print("\nChecking for new disturbance data from completed model runs")
     calc_tc_candidates()
+    if save_tc_maps:
+        # most recent N model runs
+        num_init_times_per_model = 1
+        model_init_times, recent_candidates = get_tc_candidates_from_last_n_model_init_times(num_init_times_per_model)
+        if model_init_times != last_model_init_times:
+            #for model_name, init_time in model_init_times.items():
+            #    print(model_name, init_time)
+            save_file_path = generate_tc_chart(recent_candidates, saveonly = True)
+            mlist = []
+            for model_name, init_time in model_init_times.items():
+                mlist.append(model_name + " " + init_time[0][:-6])
+            mstr = ", ".join(mlist)
+            update_index_html(tc_maps_folder, save_file_path, mstr)
 
-    # most recent N model runs
-    num_init_times_per_model = 1
-    model_init_times, recent_candidates = get_tc_candidates_from_last_n_model_init_times(num_init_times_per_model)
-    if model_init_times != last_model_init_times:
-        #for model_name, init_time in model_init_times.items():
-        #    print(model_name, init_time)
-        save_file_path = generate_tc_chart(recent_candidates, saveonly = True)
-        mlist = []
-        for model_name, init_time in model_init_times.items():
-            mlist.append(model_name + " " + init_time[0][:-6])
-        mstr = ", ".join(mlist)
-        update_index_html(tc_maps_folder, save_file_path, mstr)
-
-    last_model_init_times = model_init_times
+        last_model_init_times = model_init_times
 
     time.sleep(60 * polling_interval)
