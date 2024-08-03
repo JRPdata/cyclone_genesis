@@ -3850,7 +3850,7 @@ class App:
             self.cycle_to_next_overlapped_point()
 
         if event.key == 'g':
-            #TODO DEBUGGING ONLY
+            #TODO DEBUGGING ONLY (incomplete functionality)
             print(SelectionLoops.get_polygons())
 
         if event.key == 'h':
@@ -4450,7 +4450,6 @@ class App:
 
     def toggle_selection_loop_mode(self):
         self.selection_loop_mode = not(self.selection_loop_mode)
-        #TODO Change color of button
         self.update_toggle_selection_loop_button_color()
         self.set_focus_on_map()
 
