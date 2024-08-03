@@ -367,6 +367,13 @@ except:
     traceback.print_exc()
 
 #### END CUSTOM OVERLAY
+# Debugging # TODO REMOVE
+import inspect
+def print_line_number():
+    frame = inspect.getouterframes(inspect.currentframe())[1]
+    print(f"Current line number: {frame.lineno}")
+###
+
 
 matplotlib.use('Agg')
 matplotlib.rcParams['figure.dpi'] = CHART_DPI
@@ -1850,6 +1857,7 @@ class App:
         self.switch_to_adeck_button = None
         self.genesis_config_button = None
         self.add_marker_button = None
+        self.toggle_selection_loop_button = None
         self.label_mouse_coords_prefix = None
         self.label_mouse_coords = None
         self.label_mouse_hover_info_prefix = None
@@ -2032,6 +2040,7 @@ class App:
         self.create_widgets()
 
         self.measure_tool = MeasureTool(self.ax)
+        self.selection_loop_mode = False
         self.display_map()
 
     def updated_rvor_levels(self):
@@ -2063,7 +2072,7 @@ class App:
         self.rvor_dialog_open = False
         dialog.destroy()
         # focus back on app
-        self.canvas.get_tk_widget().focus_set()
+        self.set_focus_on_map()
 
     # noinspection PyUnusedLocal
     def show_rvor_dialog(self, event=None):
@@ -2200,6 +2209,9 @@ class App:
         self.ax.set_yscale('linear')
         self.ax.figure.canvas.draw()
 
+    def set_focus_on_map(self):
+        self.canvas.get_tk_widget().focus_set()
+
     # calculate radius of pixels in degrees
     def calculate_radius_pixels(self):
         # Get current extent of the map in degrees and pixels
@@ -2319,6 +2331,7 @@ class App:
             traceback.print_exc()
             pass
 
+    # noinspection GrazieInspection
     def update_labels_for_mouse_hover(self, lat=None, lon=None):
         if not(lat) or not(lon):
             return
@@ -2772,6 +2785,7 @@ class App:
         current_value = self.adeck_selected_combobox.get()
         if current_value == self.adeck_previous_selected:
             # user did not change selection
+            self.set_focus_on_map()
             return
         else:
             self.adeck_previous_selected = current_value
@@ -2780,6 +2794,7 @@ class App:
                 self.update_deck_data()
             self.hidden_tc_candidates = set()
             self.display_deck_data()
+            self.set_focus_on_map()
 
     def create_widgets(self):
         self.top_frame = ttk.Frame(self.root, style="TopFrame.TFrame")
@@ -2863,12 +2878,11 @@ class App:
         self.genesis_config_button = ttk.Button(self.genesis_mode_frame, text="CONFIG \u2699", command=self.show_config_genesis_dialog, style="TButton")
         self.genesis_config_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
-
     def create_tools_widgets(self):
         #self.tools_frame = ttk.Frame(self.tools_frame, style="Tools.TFrame")
 
-        self.add_marker_button = ttk.Button(self.tools_frame, text="ADD MARKER", command=self.add_marker, style="TButton")
-        self.add_marker_button.pack(side=tk.LEFT, padx=5, pady=5)
+        self.toggle_selection_loop_button = ttk.Button(self.tools_frame, text="\u27B0 SELECT", command=self.toggle_selection_loop_mode, style="TButton")
+        self.toggle_selection_loop_button.pack(side=tk.LEFT, padx=5, pady=5)
 
         self.label_mouse_coords_prefix = ttk.Label(self.tools_frame, text="Cursor position:", style="TLabel")
         self.label_mouse_coords_prefix.pack(side=tk.LEFT, padx=5, pady=5)
@@ -2927,6 +2941,7 @@ class App:
     def switch_mode(self):
         self.mode = "GENESIS" if self.mode == "ADECK" else "ADECK"
         self.update_mode()
+        self.set_focus_on_map()
 
     def update_mode(self):
         if self.mode == "ADECK":
@@ -2935,6 +2950,12 @@ class App:
         else:
             self.adeck_mode_frame.pack_forget()
             self.genesis_mode_frame.pack(side=tk.TOP, fill=tk.X)
+
+    def update_toggle_selection_loop_button_color(self):
+        if self.selection_loop_mode:
+            self.toggle_selection_loop_button.configure(style='YellowAndBorder.TButton')
+        else:
+            self.toggle_selection_loop_button.configure(style='WhiteAndBorder.TButton')
 
     def update_reload_button_color(self):
         if self.stale_urls['adeck']:
@@ -3037,6 +3058,7 @@ class App:
         self.timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_data)
 
         self.reload()
+        self.set_focus_on_map()
 
     def reload(self):
         if self.mode == "ADECK":
@@ -3797,6 +3819,7 @@ class App:
         self.ax.set_axes_locator(divider.new_locator(nx=1, ny=1))
         self.clear_storm_extrema_annotations()
         AnnotatedCircles.changed_extent(self.ax)
+        SelectionLoops.changed_extent(self.ax)
         self.measure_tool.changed_extent(self.ax)
         self.canvas.draw()
         self.display_custom_boundaries()
@@ -3826,17 +3849,26 @@ class App:
         if event.key == 'n':
             self.cycle_to_next_overlapped_point()
 
+        if event.key == 'g':
+            #TODO DEBUGGING ONLY
+            print(SelectionLoops.get_polygons())
+
         if event.key == 'h':
-            self.hide_tc_candidate()
+            if self.selection_loop_mode:
+                SelectionLoops.toggle_visible()
+            else:
+                self.hide_tc_candidate()
 
         if event.key == 'x':
             # annotate storm extrema
             self.annotate_storm_extrema()
 
         if event.key == 'c':
+            if self.selection_loop_mode:
+                SelectionLoops.clear()
             # clear storm extrema annotation(s)
             # check if any annotations has focus
-            if self.annotated_circle_objects:
+            elif self.annotated_circle_objects:
                 any_has_focus = False
                 for internal_id, annotated_circles in self.annotated_circle_objects.items():
                     removed_circle = None
@@ -3887,6 +3919,9 @@ class App:
                 inbound = False
 
             if inbound:
+                if self.selection_loop_mode:
+                    SelectionLoops.on_click(event)
+                    return
                 try:
                     do_measure = self.measure_tool.on_click(event)
                 except:
@@ -3972,6 +4007,10 @@ class App:
         except:
             inbound = False
 
+        if self.selection_loop_mode:
+            SelectionLoops.on_release(event)
+            return
+
         doing_measurement = self.measure_tool.in_measure_mode()
         if doing_measurement:
             pass
@@ -4028,7 +4067,11 @@ class App:
             self.last_cursor_lon_lat = (lon, lat)
             self.update_labels_for_mouse_hover(lat=lat, lon=lon)
 
-            if self.zoom_selection_box:
+            if self.selection_loop_mode:
+                if inbound:
+                    SelectionLoops.on_motion(event)
+                return
+            elif self.zoom_selection_box:
                 x0 = self.zoom_selection_box.lon1
                 y0 = self.zoom_selection_box.lat1
                 if inbound:
@@ -4090,6 +4133,7 @@ class App:
             self.clear_storm_extrema_annotations()
             self.update_axes()
             AnnotatedCircles.changed_extent(self.ax)
+            SelectionLoops.changed_extent(self.ax)
             self.measure_tool.changed_extent(self.ax)
             self.ax.figure.canvas.draw()
             self.rvor_labels_new_extent()
@@ -4158,6 +4202,7 @@ class App:
             self.clear_storm_extrema_annotations()
             self.update_axes()
             AnnotatedCircles.changed_extent(self.ax)
+            SelectionLoops.changed_extent(self.ax)
             self.measure_tool.changed_extent(self.ax)
             self.ax.figure.canvas.draw()
             self.rvor_labels_new_extent()
@@ -4215,6 +4260,7 @@ class App:
                 self.clear_storm_extrema_annotations()
                 self.update_axes()
                 AnnotatedCircles.changed_extent(self.ax)
+                SelectionLoops.changed_extent(self.ax)
                 self.measure_tool.changed_extent(self.ax)
                 self.ax.figure.canvas.draw()
                 self.rvor_labels_new_extent()
@@ -4249,6 +4295,7 @@ class App:
                 self.clear_storm_extrema_annotations()
                 self.update_axes()
                 AnnotatedCircles.changed_extent(self.ax)
+                SelectionLoops.changed_extent(self.ax)
                 # do measure last as we are going to remove and redraw it
                 self.measure_tool.changed_extent(self.ax)
                 self.ax.figure.canvas.draw()
@@ -4257,9 +4304,11 @@ class App:
 
     def show_config_genesis_dialog(self):
         self.show_config_dialog()
+        self.set_focus_on_map()
 
     def show_config_adeck_dialog(self):
         self.show_config_dialog()
+        self.set_focus_on_map()
 
     def show_config_dialog(self):
         global displayed_functional_annotation_options
@@ -4324,8 +4373,8 @@ class App:
             with open('settings_tcviewer.json', 'w') as f:
                 json.dump(result, f, indent=4)
 
-        # fix focus back to root
-        self.canvas.get_tk_widget().focus_set()
+        # fix focus back to map
+        self.set_focus_on_map()
 
     @staticmethod
     def load_settings():
@@ -4399,6 +4448,12 @@ class App:
         # Bind the FocusOut event to the dialog's destroy method
         dialog.bind("<FocusOut>", lambda event: dialog.destroy())
 
+    def toggle_selection_loop_mode(self):
+        self.selection_loop_mode = not(self.selection_loop_mode)
+        #TODO Change color of button
+        self.update_toggle_selection_loop_button_color()
+        self.set_focus_on_map()
+
 # Blitting measure tool (single instance)
 class MeasureTool:
     def __init__(self, ax):
@@ -4427,7 +4482,6 @@ class MeasureTool:
             if not EventManager.get_blocking_purpose():
                 blocking_for_measure = EventManager.block_events('measure')
                 if not blocking_for_measure:
-                    print(EventManager.get_blocking_purpose())
                     raise ValueError("Failed to block events for MeasureTool")
             self.blocking = True
             return True
@@ -4653,6 +4707,215 @@ class SelectionBox:
         self.restore_region()  # Restore regions without drawing
         self.ax.figure.canvas.blit(self.ax.bbox)
         EventManager.unblock_events()
+
+from matplotlib.patches import Polygon as MPLPolygon
+
+class SelectionLoops:
+    ax = None
+    selection_loop_objects = []
+    last_loop = None
+    selecting = False
+    blocking = False
+    visible = True
+
+    @classmethod
+    def unblock(cls):
+        if cls.blocking:
+            try:
+                EventManager.unblock_events()
+            except:
+                traceback.print_exc()
+        cls.blocking = False
+
+    @classmethod
+    def block(cls):
+        try:
+            EventManager.block_events('selection_loop')
+            cls.blocking = True
+        except:
+            traceback.print_exc()
+            cls.blocking = False
+
+    @classmethod
+    def get_polygons(cls):
+        all_polygons = []
+        for selection_loop_obj in cls.selection_loop_objects:
+            all_polygons.extend(selection_loop_obj.get_polygons())
+        return all_polygons
+
+    @classmethod
+    def clear(cls):
+        for selection_loop_obj in cls.selection_loop_objects:
+            selection_loop_obj.remove()
+        cls.selection_loop_objects = []
+        cls.last_loop = None
+        cls.selecting = False
+        cls.unblock()
+        cls.ax.figure.canvas.draw_idle()
+
+    @classmethod
+    def toggle_visible(cls):
+        if not cls.selecting:
+            cls.visible = not(cls.visible)
+            for selection_loop_obj in cls.selection_loop_objects:
+                selection_loop_obj.set_visible(cls.visible)
+            cls.ax.figure.canvas.draw_idle()
+
+    @classmethod
+    def on_click(cls, event):
+        if event.button == 1:  # left click
+            cls.last_loop = cls.SelectionLoop(cls.ax, event)
+            cls.selection_loop_objects.append(cls.last_loop)
+            cls.selecting = True
+            cls.block()
+            return True
+        else:
+            return False
+
+    @classmethod
+    def on_motion(cls, event):
+        if cls.selecting and event.button == 1:  # left click
+            return cls.last_loop.on_motion(event)
+        else:
+            return False
+
+    @classmethod
+    def on_release(cls, event):
+        if cls.selecting and event.button == 1:  # left click
+            cls.last_loop.on_release()
+            cls.unblock()
+            cls.selecting = False
+            return True
+        else:
+            cls.selecting = False
+            return False
+
+    @classmethod
+    def changed_extent(cls, new_ax):
+        if cls.ax != new_ax:
+            cls.visible = True
+        cls.ax = new_ax
+        for selection_loop_obj in cls.selection_loop_objects:
+            selection_loop_obj.changed_extent(new_ax)
+
+    class SelectionLoop:
+        def __init__(self, ax, event):
+            self.ax = ax
+            self.verts = []
+            self.polygons = []
+            self.preview = None
+            self.preview_artists = []
+            self.closed_artists = []
+            self.background = None
+            self.closed = False
+            self.verts.append((event.xdata, event.ydata))
+            self.alpha = 0.35
+            self.bg = None
+
+        def get_polygons(self):
+            return self.polygons
+
+        def changed_extent(self, ax):
+            # preserve the polygons on the map across all map & data changes
+            if ax != self.ax:
+                self.ax = ax
+                if self.closed_artists:
+                    self.remove()
+                    ax.figure.canvas.draw()
+                    # update background region
+                    self.bg = ax.figure.canvas.copy_from_bbox(ax.bbox)
+                    self.update_closed_artists()
+
+        def set_visible(self, visible):
+            for patch in self.closed_artists:
+                patch.set_visible(visible)
+
+        def on_motion(self, event):
+            self.verts.append((event.xdata, event.ydata))
+            self.update_preview()
+            return True
+
+        def on_release(self):
+            polys = self.close_loop()
+            self.set_polygons(polys)
+            self.update_closed_artists()
+            self.closed = True
+            # clean up memory
+            self.background = None
+
+        def remove_preview_artists(self):
+            if self.preview_artists:
+                for artist in self.preview_artists:
+                    artist.remove()
+                self.preview_artists = []
+                self.preview = []
+
+        def remove_closed_artists(self):
+            if self.closed_artists:
+                for artist in self.closed_artists:
+                    artist.remove()
+                self.closed_artists = []
+                self.closed = []
+
+        def remove(self):
+            self.remove_preview_artists()
+            self.remove_closed_artists()
+
+        def update_preview(self):
+            if self.background is None:
+                self.background = self.ax.figure.canvas.copy_from_bbox(self.ax.bbox)
+            if self.preview_artists is not None:
+                self.ax.figure.canvas.restore_region(self.background)
+
+            self.remove_preview_artists()
+            self.preview = self.close_loop()
+            if self.preview:
+                for poly in self.preview:
+                    patch = MPLPolygon(poly.exterior.coords, alpha=self.alpha)
+                    artist = self.ax.add_patch(patch)
+                    self.preview_artists.append(artist)
+                    self.ax.draw_artist(artist)
+                self.ax.figure.canvas.blit(self.ax.bbox)
+                return
+            else:
+                self.ax.figure.canvas.restore_region(self.background)
+                return
+
+        def close_loop(self):
+            polys = []
+            if len(self.verts) > 2:
+                shapely_poly = Polygon(self.verts)
+                if shapely_poly.is_simple:
+                    # no self-intersections
+                    polys.append(shapely_poly)
+                else:
+                    # self-intersections, find loops
+                    loops = self.find_loops(shapely_poly)
+                    polys.extend(loops)
+            return polys
+
+        def set_polygons(self, polygons):
+            self.polygons = polygons
+
+        @staticmethod
+        def find_loops(shapely_poly):
+            loops = []
+            if shapely_poly.is_simple:
+                loops.append(shapely_poly)
+            else:
+                interiors = shapely_poly.interiors
+                for interior in interiors:
+                    loop = Polygon(interior)
+                    loops.append(loop)
+                loops.append(Polygon(shapely_poly.exterior))
+            return loops
+
+        def update_closed_artists(self):
+            for poly in self.polygons:
+                patch = MPLPolygon(poly.exterior.coords, alpha=self.alpha)
+                self.closed_artists.append(self.ax.add_patch(patch))
+            self.remove_preview_artists()
+            self.ax.figure.canvas.draw_idle()
 
 # for mutex blocking of mouse hover events
 class EventManager:
@@ -4895,6 +5158,9 @@ if __name__ == "__main__":
     tk_style.configure("Red.TButton", background=default_bg, foreground="red")
     tk_style.configure("Orange.TButton", background=default_bg, foreground="orange")
     tk_style.configure("Yellow.TButton", background=default_bg, foreground="yellow")
+
+    tk_style.configure("YellowAndBorder.TButton", background=default_bg, foreground="yellow", bordercolor="yellow")
+    tk_style.configure("WhiteAndBorder.TButton", background=default_bg, foreground="white", bordercolor="white")
 
     tk_style.configure("TLabel", background=default_bg, foreground=default_fg)
     tk_style.configure("FixedWidthWhite.TLabel", font=("Latin Modern Mono", 12), background=default_bg, foreground="white")
