@@ -1,10 +1,10 @@
 # requires curl, and grib_copy for navgem (ECC grib_tools)
+import traceback
 
 import re
 import os
 import subprocess
 import time
-import re
 import requests
 
 from datetime import datetime, timedelta
@@ -38,7 +38,7 @@ num_latest_runs = 4
 disturbances_db_file_path = '/home/db/Documents/JRPdata/cyclone-genesis/disturbances.db'
 
 # GFS and NAV are in the same thread as they use the same server
-model_names_to_download_thread_groupings = [['GFS', 'NAV'], ['CMC'], ['ECM']]
+model_names_to_download_thread_groupings = [['EPS-TCGEN'], ['GEFS-TCGEN', 'GEPS-TCGEN', 'FNMOC-TCGEN', 'GFS', 'NAV'], ['CMC'], ['ECM']]
 
 # use this to download individual grib files for NAVGEM so we can split them with grib_copy
 tmp_download_dir = '/tmp'
@@ -47,6 +47,10 @@ tmp_download_dir = '/tmp'
 # tmp refers to tmp_download_dir, the rest refer to model_data_folders_by_model_name
 min_space_bytes = {
     'tmp': '100000000',
+    'EPS-TCGEN': '50000000',
+    'GEFS-TCGEN': '50000000',
+    'GEPS-TCGEN': '50000000',
+    'FNMOC-TCGEN': '50000000',
     'GFS': '100000000',
     'ECM': '100000000',
     'CMC': '100000000',
@@ -54,6 +58,10 @@ min_space_bytes = {
 }
 
 model_data_folders_by_model_name = {
+    'EPS-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/eps-tcgen',
+    'GEFS-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/gefs-tcgen',
+    'GEPS-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/geps-tcgen',
+    'FNMOC-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/fnmoc-tcgen',
     'GFS': '/home/db/metview/JRPdata/globalmodeldata/gfs',
     'ECM': '/home/db/metview/JRPdata/globalmodeldata/ecm',
     'CMC': '/home/db/metview/JRPdata/globalmodeldata/cmc',
@@ -61,6 +69,10 @@ model_data_folders_by_model_name = {
 }
 
 url_folder_by_model = {
+    'EPS-TCGEN': 'ftp://wmo:essential@diss.ecmwf.int',
+    'GEFS-TCGEN': 'https://nomads.ncep.noaa.gov/pub/data/nccf/com/ens_tracker/prod',
+    'GEPS-TCGEN': 'https://nomads.ncep.noaa.gov/pub/data/nccf/com/ens_tracker/prod',
+    'FNMOC-TCGEN': 'https://nomads.ncep.noaa.gov/pub/data/nccf/com/ens_tracker/prod',
     'GFS': 'https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod',
     'ECM': 'https://data.ecmwf.int/forecasts',
     'CMC': 'http://hpfx.collab.science.gc.ca',
@@ -76,7 +88,26 @@ model_time_step_str_format = {
 }
 
 # not including GFS analysis files (.anl)
+#   this is the number of members for TCGEN ensembles (excluding EPS)
 total_model_time_steps = {
+    'EPS-TCGEN': {
+        '00': 9999,
+        '12': 9999
+    },
+    'GEFS-TCGEN': {
+        '00': 32,
+        '06': 32,
+        '12': 32,
+        '18': 32
+    },
+    'GEPS-TCGEN': {
+        '00': 22,
+        '12': 22
+    },
+    'FNMOC-TCGEN': {
+        '00': 22,
+        '12': 22
+    },
     'GFS': {
         '00': 65,
         '06': 65,
@@ -99,7 +130,26 @@ total_model_time_steps = {
     }
 }
 # only interested in 6 hour time steps
+#   for tcgen ensembles these are the member names (excluding EPS)
 all_time_steps_by_model = {
+    'EPS-TCGEN': {
+        '00': ['A_JSXX'],
+        '12': ['A_JSXX']
+    },
+    'GEFS-TCGEN': {
+        '00': ['gfso', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30'],
+        '06': ['gfso', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30'],
+        '12': ['gfso', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30'],
+        '18': ['gfso', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30']
+    },
+    'GEPS-TCGEN': {
+        '00': ['cmc', 'cc00', 'cp01', 'cp02', 'cp03', 'cp04', 'cp05', 'cp06', 'cp07', 'cp08', 'cp09', 'cp10', 'cp11', 'cp12', 'cp13', 'cp14', 'cp15', 'cp16', 'cp17', 'cp18', 'cp19', 'cp20', 'cp21', 'cp22', 'cp23', 'cp24', 'cp25', 'cp26', 'cp27', 'cp28', 'cp29', 'cp30'],
+        '12': ['cmc', 'cc00', 'cp01', 'cp02', 'cp03', 'cp04', 'cp05', 'cp06', 'cp07', 'cp08', 'cp09', 'cp10', 'cp11', 'cp12', 'cp13', 'cp14', 'cp15', 'cp16', 'cp17', 'cp18', 'cp19', 'cp20', 'cp21', 'cp22', 'cp23', 'cp24', 'cp25', 'cp26', 'cp27', 'cp28', 'cp29', 'cp30']
+    },
+    'FNMOC-TCGEN': {
+        '00': ['ngx', 'nc00', 'np01', 'np02', 'np03', 'np04', 'np05', 'np06', 'np07', 'np08', 'np09', 'np10', 'np11', 'np12', 'np13', 'np14', 'np15', 'np16', 'np17', 'np18', 'np19', 'np20', 'np21', 'np22', 'np23', 'np24', 'np25', 'np26', 'np27', 'np28', 'np29', 'np30'],
+        '12': ['ngx', 'nc00', 'np01', 'np02', 'np03', 'np04', 'np05', 'np06', 'np07', 'np08', 'np09', 'np10', 'np11', 'np12', 'np13', 'np14', 'np15', 'np16', 'np17', 'np18', 'np19', 'np20', 'np21', 'np22', 'np23', 'np24', 'np25', 'np26', 'np27', 'np28', 'np29', 'np30']
+    },
     'GFS': {
         '00': [0, 6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 78, 84, 90, 96, 102, 108, 114, 120, 126, 132, 138, 144, 150, 156, 162, 168, 174, 180, 186, 192, 198, 204, 210, 216, 222, 228, 234, 240, 246, 252, 258, 264, 270, 276, 282, 288, 294, 300, 306, 312, 318, 324, 330, 336, 342, 348, 354, 360, 366, 372, 378, 384],
         '06': [0, 6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 78, 84, 90, 96, 102, 108, 114, 120, 126, 132, 138, 144, 150, 156, 162, 168, 174, 180, 186, 192, 198, 204, 210, 216, 222, 228, 234, 240, 246, 252, 258, 264, 270, 276, 282, 288, 294, 300, 306, 312, 318, 324, 330, 336, 342, 348, 354, 360, 366, 372, 378, 384],
@@ -122,7 +172,12 @@ all_time_steps_by_model = {
     }
 }
 
+# number of files expected per time-step (or member for tcgen)
 expected_num_grib_files_by_model_name = {
+    'EPS-TCGEN': 9999,
+    'GEFS-TCGEN': 1,
+    'GEPS-TCGEN': 1,
+    'FNMOC-TCGEN': 1,
     'GFS': 9,
     'CMC': 9,
     'ECM': 9,
@@ -135,11 +190,16 @@ ignored_file_extensions = [
     'asc',
     'idx',
     'json',
-    'index'
+    'index',
+    "gene"
 ]
 
 # hours between model runs (not the time steps)
 model_interval_hours = {
+    'EPS-TCGEN': 12,
+    'GEFS-TCGEN': 6,
+    'GEPS-TCGEN': 12,
+    'FNMOC-TCGEN': 12,
     'GFS': 6,
     'ECM': 12,
     'CMC': 12,
@@ -147,7 +207,12 @@ model_interval_hours = {
 }
 
 # this is used to check for already downloaded files
+#   for tcgen ensembles these are expected members (TC candidates for EPS)
 time_step_re_str_by_model_name = {
+    'EPS-TCGEN': r'.*?A_JSXX(?P<time_step>\d+EC..)',
+    'GEFS-TCGEN': r'.*?storms\.(?P<time_step>[a-z0-9]+)\.',
+    'GEPS-TCGEN': r'.*?storms\.(?P<time_step>[a-z0-9]+)\.',
+    'FNMOC-TCGEN': r'.*?storms\.(?P<time_step>[a-z0-9]+)\.',
     'GFS': r'.*?\.f(?P<time_step>\d\d\d)_',
     'ECM': r'.*?-(?P<time_step>\d+)h-oper-fc',
     'CMC': r'.*?\d+_P(?P<time_step>\d+)',
@@ -225,6 +290,7 @@ def have_enough_disk_space():
     enough_space_for_all_paths = True
     for name, path in paths_to_check.items():
         try:
+            os.makedirs(path, exist_ok = True)
             dustats = shutil.disk_usage(path)
             if dustats:
                 free_bytes = dustats.free
@@ -241,17 +307,23 @@ def have_enough_disk_space():
 def get_calculated_and_missing_time_steps(model_name, model_timestamp):
     model_hour = f'{model_timestamp.hour:02}'
     # remove from this the calculated timesteps
+    #   this is the time steps missing, or the members for tcgen ensembles (just the file name prefix for EPS)
     model_time_steps_missing = set(all_time_steps_by_model[model_name][model_hour])
 
-    disturbance_candidates = get_disturbances_from_db(model_name, model_timestamp)
-    time_steps_calculated = set()
-    if disturbance_candidates:
-        for time_step_str, candidates in disturbance_candidates.items():
-            time_step_int = int(time_step_str)
-            time_steps_calculated.add(time_step_int)
-            # discard will not throw an error even if it is not there
-            model_time_steps_missing.discard(time_step_int)
-    return sorted(list(time_steps_calculated)), sorted(list(model_time_steps_missing))
+    if "TCGEN" not in model_name:
+        disturbance_candidates = get_disturbances_from_db(model_name, model_timestamp)
+        time_steps_calculated = set()
+        if disturbance_candidates:
+            for time_step_str, candidates in disturbance_candidates.items():
+                time_step_int = int(time_step_str)
+                time_steps_calculated.add(time_step_int)
+                # discard will not throw an error even if it is not there
+                model_time_steps_missing.discard(time_step_int)
+        return sorted(list(time_steps_calculated)), sorted(list(model_time_steps_missing))
+    else:
+        model_members_missing = model_time_steps_missing
+        # always download recent files for tcgen (don't check disturbances db for this)
+        return sorted(list(model_members_missing)), sorted(list(model_members_missing))
 
 def get_disturbances_from_db(model_name, model_timestamp):
     conn = None
@@ -326,7 +398,7 @@ def generate_curl_grib_copy_commands_nav(timestamp_prefix, url_folder, url_base_
     output_dir_timestamp = os.path.join(output_dir, timestamp_prefix)
 
     # have no index file so use requests.head first
-    # this allows us to to check if the directory exists before trying to get all the split grib files
+    # this allows us to check if the directory exists before trying to get all the split grib files
     try:
         res = requests.head(url_folder)
         if not res:
@@ -577,15 +649,152 @@ def generate_curl_commands_gfs(timestamp_prefix, idx_file_name, url_folder, url_
                 print_level(3, f"Warning: Command failed with exit code {result.returncode}")
                 print_level(3, f"Command: {curl_command}")
                 print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
+                try:
+                    # clear directory if no files ready yet
+                    os.rmdir(output_dir_timestamp)
+                except:
+                    pass
                 return -2
+
+    return 0
+
+#def generate_curl_commands_gfs(timestamp_prefix, idx_file_name, url_folder, url_base_file_name, output_dir, params):
+def generate_curl_commands_eps(timestamp_prefix, url_folder, file_name_prefix, finish_url_path, output_dir):
+    output_dir_timestamp = os.path.join(output_dir, timestamp_prefix)
+    output_file_prefix = os.path.join(output_dir_timestamp, f"{timestamp_prefix}_")
+
+    is_complete = False
+    # get the ftp file listing
+    try:
+
+        url = f'{url_folder}'
+        curl_command = f"curl -y 30 -Y 30 -f -v -s  --list-only {url}"
+        print_level(4, curl_command)
+
+        # Run the subprocess and capture its output
+        result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        time.sleep(sleep_time)
+        if result.returncode == 9:
+            # Likely could not change directory to get directory listing since it doesn't exist yet
+            print_level(3, f"Warning: Could not change directory to {url_folder}")
+            return -1
+        elif result.returncode != 0:
+            print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+            print_level(3, f"Command: {curl_command}")
+            print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
+            return -2
+
+        stdout = result.stdout
+        if not stdout:
+            print_level(3, f"Warning: No stdout or no files from file listing of: {url_folder}")
+            return -1
+
+        files_list_str = result.stdout.decode('utf-8')
+        if not files_list_str:
+            print_level(3, f"Warning: No files in listing of: {url_folder}")
+            return -1
+
+        all_files_list = files_list_str.split('\n')
+
+        tc_files = [x.strip() for x in all_files_list if re.match(re.compile(f'{file_name_prefix}'), x.strip())]
+
+        if not tc_files:
+            # Possible there are none forecast or they have not yet been created (they are the last to be created)
+            # check if the correspoding bufr is complete
+            #   example is: 'https://data.ecmwf.int/forecasts/20240801/12z/ifs/0p4-beta/enfo/20240801000000-240h-enfo-tf.bufr'
+
+            # check if finish_url_path exists
+            res = requests.head(finish_url_path)
+            if not res:
+                print_level(3, f"Warning: Could not get requests.head() of finish_url_path {finish_url_path}")
+                return -1
+
+            if res.status_code != 200:
+                print_level(3, f"Warning: Could not get requests.head() of finish_url_path: {finish_url_path}")
+                return -1
+
+            is_complete = True
+            # it exists so there must not be any TCs produced in WMO essential
+    except:
+        print_level(3, f"Warning: Could not get ftp listing of {url_folder}")
+        return -1
+
+    if is_complete:
+        # create the flag directory 'COMPLETE'
+        os.makedirs(os.path.join(output_dir_timestamp, '_COMPLETE_'), exist_ok = True)
+        return 0
+
+    for tc_file_name in tc_files:
+        overwrite_or_download = True
+
+        output_file = f"{output_file_prefix}{tc_file_name}"
+
+        if os.path.exists(output_file):
+            overwrite_or_download = False
+
+        if overwrite_or_download:
+            url = f'{url_folder}{tc_file_name}'
+            curl_command = f"curl --create-dirs -y 30 -Y 30 -f -v -s {url} -o {output_file}"
+            print_level(4, curl_command)
+
+            # Run the subprocess and capture its output
+            result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            time.sleep(sleep_time)
+            if result.returncode != 0:
+                print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+                print_level(3, f"Command: {curl_command}")
+                print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
+
+                try:
+                    # clear directory if no files ready yet
+                    os.rmdir(output_dir_timestamp)
+                except:
+                    pass
+                return -2
+
+    # assume that all the files that would be created were got, and create the flag directory 'COMPLETE'
+    os.makedirs(os.path.join(output_dir_timestamp, '_COMPLETE_'), exist_ok=True)
+    return 0
+
+def generate_curl_commands_gfdl(timestamp_prefix, url_folder, url_base_file_name, output_dir):
+    output_dir_timestamp = os.path.join(output_dir, timestamp_prefix)
+
+    output_file = os.path.join(output_dir_timestamp, f"{timestamp_prefix}_{os.path.basename(url_base_file_name)}.txt")
+
+    overwrite_or_download = True
+
+    if os.path.exists(output_file):
+        overwrite_or_download = False
+
+    if overwrite_or_download:
+        url = f'{url_folder}{url_base_file_name}'
+        curl_command = f"curl --create-dirs -y 30 -Y 30 -f -v -s {url} -o {output_file}"
+        print_level(4, curl_command)
+
+        # Run the subprocess and capture its output
+        result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        time.sleep(sleep_time)
+        if result.returncode != 0:
+            print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+            print_level(3, f"Command: {curl_command}")
+            print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
+            try:
+                # clear directory if no files ready yet
+                os.rmdir(output_dir_timestamp)
+            except:
+                pass
+            return -2
 
     return 0
 
 # the full timestep string as used in the file names we are parsing from the model data
 # include any leading zeros up that make sense (only up to what the model covers)
 def convert_model_time_step_to_str(model_name, model_time_step_int):
-    str_format = model_time_step_str_format[model_name]
-    return f'{model_time_step_int:{str_format}}'
+    if "TCGEN" not in model_name:
+        str_format = model_time_step_str_format[model_name]
+        return f'{model_time_step_int:{str_format}}'
+    else:
+        return model_time_step_int
 
 def get_model_time_steps(model_name, model_timestamp):
     hour = model_timestamp.hour
@@ -601,18 +810,23 @@ def get_completed_and_missing_downloaded_model_steps(model_name, model_timestamp
     model_hour = datetime.strftime(model_timestamp, '%H')
     model_time_step_re = re.compile(time_step_re_str_by_model_name[model_name])
     if not os.path.exists(model_dir):
-        model_time_steps_int = [int(x) for x in model_time_steps]
-        return [], model_time_steps_int
+        if "TCGEN" not in model_name:
+            model_time_steps_int = [int(x) for x in model_time_steps]
+            return [], model_time_steps_int
+        else:
+            # tc gen member names (or tc candidate id for EPS; for named storms, deterministic is provided also)
+            #   for EPS: examples are '01ECEP', '01ECMF'
+            #       (matching ensemble permutation candidate, for deterministic forecast)
+            model_members = [str(x) for x in model_time_steps]
+            return [], model_members
     files = os.listdir(model_dir)
     steps_downloaded = []
     steps_missing = []
 
     expected_num_grib_files_per_step = expected_num_grib_files_by_model_name[model_name]
+    # replace step for member for tcgen ensembles
     for model_time_step in model_time_steps:
-        if type(model_time_step) is str:
-            model_time_step_str = model
-        elif type(model_time_step) is int:
-            model_time_step_str = convert_model_time_step_to_str(model_name, model_time_step)
+        model_time_step_str = convert_model_time_step_to_str(model_name, model_time_step)
 
         # may not be a trailing slash or not
         if not os.path.isdir(model_dir):
@@ -624,25 +838,45 @@ def get_completed_and_missing_downloaded_model_steps(model_name, model_timestamp
 
         grib_files = []
 
+        completed_flag = False
         for f in files:
             f_ext = f.split('.')[-1]
-            if f_ext not in ignored_file_extensions:
+            file_path = os.path.join(model_dir, f)
+            is_file = os.path.isfile(file_path)
+            # use a completed directory as a flag for EPS tcgen folders
+            if f == "_COMPLETED_":
+                completed_flag = True
+            elif is_file and f_ext not in ignored_file_extensions:
                 res = re.match(model_time_step_re, f)
                 if res:
                     file_model_time_step_str = res['time_step']
                     if file_model_time_step_str == model_time_step_str:
-                        grib_files.append(os.path.join(model_dir, f))
+                        grib_files.append(file_path)
 
         num_grib_files_in_step = len(grib_files)
-        if num_grib_files_in_step >= expected_num_grib_files_per_step:
-            steps_downloaded.append(int(model_time_step_str))
+
+        if expected_num_grib_files_per_step != 9999:
+            if "TCGEN" not in model_name:
+                if num_grib_files_in_step >= expected_num_grib_files_per_step:
+                    steps_downloaded.append(int(model_time_step_str))
+                else:
+                    steps_missing.append(int(model_time_step_str))
+            else:
+                if num_grib_files_in_step >= expected_num_grib_files_per_step:
+                    steps_downloaded.append(model_time_step_str)
+                else:
+                    steps_missing.append(model_time_step_str)
         else:
-            steps_missing.append(int(model_time_step_str))
+            # EPS tcgen case
+            if not completed_flag:
+                steps_missing.append(model_time_step_str)
+
     return steps_downloaded, steps_missing
 
 # returns complete (boolean), downloaded steps (int list), missing steps (int list)
 def model_run_steps_downloaded_info(model_name, model_timestamp):
     model_hour = datetime.strftime(model_timestamp, '%H')
+    # number of expected steps, or members for tcgen ensembles (-1 for EPS)
     expected_num_total_steps = total_model_time_steps[model_name][model_hour]
     steps_downloaded, steps_missing = get_completed_and_missing_downloaded_model_steps(model_name, model_timestamp)
 
@@ -651,6 +885,7 @@ def model_run_steps_downloaded_info(model_name, model_timestamp):
 def download_step(model_name, model_timestamp, time_step_int):
     model_date = datetime.strftime(model_timestamp, '%Y%m%d')
     model_hour = datetime.strftime(model_timestamp, '%H')
+    # time_step_int is the member name for tcgen ensembles (a file name prefix for EPS)
     time_step = convert_model_time_step_to_str(model_name, time_step_int)
 
     output_dir = model_data_folders_by_model_name[model_name]
@@ -659,9 +894,34 @@ def download_step(model_name, model_timestamp, time_step_int):
     # todo generalize:
 
     timestamp_prefix = f'{model_date}{model_hour}'
-    params = params_by_model_name[model_name]
+    if "TCGEN" not in model_name:
+        params = params_by_model_name[model_name]
 
-    if model_name == 'GFS':
+    if model_name == 'EPS-TCGEN':
+        file_name_prefix = time_step
+        url_folder = f'{model_url_folder}/{model_date}{model_hour}0000/'
+        # prefix is like 'A_JSXX'; for EPS, we don't know the file names of the bufr.bin files in advance
+        # finish url is a check to see whether we are actually done if we have no tc files in the listed dir
+        finish_hour = convert_model_time_step_to_str('ECM', all_time_steps_by_model['ECM'][model_hour][-1])
+        finish_model_url = url_folder_by_model['ECM']
+        finish_url_folder = f'{finish_model_url}/{model_date}/{model_hour}z/ifs/0p4-beta/enfo/'
+        finish_file_name = f'{model_date}{model_hour}0000-{finish_hour}h-enfo-tf.bufr'
+        finish_url_path = f'{finish_url_folder}{finish_file_name}'
+        r = generate_curl_commands_eps(timestamp_prefix, url_folder, file_name_prefix, finish_url_path, output_dir)
+    elif model_name in ['GEFS-TCGEN', 'GEPS-TCGEN', 'FNMOC-TCGEN']:
+        member_name = time_step
+        prefix = ''
+        if model_name == 'GEFS-TCGEN':
+            prefix = 'gefs'
+        elif model_name == 'GEPS-TCGEN':
+            prefix = 'cmce'
+        elif model_name == 'FNMOC-TCGEN':
+            prefix = 'fens'
+        url_folder = f'{model_url_folder}/{prefix}.{model_date}/{model_hour}/genesis/'
+        # atcf gfdl file
+        url_base_file_name = f'storms.{member_name}.atcf_gen.altg.{model_date}{model_hour}'
+        r = generate_curl_commands_gfdl(timestamp_prefix, url_folder, url_base_file_name, output_dir)
+    elif model_name == 'GFS':
         url_folder = f'{model_url_folder}/gfs.{model_date}/{model_hour}/atmos/'
         idx_file_name = f'gfs.t{model_hour}z.pgrb2.0p25.f{time_step}.idx'
         url_base_file_name = f'gfs.t{model_hour}z.pgrb2.0p25.f{time_step}'
@@ -686,6 +946,7 @@ def download_step(model_name, model_timestamp, time_step_int):
     return r
 
 def download_model_run(model_name, model_timestamp):
+    # missing steps (or members) (-1 for EPS)
     already_calculated_time_steps, missing_calculated_time_steps = get_calculated_and_missing_time_steps(model_name, model_timestamp)
 
     if missing_calculated_time_steps is None:
@@ -700,6 +961,7 @@ def download_model_run(model_name, model_timestamp):
     none_could_download = False
     r = 0
     if steps_missing:
+        # time_step_int is a str for tcgen ensembles
         for time_step_int in steps_missing:
             if not have_enough_disk_space():
                 print_level(1, "Fatal error: Exiting since disk space is below the minimum set.")
@@ -770,6 +1032,7 @@ def download_thread(model_names):
 
     except Exception as e:
         print_level(1, f"Thread {threading.current_thread().name} encountered an error: {e}")
+        print_level(1, traceback.format_exc())
         exit_event.set()
         sys.exit(1)
 
