@@ -1,7 +1,6 @@
-# an experimental TC plotter (standa-alone full screen viewer) for intensity models and genesis
+# an experimental TC plotter (stand-alone full screen viewer) for intensity models and genesis
 ######
 #   uses a-deck,b-deck,tcvitals (from NHC,UCAR) and tc genesis candidates (tc_candidates.db)
-from typing import Any
 
 #### EXPERIMENTAL: DO NOT USE OR RELY ON THIS!
 ## NOTES
@@ -33,10 +32,17 @@ from typing import Any
 #       3: hide all points with tracks later than valid day
 #   clicking on a pink/dark pink edge switches it to (1) white edge for all prior and (2) pink edge for days after
 
+## MEASURE TOOL DOC
+#   HOLDING SHIFT KEY TOGGLES UPDATING END POINT, ALLOWING ZOOMING IN/OUT:
+#   ALLOWS FOR SINGLE MEASUREMENT WITHOUT NEEDING TO DRAG END POINTS
+#   ZOOM IN TO PRECISION NEEDED TO SET START POINT, START MEASUREMENT (SHIFT CLICK AND MOTION), RELEASE SHIFT (AND CLICK)
+#   ZOOM OUT, THEN ZOOM IN TO WHERE TO PLACE END POINT AND HOLD SHIFT AND MOUSE MOTION TO PLACE END POINT
+#   RELEASE SHIFT WHEN END POINT POSITION SET. FREE TO ZOOM IN/OUT AFTERWARD
+
 ####### CONFIG
 
-# how often (in minutes) to check for stale data in three classes: tcvitals, adeck, bdecks
-#   for notification purposes only..
+# how often (in minutes) to check for stale data in three classes: tcvitals, adeck, bdeck
+#   for notification purposes only.
 #      colors reload button red (a-deck), orange (b-deck), yellow (tcvitals) -without- downloading data automatically
 #   checks modification date in any class of the three, and refreshes the entire class
 #      timer resets after manual reloads
@@ -103,9 +109,10 @@ ANNOTATE_COLOR_LEVELS = {
     3: ANNOTATE_VMAX_COLOR
 }
 
-# remove any from list not wanted visible for extrema nnotations (x key)
+# remove any from list not wanted visible for extrema annotations (x key)
 #   closed_isobar_delta is only from tc_candidates.db
-#      (it is the difference in pressure from the outermost closed isobar to the inner most close isobar) (i.e. how many concentric circles on a chart of pressure)
+#      (it is the difference in pressure from the outermost closed isobar to the innermost closed isobar)
+#       (i.e. how many concentric circles on a chart of pressure); or POUTER - MSLP in abdecks
 #displayed_extremum_annotations = ["dt_start", "dt_end", "vmax10m", "mslp_value", "roci", "closed_isobar_delta"]
 #displayed_extremum_annotations = ["dt_start", "vmax10m", "roci", "closed_isobar_delta"]
 
@@ -248,7 +255,7 @@ bdeck_urls = [
 from PIL import ImageGrab
 
 # for cycling overlapped points
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict
 
 # for mouse hover features
 from rtree import index
@@ -260,10 +267,8 @@ from shapely.geometry import LineString
 import numpy as np
 
 #zoom box blitting
-from matplotlib.transforms import Bbox as pltbbox
 
 # config dialog
-from tkinter import simpledialog
 from tkinter import colorchooser
 
 # for tracking modification date of source files
@@ -288,7 +293,6 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from matplotlib.patches import Rectangle, Circle
-from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 from cartopy.mpl.ticker import LongitudeFormatter, LatitudeFormatter
 
 from mpl_toolkits.axes_grid1 import Divider, Size
@@ -318,9 +322,9 @@ tcvitals_basin_to_atcf_basin = {
 #shapefile_path = "tl_2023_us_cbsa/tl_2023_us_cbsa.shp"
 shapefile_path = None
 try:
-    gdf = gpd.read_file(shapefile_path)
+    tmp_gdf = gpd.read_file(shapefile_path)
     # Filter the GeoDataFrame to only include the Houston-The Woodlands-Sugar Land, TX Metro Area
-    houston_gdf = gdf[gdf['NAME'] == 'Houston-Pasadena-The Woodlands, TX']
+    houston_gdf = tmp_gdf[tmp_gdf['NAME'] == 'Houston-Pasadena-The Woodlands, TX']
     if houston_gdf.empty:
         raise ValueError("Houston-The Woodlands-Sugar Land, TX Metro Area not found in the shapefile")
     # Ensure the CRS matches that of the Cartopy map (PlateCarree)
@@ -340,6 +344,7 @@ shapefile_paths = {
 }
 
 # disable rvor
+# noinspection PyRedeclaration
 shapefile_paths = {}
 
 overlay_gdfs = {}
@@ -740,21 +745,6 @@ def get_tc_candidates_at_or_before_init_time(interval_end):
 
     return model_init_times, all_retrieved_data
 
-def http_get_modification_date(url):
-    try:
-        response = requests.head(url)
-        # Check if the request was successful (status code 200 or 2xx)
-        if response.status_code // 100 == 2:
-            # Extract the modification date from the 'Last-Modified' header
-            modification_date = response.headers.get('Last-Modified')
-            return modification_date
-        # If the request was not successful, return None
-        return None
-
-    except Exception as e:
-        print(f"An error occurred getting {url}: {e}")
-        return None
-
 # Function to download a file from a URL
 def download_file(url, local_filename):
     try:
@@ -772,11 +762,11 @@ def download_file(url, local_filename):
     return dt_mod
 
 # Function to get the most recent records for each storm from TCVitals files
-def get_recent_storms(tcvitals_urls):
+def get_recent_storms(urls):
     storms = {}
     dt_mods_tcvitals = {}
     current_time = datetime.utcnow()
-    for url in tcvitals_urls:
+    for url in urls:
         response = None
         try:
             response = requests.get(url)
@@ -915,10 +905,10 @@ def ab_deck_line_to_dict(line):
         raw_data['valid_time'] = valid_datetime.isoformat()
     return raw_data
 
-def get_modification_date_from_header(responseheaders):
+def get_modification_date_from_header(response_headers):
     try:
         # Assume already done status code check
-            modification_date = responseheaders.get('Last-Modified')
+            modification_date = response_headers.get('Last-Modified')
             dt_offset_aware = parser.parse(modification_date)
             dt_offset_native = dt_offset_aware.astimezone().replace(tzinfo=None)
             return dt_offset_native
@@ -938,7 +928,7 @@ def http_get_modification_date(url):
         return None
 
 # Function to get the corresponding A-Deck and B-Deck files for the identified storms
-def get_deck_files(storms, adeck_urls, bdeck_urls, do_update_adeck, do_update_bdeck):
+def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_bdeck):
     adeck = defaultdict(dict)
     bdeck = defaultdict(dict)
     year = datetime.utcnow().year
@@ -952,11 +942,9 @@ def get_deck_files(storms, adeck_urls, bdeck_urls, do_update_adeck, do_update_bd
         storm_number = storm_id[2:4]
         # Download A-Deck files
         if do_update_adeck:
-            for url in adeck_urls:
+            for url in urls_a:
                 file_url = url.format(basin_id=basin_id.lower(), year=year, storm_number=storm_number)
-                isgz = False
                 if file_url[-3:] == ".gz":
-                    isgz = True
                     local_filename = f"a{storm_id.lower()}.dat.gz"
                 else:
                     local_filename = f"a{storm_id.lower()}.dat"
@@ -1028,15 +1016,12 @@ def get_deck_files(storms, adeck_urls, bdeck_urls, do_update_adeck, do_update_bd
                 except UnicodeDecodeError as e:
                     traceback.print_exc()
                     print(f"UnicodeDecodeError: {e}")
-                    with gzip.open(local_filename, 'rb') as z:
-                        raw_content = z.read(10)  # Read a few bytes to check the content
-                        print(f"First 10 bytes of the file (in hex): {raw_content.hex()}")
                 except Exception as e:
                     traceback.print_exc()
                     print(f"Failed to download {file_url}: {e}")
         if do_update_bdeck:
             # Download B-Deck files
-            for url in bdeck_urls:
+            for url in urls_b:
                 file_url = url.format(year=year, basin_id=basin_id.lower(), storm_number=storm_number)
                 try:
                     response = requests.get(file_url)
@@ -1061,8 +1046,6 @@ def get_deck_files(storms, adeck_urls, bdeck_urls, do_update_adeck, do_update_bd
                             for line in lines:
                                 parts = line.split(',')
                                 if len(parts) > 4:
-                                    date_str = parts[2].strip()
-                                    bdeck_date = datetime.strptime(date_str, '%Y%m%d%H')
                                     ab_deck_line_dict = ab_deck_line_to_dict(line)
                                     # id should be 'BEST'
                                     bdeck_id = ab_deck_line_dict['TECH']
@@ -1080,94 +1063,10 @@ def get_deck_files(storms, adeck_urls, bdeck_urls, do_update_adeck, do_update_bd
                 except UnicodeDecodeError as e:
                     traceback.print_exc()
                     print(f"UnicodeDecodeError: {e}")
-                    with gzip.open(local_filename, 'rb') as z:
-                        raw_content = z.read(10)  # Read a few bytes to check the content
-                        print(f"First 10 bytes of the file (in hex): {raw_content.hex()}")
                 except Exception as e:
                     traceback.print_exc()
                     print(f"Failed to download {file_url}: {e}")
     return dt_mods_adeck, dt_mods_bdeck, adeck, bdeck
-
-def parse_tcvitals_line(line):
-    if len(line) >= 149:
-        return {
-            "organization_id": line[0:4].strip(),
-            "storm_id": line[5:7].strip(),
-            "basin_identifier": line[7].strip(),
-            "storm_name": line[9:18].strip(),
-            "first_occurrence_indicator": line[18].strip(),
-            "report_date": line[19:27].strip(),
-            "report_time": line[28:32].strip(),
-            "latitude": line[33:36].strip(),
-            "latitude_indicator": line[36].strip(),
-            "longitude": line[38:42].strip(),
-            "longitude_indicator": line[42].strip(),
-            "storm_direction_flag": line[43].strip(),
-            "storm_direction": line[44:47].strip(),
-            "storm_speed_flag": line[47].strip(),
-            "storm_speed": line[48:51].strip(),
-            "central_pressure_flag": line[51].strip(),
-            "central_pressure": line[52:56].strip(),
-            "environmental_pressure_flag": line[56].strip(),
-            "environmental_pressure": line[57:61].strip(),
-            "radius_isobar_flag": line[61].strip(),
-            "radius_isobar": line[62:66].strip(),
-            "max_wind_flag": line[66].strip(),
-            "max_wind_speed": line[67:69].strip(),
-            "radius_max_wind": line[70:73].strip(),
-            "radius_34_ne": line[74:78].strip(),
-            "radius_34_se": line[79:83].strip(),
-            "radius_34_sw": line[84:88].strip(),
-            "radius_34_nw": line[89:93].strip(),
-            "storm_depth_flag": line[93].strip(),
-            "storm_depth": line[94].strip(),
-            "radius_50_ne": line[96:100].strip(),
-            "radius_50_se": line[101:105].strip(),
-            "radius_50_sw": line[106:110].strip(),
-            "radius_50_nw": line[111:115].strip(),
-            "max_forecast_time": line[116:118].strip(),
-            "forecast_latitude": line[119:122].strip(),
-            "forecast_latitude_indicator": line[122].strip(),
-            "forecast_longitude": line[124:128].strip(),
-            "forecast_longitude_indicator": line[128].strip(),
-            "radius_64_ne": line[130:134].strip(),
-            "radius_64_se": line[135:139].strip(),
-            "radius_64_sw": line[140:144].strip(),
-            "radius_64_nw": line[145:149].strip()
-        }
-    elif len(line) >= 95 :
-        return {
-            "organization_id": line[0:4].strip(),
-            "storm_id": line[5:7].strip(),
-            "basin_identifier": line[7].strip(),
-            "storm_name": line[9:18].strip(),
-            "first_occurrence_indicator": line[18].strip(),
-            "report_date": line[19:27].strip(),
-            "report_time": line[28:32].strip(),
-            "latitude": line[33:36].strip(),
-            "latitude_indicator": line[36].strip(),
-            "longitude": line[38:42].strip(),
-            "longitude_indicator": line[42].strip(),
-            "storm_direction_flag": line[43].strip(),
-            "storm_direction": line[44:47].strip(),
-            "storm_speed_flag": line[47].strip(),
-            "storm_speed": line[48:51].strip(),
-            "central_pressure_flag": line[51].strip(),
-            "central_pressure": line[52:56].strip(),
-            "environmental_pressure_flag": line[56].strip(),
-            "environmental_pressure": line[57:61].strip(),
-            "radius_isobar_flag": line[61].strip(),
-            "radius_isobar": line[62:66].strip(),
-            "max_wind_flag": line[66].strip(),
-            "max_wind_speed": line[67:69].strip(),
-            "radius_max_wind": line[70:73].strip(),
-            "radius_34_ne": line[74:78].strip(),
-            "radius_34_se": line[79:83].strip(),
-            "radius_34_sw": line[84:88].strip(),
-            "radius_34_nw": line[89:93].strip(),
-            "storm_depth_flag": line[93].strip(),
-            "storm_depth": line[94].strip()
-        }
 
 def parse_tcvitals_line(line):
     if len(line) >= 149:
@@ -1345,10 +1244,10 @@ class SortedCyclicEnumDict(OrderedDict):
         if not self:
             return None
         sorted_items = list(self.items())
-        index = self._index % len(self)
-        key, value = sorted_items[index]
+        idx = self._index % len(self)
+        key, value = sorted_items[idx]
         self._index = (self._index + 1) % len(self)
-        return (index + 1, key)
+        return (idx + 1, key)
 
     # get previous key without moving backwards (assumes have gotten at least one tuple with next)
     def get_prev_enum_key_tuple(self):
@@ -1361,6 +1260,8 @@ class SortedCyclicEnumDict(OrderedDict):
 
 class DraggableAnnotation:
     def __init__(self, annotation, original_point, ax, bbox_props):
+        self.blocking = False
+        self.circle_annotation = None
         self.original_annotation = annotation
         self.ax = ax
         self.zorder = self.original_annotation.get_zorder()
@@ -1373,9 +1274,8 @@ class DraggableAnnotation:
         self.radius_degrees = self.calculate_radius_pixels()
 
         self.dragging = False
-
+        self.blocking = False
         self.visible = True
-
         self.annotated_circle = None
 
         # Extract essential properties from the original annotation
@@ -1416,6 +1316,26 @@ class DraggableAnnotation:
         self.cid_release = self.ax.figure.canvas.mpl_connect('button_release_event', self.on_release)
         self.cid_motion = self.ax.figure.canvas.mpl_connect('motion_notify_event', self.on_motion)
 
+    def set_dragging(self, dragging):
+        if dragging and not self.dragging:
+            self.block_for_dragging()
+        elif self.dragging and not dragging:
+            self.unblock_for_dragging()
+        self.dragging = dragging
+
+    def unblock_for_dragging(self):
+        if self.blocking:
+            EventManager.unblock_events()
+            self.blocking = False
+
+    def block_for_dragging(self):
+        # only start blocking when we have a line
+        block_for_dragging = EventManager.block_events('dragging_annotation')
+        if not block_for_dragging:
+            raise ValueError("Failed to block events for DraggingAnnotation")
+        self.blocking = True
+        return True
+
     def is_dragging(self):
         return self.dragging
 
@@ -1425,14 +1345,14 @@ class DraggableAnnotation:
     @classmethod
     def get_topmost_annotation(cls, annotations, event):
         # need a separate is dragging flag as bbox is unstable when we are blitting
-        #  (as we it can become invisible during the setup for blitting (in an async event with the other handlers)
+        #  (as it can become invisible during the setup for blitting (in an async event with the other handlers)
         #  the bbox will result erroneously in a 1 pixel box causing the wrong annotation to drag
         if not annotations:
             return None
         valid_annotations = [ann for ann in annotations if ann and (ann.is_dragging() or ann.contains_point(event))]
         if not valid_annotations:
             return None
-        max_zorder = max(valid_annotations, key=lambda ann: ann.zorder).zorder
+        # max_zorder = max(valid_annotations, key=lambda ann: ann.zorder).zorder
         return max(valid_annotations, key=lambda ann: ann.zorder)
 
     def calculate_radius_pixels(self):
@@ -1477,10 +1397,6 @@ class DraggableAnnotation:
             return
 
         xy_orig = self.original_annotation.xy
-        if self.dragging_annotation and self.dragging_annotation.xy:
-            xy_cur = self.dragging_annotation.xy
-        else:
-            xy_cur = xy_orig
         self.press = (xy_orig, self.original_annotation.get_position(), event.xdata, event.ydata)
         self.original_annotation.set_visible(False)
         if self.line:
@@ -1492,7 +1408,7 @@ class DraggableAnnotation:
         if self.line:
             self.line.set_visible(True)
         self.ax.figure.canvas.draw()
-        self.dragging = True
+        self.set_dragging(True)
 
     def bring_to_front(self):
         if self.ax.draggable_annotations:
@@ -1507,6 +1423,7 @@ class DraggableAnnotation:
             self.original_annotation.set_zorder(top_zorder)
             self.dragging_annotation.set_zorder(top_zorder)
 
+    # noinspection PyUnusedLocal
     def on_release(self, event):
         if self.press is None:
             return
@@ -1522,7 +1439,7 @@ class DraggableAnnotation:
 
         self.press = None
         self.background = None
-        self.dragging = False
+        self.set_dragging(False)
 
         self.bring_to_front()
 
@@ -1594,11 +1511,11 @@ class DraggableAnnotation:
 
         return True
 
-    def isVisible(self):
-        return self.visible
+    #def isVisible(self):
+    #    return self.visible
 
-    def set_visible(self, visibilityTarget):
-        self.visible = visibilityTarget
+    def set_visible(self, visibility_target):
+        self.visible = visibility_target
 
         # we will call set_visible after mouse release for that edge case of hide while dragging
         if self.dragging:
@@ -1606,14 +1523,14 @@ class DraggableAnnotation:
 
         try:
             if self.line:
-                self.line.set_visible(visibilityTarget)
+                self.line.set_visible(visibility_target)
         except:
             traceback.print_exc()
             pass
 
         try:
             if self.original_annotation:
-                self.original_annotation.set_visible(visibilityTarget)
+                self.original_annotation.set_visible(visibility_target)
         except:
             traceback.print_exc()
 
@@ -1625,6 +1542,7 @@ class DraggableAnnotation:
             pass
 
     def remove(self):
+        self.unblock_for_dragging()
         self.ax.figure.canvas.mpl_disconnect(self.cid_press)
         self.ax.figure.canvas.mpl_disconnect(self.cid_release)
         self.ax.figure.canvas.mpl_disconnect(self.cid_motion)
@@ -1633,7 +1551,7 @@ class DraggableAnnotation:
         self.original_annotation.remove()
         self.dragging_annotation.remove()
 
-class AnnotatedCircles():
+class AnnotatedCircles:
     ax = None
     circle_handles = None
     rtree_p = index.Property()
@@ -1642,28 +1560,43 @@ class AnnotatedCircles():
     # only increment counter so we only have unique ids
     counter = 0
 
-    def __init__(self, fig_ax):
-        AnnotatedCircles.ax = fig_ax
-        AnnotatedCircles.circle_handles = None
-        AnnotatedCircles.ax.draggable_annotations = None
-        AnnotatedCircles.rtree_p = index.Property()
-        AnnotatedCircles.rtree_idx = index.Index(properties=AnnotatedCircles.rtree_p)
-        AnnotatedCircles.annotated_circles = None
-        AnnotatedCircles.counter = 0
+    def __init__(self, ax):
+        self.__class__.ax = ax
 
-    def add_point(self, coords):
-        AnnotatedCircles.counter += 1
-        AnnotatedCircles.rtree_idx.insert(AnnotatedCircles.counter, coords)
-        return AnnotatedCircles.counter
+    @classmethod
+    def any_annotation_contains_point(cls, event):
+        annotations = cls.get_draggable_annotations()
+        if annotations:
+            for annotation in annotations:
+                if annotation and annotation.contains_point(event):
+                    return True
+        return False
 
-    def delete_point(self, id):
+    @classmethod
+    def changed_extent(cls, ax):
+        cls.ax = ax
+        cls.circle_handles = None
+        cls.ax.draggable_annotations = None
+        cls.rtree_p = index.Property()
+        cls.rtree_idx = index.Index(properties=cls.rtree_p)
+        cls.annotated_circles = None
+        cls.counter = 0
+
+    @classmethod
+    def add_point(cls, coords):
+        cls.counter += 1
+        cls.rtree_idx.insert(cls.counter, coords)
+        return cls.counter
+
+    @classmethod
+    def delete_point(cls, rtree_id):
         # past the entire map
         coords = (-1000.0, -1000, 1000.0, 1000.0)
         # need the precise bbox to delete from an item from the rtree
         # find the matching item first
         matching_item = None
-        for item in AnnotatedCircles.rtree_idx.intersection(coords, objects=True):
-            if item.id == id:
+        for item in cls.rtree_idx.intersection(coords, objects=True):
+            if item.id == rtree_id:
                 matching_item = item
                 break
 
@@ -1671,9 +1604,9 @@ class AnnotatedCircles():
             return
 
         # Delete the item using its own coordinates
-        AnnotatedCircles.rtree_idx.delete(item.id, item.bbox)
+        cls.rtree_idx.delete(matching_item.id, matching_item.bbox)
 
-    class AnnotatedCircle():
+    class AnnotatedCircle:
         def __init__(self, draggable_annotation, circle_handle, rtree_id):
             self.draggable_annotation_object = draggable_annotation
             self.circle_handle_object = circle_handle
@@ -1685,40 +1618,39 @@ class AnnotatedCircles():
             if self.draggable_annotation_object:
                 return self.draggable_annotation_object.has_focus(event)
 
-        def isVisible(self):
+        def is_visible(self):
             return self.visible
 
-        def set_visible(self, visibilityTarget):
-            if visibilityTarget == self.visible:
+        def set_visible(self, visibility_target):
+            if visibility_target == self.visible:
                 return
 
             if self.draggable_annotation_object:
                 try:
-                    self.draggable_annotation_object.set_visible(visibilityTarget)
+                    self.draggable_annotation_object.set_visible(visibility_target)
                 except:
                     traceback.print_exc()
                     pass
             if self.circle_handle_object:
                 try:
-                    self.circle_handle_object.set_visible(visibilityTarget)
+                    self.circle_handle_object.set_visible(visibility_target)
                 except:
                     traceback.print_exc()
                     pass
 
-            self.visible = visibilityTarget
+            self.visible = visibility_target
 
         def remove(self):
             removed = False
             if self.draggable_annotation_object:
                 try:
                     self.draggable_annotation_object.remove()
-
                     removed = True
                 except:
                     traceback.print_exc()
                     pass
                 #self.annotation_handles = None
-                draggable_annotations = AnnotatedCircles.get_draggable_annotations(self)
+                draggable_annotations = AnnotatedCircles.get_draggable_annotations()
                 if draggable_annotations:
                     draggable_annotations.remove(self.draggable_annotation_object)
                 self.draggable_annotation_object = None
@@ -1729,35 +1661,38 @@ class AnnotatedCircles():
                 except:
                     traceback.print_exc()
                     pass
-                circle_handles = AnnotatedCircles.get_circle_handles(self)
+                circle_handles = AnnotatedCircles.get_circle_handles()
                 if circle_handles:
                     circle_handles.remove(self.circle_handle_object)
                 self.circle_handle_object = None
             if removed:
-                AnnotatedCircles.delete_point(self, self.rtree_id)
+                AnnotatedCircles.delete_point(self.rtree_id)
 
                 if AnnotatedCircles.annotated_circles:
                     AnnotatedCircles.annotated_circles.remove(self)
 
-    def get_draggable_annotations(self):
-        if AnnotatedCircles.ax and hasattr(AnnotatedCircles.ax, 'draggable_annotations'):
-            return AnnotatedCircles.ax.draggable_annotations
+    @classmethod
+    def get_draggable_annotations(cls):
+        if cls.ax and hasattr(cls.ax, 'draggable_annotations'):
+            return cls.ax.draggable_annotations
         return None
 
-    def get_circle_handles(self):
-        if AnnotatedCircles.circle_handles:
-            return AnnotatedCircles.circle_handles
+    @classmethod
+    def get_circle_handles(cls):
+        if cls.circle_handles:
+            return cls.circle_handles
         return None
 
     # calculate radius of pixels in degrees
-    def calculate_radius_pixels(self):
+    @classmethod
+    def calculate_radius_pixels(cls):
         # Get current extent of the map in degrees and pixels
-        extent = AnnotatedCircles.ax.get_extent()
+        extent = cls.ax.get_extent()
         lon_diff = extent[1] - extent[0]
         lat_diff = extent[3] - extent[2]
 
         # Get window extent in pixels
-        window_extent = AnnotatedCircles.ax.get_window_extent()
+        window_extent = cls.ax.get_window_extent()
         lon_pixels = window_extent.width
         lat_pixels = window_extent.height
 
@@ -1771,14 +1706,15 @@ class AnnotatedCircles():
         return radius_degrees
 
     # calculate annotation offset of pixels in degrees (of where to place the annotation next to the circle)
-    def calculate_offset_pixels(self):
+    @classmethod
+    def calculate_offset_pixels(cls):
         # Get current extent of the map in degrees and pixels
-        extent = AnnotatedCircles.ax.get_extent()
+        extent = cls.ax.get_extent()
         lon_diff = extent[1] - extent[0]
         lat_diff = extent[3] - extent[2]
 
         # Get window extent in pixels
-        window_extent = AnnotatedCircles.ax.get_window_extent()
+        window_extent = cls.ax.get_window_extent()
         lon_pixels = window_extent.width
         lat_pixels = window_extent.height
 
@@ -1795,27 +1731,26 @@ class AnnotatedCircles():
 
         return lon_offset, lat_offset
 
-    def add(self, lat=None, lon=None, label=None, label_color=DEFAULT_ANNOTATE_TEXT_COLOR):
-        if lat is None or lon is None or label is None or self.ax is None:
+    @classmethod
+    def add(cls, lat=None, lon=None, label=None, label_color=DEFAULT_ANNOTATE_TEXT_COLOR):
+        if lat is None or lon is None or label is None or cls.ax is None:
             return None
-        if AnnotatedCircles.circle_handles is None:
-            AnnotatedCircles.circle_handles = []
-        #if self.annotation_handles is None:
-        #    self.annotation_handles = []
-        if not hasattr(AnnotatedCircles.ax, 'draggable_annotations') or AnnotatedCircles.ax.draggable_annotations is None:
-            AnnotatedCircles.ax.draggable_annotations = []
+        if cls.circle_handles is None:
+            cls.circle_handles = []
+        if not hasattr(cls.ax, 'draggable_annotations') or cls.ax.draggable_annotations is None:
+            cls.ax.draggable_annotations = []
 
-        if self.has_overlap(lat=lat, lon=lon):
+        if cls.has_overlap(lat=lat, lon=lon):
             return None
 
-        lon_offset, lat_offset = self.calculate_offset_pixels()
+        lon_offset, lat_offset = cls.calculate_offset_pixels()
         # calculate radius of pixels in degrees
-        radius_pixels_degrees = self.calculate_radius_pixels()
+        radius_pixels_degrees = cls.calculate_radius_pixels()
         circle_handle = Circle((lon, lat), radius=radius_pixels_degrees, color=DEFAULT_ANNOTATE_MARKER_COLOR, fill=False, linestyle='dotted', linewidth=2, alpha=0.8,
                                     transform=ccrs.PlateCarree())
-        AnnotatedCircles.ax.add_patch(circle_handle)
-        rtree_id = self.add_point((lon, lat, lon, lat))
-        AnnotatedCircles.circle_handles.append(circle_handle)
+        cls.ax.add_patch(circle_handle)
+        rtree_id = cls.add_point((lon, lat, lon, lat))
+        cls.circle_handles.append(circle_handle)
 
         bbox_props = {
             'boxstyle': 'round,pad=0.3',
@@ -1825,80 +1760,117 @@ class AnnotatedCircles():
         }
 
         # Original annotation creation with DraggableAnnotation integration
-        annotation_handle = AnnotatedCircles.ax.annotate(label, xy=(lon, lat), xytext=(lon + lon_offset, lat + lat_offset), textcoords='data', color=label_color,
+        annotation_handle = cls.ax.annotate(label, xy=(lon, lat),
+                            xytext=(lon + lon_offset, lat + lat_offset),
+                            textcoords='data', color=label_color,
                             fontsize=12, ha='left', va='bottom', bbox=bbox_props)
 
         # Create DraggableAnnotation instance
-        draggable_annotation = DraggableAnnotation(annotation_handle, (lon, lat), AnnotatedCircles.ax, bbox_props)
+        draggable_annotation = DraggableAnnotation(
+            annotation_handle, (lon, lat), cls.ax, bbox_props)
 
-        # Store the DraggableAnnotation instance
-        #self.annotations.append(draggable_annotation)
-
-        annotated_circle = self.AnnotatedCircle(draggable_annotation, circle_handle, rtree_id)
-        if not AnnotatedCircles.annotated_circles:
-            AnnotatedCircles.annotated_circles = []
-        AnnotatedCircles.annotated_circles.append(annotated_circle)
+        annotated_circle = cls.AnnotatedCircle(draggable_annotation, circle_handle, rtree_id)
+        if not cls.annotated_circles:
+            cls.annotated_circles = []
+        cls.annotated_circles.append(annotated_circle)
         # create a way access the annotated_circle from the draggable annotation
         draggable_annotation.set_circle_annotation(annotated_circle)
-        AnnotatedCircles.ax.draggable_annotations.append(draggable_annotation)
+        cls.ax.draggable_annotations.append(draggable_annotation)
 
         return annotated_circle
         # draw later as we will likely add multiple circles
         #self.canvas.draw()
 
-    def has_overlap(self, lat=None, lon=None):
-        if lat is None or lon is None or len(AnnotatedCircles.rtree_idx) == 0:
+    @classmethod
+    def has_overlap(cls, lat=None, lon=None):
+        if lat is None or lon is None or len(cls.rtree_idx) == 0:
             return False
         # Define a bounding box around the annotated circle for initial query (in degrees)
         buffer = ANNOTATE_CIRCLE_OVERLAP_IN_DEGREES  # Adjust this value based on desired precision
         bounding_box = (lon - buffer, lat - buffer, lon + buffer, lat + buffer)
 
         # Query the R-tree for points within the bounding box
-        possible_matches = list(AnnotatedCircles.rtree_idx.intersection(bounding_box, objects=True))
+        possible_matches = list(cls.rtree_idx.intersection(bounding_box, objects=True))
 
         if possible_matches:
             return True
         else:
             return False
 
-    def clear(self):
-        cleared = False
+    @classmethod
+    def clear(cls):
         #if self.annotation_handles:
-        if not AnnotatedCircles.ax or not hasattr(AnnotatedCircles.ax, 'draggable_annotations'):
+        if not cls.ax or not hasattr(cls.ax, 'draggable_annotations'):
             return
-        if AnnotatedCircles.ax.draggable_annotations:
-            cleared = True
+        if cls.ax.draggable_annotations:
             try:
-                #for annotation_handle in self.annotation_handles:
-                #    annotation_handle.remove()
-                for annotation in AnnotatedCircles.ax.draggable_annotations:
+                for annotation in cls.ax.draggable_annotations:
                     annotation.remove()
             except:
                 traceback.print_exc()
                 pass
-            #self.annotation_handles = None
-            AnnotatedCircles.ax.draggable_annotations = None
-        if AnnotatedCircles.circle_handles:
-            cleared = True
+            cls.ax.draggable_annotations = None
+        if cls.circle_handles:
             try:
-                for circle_handle in AnnotatedCircles.circle_handles:
+                for circle_handle in cls.circle_handles:
                     circle_handle.remove()
             except:
                 traceback.print_exc()
                 pass
-            AnnotatedCircles.circle_handles = None
-        if AnnotatedCircles.rtree_p:
-            cleared = True
-            AnnotatedCircles.rtree_p = index.Property()
-        if AnnotatedCircles.rtree_idx:
-            cleared = True
-            AnnotatedCircles.rtree_idx = index.Index(properties=AnnotatedCircles.rtree_p)
-        if AnnotatedCircles.annotated_circles:
-            AnnotatedCircles.annotated_circles = []
+            cls.circle_handles = None
+        if cls.rtree_p:
+            cls.rtree_p = index.Property()
+        if cls.rtree_idx:
+            cls.rtree_idx = index.Index(properties=cls.rtree_p)
+        if cls.annotated_circles:
+            cls.annotated_circles = []
 
 class App:
 
     def __init__(self, root):
+        self.level_vars = None
+        self.top_frame = None
+        self.tools_frame = None
+        self.canvas_frame = None
+        self.canvas = None
+        self.adeck_mode_frame = None
+        self.exit_button_adeck = None
+        self.reload_button_adeck = None
+        self.label_adeck_mode = None
+        self.adeck_selected_combobox = None
+        self.switch_to_genesis_button = None
+        self.adeck_config_button = None
+        self.genesis_mode_frame = None
+        self.exit_button_genesis = None
+        self.reload_button_genesis = None
+        self.label_genesis_mode = None
+        self.prev_genesis_cycle_button = None
+        self.latest_genesis_cycle_button = None
+        self.genesis_models_label = None
+        self.switch_to_adeck_button = None
+        self.genesis_config_button = None
+        self.add_marker_button = None
+        self.label_mouse_coords_prefix = None
+        self.label_mouse_coords = None
+        self.label_mouse_hover_info_prefix = None
+        self.label_mouse_hover_matches = None
+        self.label_mouse_hover_info_coords = None
+        self.label_mouse_hover_info_valid_time_prefix = None
+        self.label_mouse_hover_info_valid_time = None
+        self.label_mouse_hover_info_model_init_prefix = None
+        self.label_mouse_hover_info_model_init = None
+        self.label_mouse_hover_info_vmax10m_prefix = None
+        self.label_mouse_hover_info_vmax10m = None
+        self.label_mouse_hover_info_mslp_prefix = None
+        self.label_mouse_hover_info_mslp = None
+        self.label_mouse_hover_info_roci_prefix = None
+        self.label_mouse_hover_info_roci = None
+        self.label_mouse_hover_info_isobar_delta_prefix = None
+        self.label_mouse_hover_info_isobar_delta = None
+        self.fig = None
+        self.ax = None
+        self.canvas = None
+        self.axes_size = None
         self.root = root
         self.root.title("tcviewer")
         self.root.attributes('-fullscreen', True)
@@ -1917,7 +1889,6 @@ class App:
         self.genesis_model_cycle_time = None
 
         self.zoom_selection_box = None
-        self.event_manager = EventManager()
         self.last_cursor_lon_lat = (0.0, 0.0)
 
         self.lastgl = None
@@ -1925,7 +1896,7 @@ class App:
         self.have_deck_data = False
         # track whether there is new tcvitals,adecks,bdecks data
         self.timer_id = None
-        self.stale_urls = {}
+        self.stale_urls = dict()
         self.stale_urls['tcvitals'] = set()
         self.stale_urls['adeck'] = set()
         self.stale_urls['bdeck'] = set()
@@ -1971,9 +1942,6 @@ class App:
         #   this will hold information on the marker where the cursor previously pointed to (current circle patch),
         #   and which one of the possible matches was (is currently) viewed
         self.nearest_point_indices_overlapped = SortedCyclicEnumDict()
-
-        # annotated circles (for storm extrema)
-        self.annotated_circles_object = None
 
         # settings for plotting
         self.time_step_marker_colors = [
@@ -2063,6 +2031,7 @@ class App:
 
         self.create_widgets()
 
+        self.measure_tool = MeasureTool(self.ax)
         self.display_map()
 
     def updated_rvor_levels(self):
@@ -2088,7 +2057,7 @@ class App:
                     traceback.print_exc()
         self.ax.set_yscale('linear')
         self.display_custom_overlay()
-        self.fig.canvas.draw()
+        self.ax.figure.canvas.draw()
 
     def on_rvor_dialog_close(self, dialog):
         self.rvor_dialog_open = False
@@ -2096,6 +2065,7 @@ class App:
         # focus back on app
         self.canvas.get_tk_widget().focus_set()
 
+    # noinspection PyUnusedLocal
     def show_rvor_dialog(self, event=None):
         if not self.rvor_dialog_open:
             self.rvor_dialog_open = True
@@ -2109,7 +2079,7 @@ class App:
         height = 300
         width = 250
         dialog.geometry(f"{width}x{height}")  # Set the width to 300 and height to 250
-        dialog.geometry(f"+{root.winfo_x() - width // 2 + root.winfo_width() // 2}+{root.winfo_y() - height // 2 + root.winfo_height() // 2}")
+        dialog.geometry(f"+{tk_root.winfo_x() - width // 2 + tk_root.winfo_width() // 2}+{tk_root.winfo_y() - height // 2 + tk_root.winfo_height() // 2}")
         # modal
         dialog.grab_set()
 
@@ -2182,6 +2152,7 @@ class App:
 
         self.overlay_rvor_label_last_alpha = alpha_label_visible
 
+    # noinspection PyUnusedLocal
     def toggle_rvor_contours(self, *args):
         new_vis = not self.overlay_rvor_contour_visible
         try:
@@ -2204,8 +2175,9 @@ class App:
             pass
         self.overlay_rvor_contour_visible = new_vis
         self.ax.set_yscale('linear')
-        self.fig.canvas.draw()
+        self.ax.figure.canvas.draw()
 
+    # noinspection PyUnusedLocal
     def toggle_rvor_labels(self, *args):
         new_vis = not self.overlay_rvor_label_visible
         if new_vis:
@@ -2226,9 +2198,7 @@ class App:
         self.overlay_rvor_label_visible = new_vis
         # fixes bug in matplotlib after modifying many artists (especially test boxes)
         self.ax.set_yscale('linear')
-        self.fig.canvas.draw()
-        after_draw_extent = self.ax.get_extent(ccrs.PlateCarree())
-        after_draw_size_px = self.ax.get_figure().get_size_inches() * self.ax.get_figure().dpi
+        self.ax.figure.canvas.draw()
 
     # calculate radius of pixels in degrees
     def calculate_radius_pixels(self):
@@ -2356,6 +2326,10 @@ class App:
         # Update label for mouse cursor position on map first
         self.label_mouse_coords.config(text=f"({lat:>8.4f}, {lon:>9.4f})")
 
+        if EventManager.get_blocking_purpose():
+            # blocking for zoom, measure
+            return
+
         # Next, find nearest point (within some bounding box, as we want to be selective)
         # Define a bounding box around the cursor for initial query (in degrees)
         buffer = MOUSE_SELECT_IN_DEGREES  # Adjust this value based on desired precision
@@ -2364,8 +2338,7 @@ class App:
         # Query the R-tree for points within the bounding box
         possible_matches = list(self.rtree_idx.intersection(bounding_box, objects=True))
 
-        # Calculate the geodesic distance and find the nearest point
-        nearest_point_index = None
+        # Calculate the geodesic distance and find the nearest point (nearest_point_index)
         min_distance = float('inf')
         # a sorted cyclic dict that has the item number enumerated
         # has a get() the next enumerated number and the key (the point_index tuple) in a cycle (sorted by value, which will be a datetime)
@@ -2464,7 +2437,7 @@ class App:
                 self.hidden_tc_candidates = set()
                 (lon,lat) = self.last_cursor_lon_lat
                 self.update_labels_for_mouse_hover(lat=lat, lon=lon)
-                self.fig.canvas.draw()
+                self.ax.figure.canvas.draw()
         else:
             num, cursor_point_index = self.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
             if cursor_point_index:
@@ -2500,11 +2473,11 @@ class App:
 
                 (lon,lat) = self.last_cursor_lon_lat
                 self.update_labels_for_mouse_hover(lat=lat, lon=lon)
-                self.fig.canvas.draw()
+                self.ax.figure.canvas.draw()
 
-    def clear_storm_extrema_annotations(self):
-        if self.annotated_circles_object:
-            self.annotated_circles_object.clear()
+    @staticmethod
+    def clear_storm_extrema_annotations():
+        AnnotatedCircles.clear()
 
     def any_storm_points_in_bounds(self, tc_index):
         if not self.plotted_tc_candidates:
@@ -2577,7 +2550,6 @@ class App:
         # annotate the extrema for the storm
         point_index_labels = {}
         # since some extremum may show up for the same point, we need to combine the extremum labels first (by point_index)
-        prev_color_level = 0
         for result_idx in sorted(results.keys()):
             if result_idx is None:
                 continue
@@ -2604,8 +2576,6 @@ class App:
                         else:
                             lines_color_level = prev_color_level
 
-                        new_lines = f"{prev_lines}\n{label_str}"
-
                         # remove any duplicates in the new string to be appended
                         prev_lines = prev_lines.splitlines()
                         new_lines = label_str.splitlines()
@@ -2626,7 +2596,7 @@ class App:
             # check if already annotated
             #   there is a question of how we want to use annotations (one or many per (nearby or same) point?)
             #   in AnnotatedCircles, we use has_overlap() to prevent that
-            annotated_circle = self.annotated_circles_object.add(lat=point['lat'], lon=point['lon'], label=point_label, label_color=ANNOTATE_COLOR_LEVELS[color_level])
+            annotated_circle = AnnotatedCircles.add(lat=point['lat'], lon=point['lon'], label=point_label, label_color=ANNOTATE_COLOR_LEVELS[color_level])
             # handle case to make sure we don't add doubles or nearby
             if annotated_circle is None:
                 continue
@@ -2635,7 +2605,7 @@ class App:
             self.annotated_circle_objects[internal_id].append(annotated_circle)
 
         if added:
-            self.fig.canvas.draw()
+            self.ax.figure.canvas.draw()
 
     def display_custom_boundaries(self, label_column=None):
         if custom_gdf is not None:
@@ -2652,7 +2622,9 @@ class App:
 
     def init_rvor_contour_dict(self):
         self.overlay_rvor_contour_dict = defaultdict(dict)
+        # noinspection PyTypeChecker
         self.overlay_rvor_contour_dict['ids'] = set()
+        # noinspection PyTypeChecker
         self.overlay_rvor_contour_dict['renderable_ids'] = set()
         self.overlay_rvor_contour_dict['contour_span_lons'] = {}
         self.overlay_rvor_contour_dict['contour_span_lats'] = {}
@@ -2689,10 +2661,11 @@ class App:
             if all_levels_gdf is None:
                 continue
 
-            gdf = all_levels_gdf[all_levels_gdf['level'].isin(SELECTED_PRESSURE_LEVELS)]
+            # noinspection PyUnresolvedReferences
+            gdf2 = all_levels_gdf[all_levels_gdf['level'].isin(SELECTED_PRESSURE_LEVELS)]
 
             # Filter contours based on span
-            for _, row in gdf.iterrows():
+            for _, row in gdf2.iterrows():
                 contour_id = row['contour_id']
                 span_lon = row['span_lon']
                 span_lat = row['span_lat']
@@ -2713,7 +2686,8 @@ class App:
             cyclonic = (gdf_name[5] == 'c')
 
             # requiring that changing pressure levels to remove and re-add all the artists
-            gdf = all_levels_gdf[all_levels_gdf['level'].isin(SELECTED_PRESSURE_LEVELS)]
+            # noinspection PyUnresolvedReferences
+            gdf3 = all_levels_gdf[all_levels_gdf['level'].isin(SELECTED_PRESSURE_LEVELS)]
 
             # global visibility based on current display settings (keyboard shortcuts) and if global extent or not
             contour_visible = self.overlay_rvor_contour_visible
@@ -2735,7 +2709,7 @@ class App:
             else:
                 edge_colors = ANTI_CYCLONIC_PRESSURE_LEVEL_COLORS
 
-            for _, row in gdf.iterrows():
+            for _, row in gdf3.iterrows():
                 contour_id = row['contour_id']
                 # is renderable based on the level of detail (size of contour relative to current extent)
                 is_renderable = contour_id in renderable_ids
@@ -2744,7 +2718,7 @@ class App:
                     # Draw contours
                     edge_color = edge_colors[str(row['level'])]
                     #is_visible = contour_visible and is_renderable
-                    # only limit labels to to detail
+                    # only limit labels to detail
                     is_visible = contour_visible
                     obj = self.ax.add_geometries([geom], crs=ccrs.PlateCarree(), edgecolor=edge_color, facecolor='none', linewidth=2, visible=is_visible)
                     self.overlay_rvor_contour_dict['contour_objs'][contour_id] = [obj]
@@ -2793,6 +2767,7 @@ class App:
         min_span_lat_deg = minimum_contour_extent[1] * lat_pixel_ratio
         return extent, min_span_lat_deg, min_span_lon_deg
 
+    # noinspection PyUnusedLocal
     def combo_selected_models_event(self, event):
         current_value = self.adeck_selected_combobox.get()
         if current_value == self.adeck_previous_selected:
@@ -2973,7 +2948,8 @@ class App:
 
     def update_deck_data(self):
         # track which data is stale (tc vitals, adeck, bdeck)
-        # unfortunately we need to get all of one type (vitals, adeck, bdeck) from both mirrors since it's unknown which mirror actually has most up-to-date data from the modification date alone
+        # unfortunately we need to get all each type (vitals, adeck, bdeck) from both mirrors, since
+        # it's unknown which mirror actually has most up-to-date data from the modification date alone
         updated_urls_tcvitals = set()
         updated_urls_adeck = set()
         updated_urls_bdeck = set()
@@ -3039,19 +3015,19 @@ class App:
                 new_dt_mod = http_get_modification_date(url)
                 if new_dt_mod:
                     if new_dt_mod > old_dt_mod:
-                        self.stale_urls['tcvitals'] = self.stale_urls['tcvitals'] | set([url])
+                        self.stale_urls['tcvitals'] = self.stale_urls['tcvitals'] | {url}
         if self.dt_mods_adeck:
             for url, old_dt_mod in self.dt_mods_adeck.items():
                 new_dt_mod = http_get_modification_date(url)
                 if new_dt_mod:
                     if new_dt_mod > old_dt_mod:
-                        self.stale_urls['adeck'] = self.stale_urls['adeck'] | set([url])
+                        self.stale_urls['adeck'] = self.stale_urls['adeck'] | {url}
         if self.dt_mods_bdeck:
             for url, old_dt_mod in self.dt_mods_bdeck.items():
                 new_dt_mod = http_get_modification_date(url)
                 if new_dt_mod:
                     if new_dt_mod > old_dt_mod:
-                        self.stale_urls['bdeck'] = self.stale_urls['bdeck'] | set([url])
+                        self.stale_urls['bdeck'] = self.stale_urls['bdeck'] | {url}
 
         self.update_reload_button_color()
 
@@ -3163,8 +3139,6 @@ class App:
         start_of_day = valid_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
         valid_day = start_of_day.isoformat()
 
-        most_recent_timestamp = None
-
         self.clear_plotted_list()
         numc = 0
         for storm_atcf_id, tc in tc_candidates.items():
@@ -3175,11 +3149,8 @@ class App:
                 if disturbance_candidates:
                     prev_lat = None
                     prev_lon = None
-                    prev_lon_repeat2 = None
-                    prev_lon_repeat3 = None
                     numdisturb = len(disturbance_candidates)
-                    num = 0
-                    # check if should be hidden
+                    # check if it should be hidden
                     internal_id = (numc, numd)
                     if numdisturb > 0:
                         #TODO conditionally hidden by interface (first forecast valid time > user selected horizon (latest first valid time))
@@ -3194,14 +3165,13 @@ class App:
                     # handle when we are hiding certain time steps or whether the storm itself should be hidden based on time step
                     have_displayed_points = False
                     for valid_time, candidate in disturbance_candidates.items():
-                        num += 1
                         if 'time_step' in candidate.keys():
                             time_step_int = candidate['time_step']
                         else:
                             time_step_int = 0
                         lon = candidate['lon']
                         lat = candidate['lat']
-                        candidate_info = {}
+                        candidate_info = dict()
                         candidate_info['model_name'] = model_name
                         if 'init_time' in candidate.keys() and candidate['init_time']:
                             candidate_info['init_time'] = datetime.fromisoformat(candidate['init_time'])
@@ -3250,7 +3220,6 @@ class App:
 
                         prev_lat = candidate_info['lat']
                         prev_lon = lon
-                        prev_lon_repeat1 = lon
 
                         # check whether we want to display it (first valid time limit)
                         for i, (start, end) in list(enumerate(self.time_step_ranges)):
@@ -3271,7 +3240,6 @@ class App:
                     # do in reversed order so most recent items get rendered on top
                     for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
                         opacity = 1.0
-                        radius = 6
                         lons = {}
                         lats = {}
                         for point in reversed(lat_lon_with_time_step_list):
@@ -3280,6 +3248,7 @@ class App:
                             # use hours after valid_day instead
                             if start <= hours_after <= end:
                                 if point['vmax10m_in_roci']:
+                                    marker = '*'
                                     for upper_bound, vmaxmarker in vmax_kt_threshold:
                                         marker = vmaxmarker
                                         if point['vmax10m_in_roci'] < upper_bound:
@@ -3318,14 +3287,12 @@ class App:
                                     """
 
                         # Create a LineCollection
-                        lc = LineCollection(line_segments, color=self.time_step_marker_colors[i], linewidth=strokewidth, alpha=opacity)
+                        lc = LineCollection(line_segments, color=line_color, linewidth=strokewidth, alpha=opacity)
                         # Add the LineCollection to the axes
                         line_collection = self.ax.add_collection(lc)
                         if internal_id not in self.line_collection_objects:
                             self.line_collection_objects[internal_id] = []
                         self.line_collection_objects[internal_id].append(line_collection)
-
-                        name = 'Tracks'
 
         labels_positive = [f' D+{str(i): >2} ' for i in range(len(self.time_step_marker_colors)-1)]  # Labels corresponding to colors
         labels = [' D-   ']
@@ -3354,7 +3321,7 @@ class App:
                         fontsize=12, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
                                                                       edgecolor='#FFFFFF', facecolor='#000000', alpha=1.0))
 
-        self.fig.canvas.draw()
+        self.ax.figure.canvas.draw()
         self.label_adeck_mode.config(text=f"ADECK MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime('%Y-%m-%d') + f". Models: {num_models}/{num_all_models}")
 
     def latest_genesis_cycle(self):
@@ -3456,7 +3423,6 @@ class App:
         numc = 0
         for tc in tc_candidates:
             numc += 1
-            numcandidates = len(tc_candidates)
 
             model_name = tc['model_name']
             model_timestamp = tc['model_timestamp']
@@ -3469,15 +3435,13 @@ class App:
                 most_recent_timestamp = model_timestamp
                 model_dates[model_name] = datetime.fromisoformat(most_recent_timestamp).strftime('%d/%HZ')
 
+            numdisturb = 0
+            prev_lat = None
+            prev_lon = None
             if disturbance_candidates:
-                prev_lat = None
-                prev_lon = None
-                prev_lon_repeat2 = None
-                prev_lon_repeat3 = None
                 numdisturb = len(disturbance_candidates)
-                num = 0
 
-            # check if should be hidden
+            # check if it should be hidden
             if numdisturb > 0:
                 #TODO conditionally hidden by interface (first forecast valid time > user selected horizon (latest first valid time))
                 #valid_time_str = disturbance_candidates[0][1]['valid_time']
@@ -3492,10 +3456,9 @@ class App:
                 # handle when we are hiding certain time steps or whether the storm itself should be hidden based on time step
                 have_displayed_points = False
                 for time_step_str, valid_time_str, candidate in disturbance_candidates:
-                    num += 1
                     time_step_int = int(time_step_str)
                     lon = candidate['lon']
-                    candidate_info = {}
+                    candidate_info = dict()
                     candidate_info['model_name'] = model_name
                     candidate_info['init_time'] = datetime.fromisoformat(model_timestamp)
                     candidate_info['lat'] = candidate['lat']
@@ -3531,7 +3494,6 @@ class App:
 
                     prev_lat = candidate_info['lat']
                     prev_lon = lon
-                    prev_lon_repeat1 = lon
 
                     # check whether we want to display it (first valid time limit)
                     for i, (start, end) in list(enumerate(self.time_step_ranges)):
@@ -3587,7 +3549,6 @@ class App:
                 # do in reversed order so most recent items get rendered on top
                 for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
                     opacity = 1.0
-                    radius = 6
                     lons = {}
                     lats = {}
                     for point in reversed(lat_lon_with_time_step_list):
@@ -3595,6 +3556,7 @@ class App:
                         #if start <= time_step <= end:
                         # use hours after valid_day instead
                         if start <= hours_after <= end:
+                            marker = "*"
                             for upper_bound, vmaxmarker in vmax_kt_threshold:
                                 marker = vmaxmarker
                                 if point['vmax10m_in_roci'] < upper_bound:
@@ -3633,14 +3595,12 @@ class App:
                                 """
 
                     # Create a LineCollection
-                    lc = LineCollection(line_segments, color=self.time_step_marker_colors[i], linewidth=strokewidth, alpha=opacity)
+                    lc = LineCollection(line_segments, color=line_color, linewidth=strokewidth, alpha=opacity)
                     # Add the LineCollection to the axes
                     line_collection = self.ax.add_collection(lc)
                     if internal_id not in self.line_collection_objects:
                         self.line_collection_objects[internal_id] = []
                     self.line_collection_objects[internal_id].append(line_collection)
-
-                    name = 'Tracks'
 
         labels_positive = [f' D+{str(i): >2} ' for i in range(len(self.time_step_marker_colors)-1)]  # Labels corresponding to colors
         labels = [' D-   ']
@@ -3670,7 +3630,7 @@ class App:
                         fontsize=12, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
                                                                       edgecolor='#FFFFFF', facecolor='#000000', alpha=1.0))
 
-        self.fig.canvas.draw()
+        self.ax.figure.canvas.draw()
         self.label_genesis_mode.config(text="GENESIS MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime('%Y-%m-%d'))
         self.genesis_model_cycle_time = most_recent_model_cycle
         self.genesis_models_label.config(text=f"Latest models: GFS [{model_dates['GFS']}], ECM[{model_dates['ECM']}], NAV[{model_dates['NAV']}], CMC[{model_dates['CMC']}]")
@@ -3764,7 +3724,7 @@ class App:
         if self.fig:
             try:
                 plt.close(self.fig)
-                self.reset_measurement()
+                self.measure_tool.reset_measurement()
             except:
                 pass
 
@@ -3772,6 +3732,7 @@ class App:
 
         # self.fig.add_subplot(111, projection=ccrs.PlateCarree())
         self.ax = plt.axes(projection=ccrs.PlateCarree())
+        self.measure_tool.changed_extent(self.ax)
         self.ax.set_anchor("NW")
 
         self.ax.autoscale_view(scalex=False,scaley=False)
@@ -3835,15 +3796,16 @@ class App:
         divider = Divider(self.fig, (0, 0, 1, 1), h, v, aspect=False)
         self.ax.set_axes_locator(divider.new_locator(nx=1, ny=1))
         self.clear_storm_extrema_annotations()
-        self.annotated_circles_object = AnnotatedCircles(self.ax)
+        AnnotatedCircles.changed_extent(self.ax)
+        self.measure_tool.changed_extent(self.ax)
         self.canvas.draw()
         self.display_custom_boundaries()
         self.display_custom_overlay()
         self.axes_size = self.ax.get_figure().get_size_inches() * self.ax.get_figure().dpi
 
     def on_key_press(self, event):
-        if event.key == 'shift':
-            self.measure_mode = True
+        if not self.zoom_selection_box:
+            self.measure_tool.on_key_press(event)
 
         if event.key == 'escape':
             # abort a zoom
@@ -3907,11 +3869,11 @@ class App:
                     self.clear_storm_extrema_annotations()
             else:
                 self.clear_storm_extrema_annotations()
-            self.fig.canvas.draw()
+            self.ax.figure.canvas.draw()
 
     def on_key_release(self, event):
-        if event.key == 'shift':
-            self.measure_mode = False
+        if not self.zoom_selection_box:
+            self.measure_tool.on_key_release(event)
 
     def on_click(self, event):
         xlim = self.ax.get_xlim()
@@ -3925,27 +3887,28 @@ class App:
                 inbound = False
 
             if inbound:
-                if self.measure_mode:
-                    if event.button == 1:
-                        self.start_point = (event.xdata, event.ydata)
-                        self.end_point = (event.xdata, event.ydata)
-                    elif event.button == 3:
-                        self.reset_measurement()
+                try:
+                    do_measure = self.measure_tool.on_click(event)
+                except:
+                    # start measurement
+                    do_measure = False
+                    traceback.print_exc()
+                if do_measure:
+                    pass
                 else:
+                    # check for drag annotation,
+                    # then a legend click (change time viewing),
+                    # then finally zoom
                     if event.button == 1:  # Left click
-                        if self.annotated_circles_object:
-                            annotations = AnnotatedCircles.get_draggable_annotations(self.annotated_circles_object)
-                            if annotations:
-                                for annotation in annotations:
-                                    if annotation and annotation.contains_point(event):
-                                        return
+                        if AnnotatedCircles.any_annotation_contains_point(event):
+                            # pass through for the draggable annotation click handler
+                            return
 
                         changed_opacity = False
                         changed_opacity_index = 0
                         # the time_step legend is ordered bottom up (furthest valid time first)
                         new_opacity = 1.0
                         if self.time_step_legend_objects:
-                            opacity = self.time_step_opacity[0]
 
                             for i, time_step_legend_object in list(enumerate(reversed(self.time_step_legend_objects))):
                                 bbox = time_step_legend_object.get_window_extent()
@@ -3988,12 +3951,13 @@ class App:
                         else:
                             # zooming
                             try:
-                                self.zoom_selection_box = SelectionBox(self.ax, self.event_manager)
+                                self.zoom_selection_box = SelectionBox(self.ax)
                                 # handle case we are not blocking (something other action is blocking)
                                 self.zoom_selection_box.update_box(event.xdata, event.ydata, event.xdata, event.ydata)
                             except:
                                 # some other action is blocking
                                 pass
+                                traceback.print_exc()
 
                     elif event.button == 3:  # Right click
                         self.zoom_out(step_zoom=True)
@@ -4008,38 +3972,9 @@ class App:
         except:
             inbound = False
 
-        if self.measure_mode:
-            if event.button == 1 and self.start_point:
-                if inbound:
-                    self.end_point = (event.xdata, event.ydata)
-
-                try:
-                    distance = self.calculate_distance(self.start_point, self.end_point)
-                except:
-                    distance = 0
-                if distance > 0:
-                    if self.line:
-                        try:
-                            self.line.remove()
-                        except:
-                            pass
-                    if self.distance_text:
-                        try:
-                            self.distance_text.remove()
-                        except:
-                            pass
-                    self.ax.set_yscale('linear')
-
-                    self.line = self.ax.plot([self.start_point[0], self.end_point[0]],
-                                             [self.start_point[1], self.end_point[1]],
-                                             color='cyan', linewidth=2, transform=ccrs.PlateCarree())[0]
-                    self.display_distance_text(distance)
-                    self.start_point = None
-                    self.end_point = None
-                    self.fig.canvas.draw()
-                else:
-                    self.reset_measurement()
-                    self.fig.canvas.draw()
+        doing_measurement = self.measure_tool.in_measure_mode()
+        if doing_measurement:
+            pass
         else:
             if event.button == 1 and self.zoom_selection_box:  # Left click release
                 if event.xdata is None or event.ydata is None or not inbound:
@@ -4062,7 +3997,7 @@ class App:
         self.circle_handle = Circle((lon, lat), radius=self.calculate_radius_pixels(), color=DEFAULT_ANNOTATE_MARKER_COLOR, fill=False, linestyle='dotted', linewidth=2, alpha=0.8,
                                     transform=ccrs.PlateCarree())
         self.ax.add_patch(self.circle_handle)
-        self.fig.canvas.draw()
+        self.ax.figure.canvas.draw()
 
         self.last_circle_lon = lon
         self.last_circle_lat = lat
@@ -4072,7 +4007,7 @@ class App:
             self.circle_handle.remove()
             self.circle_handle = None
             self.ax.set_yscale('linear')
-            self.fig.canvas.draw()
+            self.ax.figure.canvas.draw()
 
         self.last_circle_lon = None
         self.last_circle_lat = None
@@ -4093,125 +4028,34 @@ class App:
             self.last_cursor_lon_lat = (lon, lat)
             self.update_labels_for_mouse_hover(lat=lat, lon=lon)
 
-            if self.measure_mode:
-                if self.start_point:
-                    if inbound:
-                        self.end_point = (event.xdata, event.ydata)
-                    else:
-                        return
+            if self.zoom_selection_box:
+                x0 = self.zoom_selection_box.lon1
+                y0 = self.zoom_selection_box.lat1
+                if inbound:
+                    x1, y1 = event.xdata, event.ydata
+                else:
+                    # out of bound motion
+                    return
+                if type(x0) == type(x1) == type(y0) == type(y1):
+                    if self.zoom_selection_box is not None:
+                        self.zoom_selection_box.update_box(x0, y0, x1, y1)
 
-                    try:
-                        if not self.line:
-                            self.line = self.ax.plot([self.start_point[0], self.end_point[0]],
-                                                     [self.start_point[1], self.end_point[1]],
-                                                     color='cyan', linewidth=2, transform=ccrs.PlateCarree())[0]
-                    except:
-                        pass
-
-                    try:
-                        self.line.set_data([self.start_point[0], self.end_point[0]],
-                                           [self.start_point[1], self.end_point[1]])
-                    except:
-                        pass
-
-                    if self.distance_text:
-                        try:
-                            self.distance_text.remove()
-                        except:
-                            pass
-
-                    try:
-                        distance = self.calculate_distance(self.start_point, self.end_point)
-                        self.display_distance_text(distance)
-                    except:
-                        distance = 0
-
-                    self.fig.canvas.draw()
+                    # blitting object will redraw using cached buffer
+                    # self.fig.canvas.draw_idle()
             else:
-                if self.zoom_selection_box:
-                    x0 = self.zoom_selection_box.lon1
-                    y0 = self.zoom_selection_box.lat1
-                    if inbound:
-                        x1, y1 = event.xdata, event.ydata
-                    else:
-                        # out of bound motion
-                        return
-                    if type(x0) == type(x1) == type(y0) == type(y1):
-                        if self.zoom_selection_box is not None:
-                            self.zoom_selection_box.update_box(x0, y0, x1, y1)
+                self.measure_tool.on_motion(event, inbound)
 
-                        # blitting object will redraw using cached buffer
-                        # self.fig.canvas.draw_idle()
-
-    def reset_measurement(self):
-        if self.line:
-            try:
-                self.line.remove()
-            except:
-                pass
-            self.line = None
-        if self.distance_text:
-            try:
-                self.distance_text.remove()
-            except:
-                pass
-            self.distance_text = None
-        self.start_point = None
-        self.end_point = None
-        self.fig.canvas.draw()
-
-    def calculate_distance(self, start_point, end_point):
+    @staticmethod
+    def calculate_distance(start_point, end_point):
         geod = cgeo.Geodesic()
-        lats_lons = [start_point, end_point]
         line = LineString([start_point, end_point])
         total_distance = geod.geometry_length(line)
         nautical_miles = total_distance / 1852.0
         return nautical_miles
 
-    def display_distance_text(self, distance):
-        if self.start_point and self.end_point:
-            mid_point = ((self.start_point[0] + self.end_point[0]) / 2,
-                         (self.start_point[1] + self.end_point[1]) / 2)
-
-            dx = self.end_point[0] - self.start_point[0]
-            dy = self.end_point[1] - self.start_point[1]
-            angle = np.degrees(np.arctan2(dy, dx))
-
-            # Fixed offset distance in pixels
-            offset_pixels = 20  # Adjust as needed
-
-            # Calculate degrees per pixel in both x and y directions
-            extent = self.ax.get_extent()
-            lon_diff = extent[1] - extent[0]
-            lat_diff = extent[3] - extent[2]
-
-            lon_deg_per_pixel = lon_diff / self.ax.get_window_extent().width
-            lat_deg_per_pixel = lat_diff / self.ax.get_window_extent().height
-
-            # Convert offset from pixels to degrees
-            offset_degrees = offset_pixels * lon_deg_per_pixel
-
-            # Calculate offset in degrees in x and y directions
-            offset_x_deg = offset_degrees * np.cos(np.radians(angle + 90))
-            offset_y_deg = offset_degrees * np.sin(np.radians(angle + 90))
-
-            # Adjust angle to ensure text is always right-side up
-            if angle > 90 or angle < -90:
-                angle += 180
-                offset_x_deg = -offset_x_deg
-                offset_y_deg = -offset_y_deg
-
-            self.distance_text = self.ax.text(mid_point[0] + offset_x_deg, mid_point[1] + offset_y_deg,
-                                              f"{distance:.2f} NM", color='white', fontsize=12,
-                                              ha='center', va='center', rotation=angle,
-                                              bbox=dict(facecolor='black', alpha=0.5))
-
     def zoom_in(self, step_zoom=False):
         if step_zoom:
             extent = self.ax.get_extent()
-            zoom_factor = ZOOM_IN_STEP_FACTOR
-            if zoom_factor <= 1.0:
-                zoom_factor = 3.0
             lon_diff = extent[1] - extent[0]
             lat_diff = extent[3] - extent[2]
             lon_center, lat_center = self.last_cursor_lon_lat
@@ -4221,21 +4065,16 @@ class App:
             x1 = lon_center + (target_width / 2.0)
             y0 = lat_center - (target_height / 2.0)
             y1 = lat_center + (target_height / 2.0)
-            x0_diff = x1_diff = y0_diff = y1_diff = 0.0
             if x0 < -180.0:
-                x0_diff = x0 - (-180.0)
                 x0 = -180.0
                 x1 = x0 + target_width
             if x1 > 180.0:
-                x1_diff = 180.0 - x1
                 x1 = 180.0
                 x0 = x1 - target_width
             if y0 < -90.0:
-                y1_diff = y0 - (-90.0)
                 y0 = 90.0
                 y1 = y0 + target_height
             if y1 > 90.0:
-                y1_diff = 90.0 - y1
                 y1 = 90.0
                 y0 = y1 - target_height
 
@@ -4250,9 +4089,11 @@ class App:
             self.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
             self.clear_storm_extrema_annotations()
             self.update_axes()
-            self.fig.canvas.draw()
+            AnnotatedCircles.changed_extent(self.ax)
+            self.measure_tool.changed_extent(self.ax)
+            self.ax.figure.canvas.draw()
             self.rvor_labels_new_extent()
-            self.fig.canvas.draw()
+            self.ax.figure.canvas.draw()
 
         #elif self.zoom_rect and (None not in self.zoom_rect) and len(self.zoom_rect) == 4:
         # 2d checks if valid rect and that x's aren't close and y's aren't close
@@ -4280,15 +4121,12 @@ class App:
             frame_height_pixels = self.canvas_frame.winfo_height()
             frame_aspect_ratio = frame_height_pixels / frame_width_pixels
 
-            lat_extent = None
-            lon_extent = None
             # Determine the dimension to set the extent and the dimension to expand
             if zoom_aspect_ratio < frame_aspect_ratio:
                 # Set the longitude extent and expand the latitude extent
                 lon_extent = extent[0], extent[1]
                 lat_center = (extent[2] + extent[3]) / 2
                 lat_height = (lon_extent[1] - lon_extent[0]) * frame_aspect_ratio
-                lat_min = lat_max = None
                 if lat_center + (lat_height / 2) > 90.0:
                     lat_max = 90.0
                     lat_min = lat_max - lat_height
@@ -4304,7 +4142,6 @@ class App:
                 lat_extent = extent[2], extent[3]
                 lon_center = (extent[0] + extent[1]) / 2
                 lon_width = (lat_extent[1] - lat_extent[0]) / frame_aspect_ratio
-                lon_min = lon_max = None
                 if lon_center + (lon_width / 2) > 180.0:
                     lon_max = 180.0
                     lon_min = lon_max - lon_width
@@ -4320,9 +4157,11 @@ class App:
 
             self.clear_storm_extrema_annotations()
             self.update_axes()
-            self.fig.canvas.draw()
+            AnnotatedCircles.changed_extent(self.ax)
+            self.measure_tool.changed_extent(self.ax)
+            self.ax.figure.canvas.draw()
             self.rvor_labels_new_extent()
-            self.fig.canvas.draw()
+            self.ax.figure.canvas.draw()
 
     def zoom_out(self, max_zoom=False, step_zoom=False):
         extent = self.ax.get_extent()
@@ -4333,9 +4172,6 @@ class App:
         max_lat_diff = 180.0  # Maximum latitudinal extent
 
         if step_zoom:
-            zoom_factor = ZOOM_IN_STEP_FACTOR
-            if zoom_factor <= 1.0:
-                zoom_factor = 3.0
             lon_center = (extent[1] + extent[0]) / 2.0
             lat_center = (extent[3] + extent[2]) / 2.0
             target_width = lon_diff * ZOOM_IN_STEP_FACTOR
@@ -4344,21 +4180,16 @@ class App:
             x1 = lon_center + (target_width / 2.0)
             y0 = lat_center - (target_height / 2.0)
             y1 = lat_center + (target_height / 2.0)
-            x0_diff = x1_diff = y0_diff = y1_diff = 0.0
             if x0 < -180.0:
-                x0_diff = x0 - (-180.0)
                 x0 = -180.0
                 x1 = x0 + target_width
             if x1 > 180.0:
-                x1_diff = 180.0 - x1
                 x1 = 180.0
                 x0 = x1 - target_width
             if y0 < -90.0:
-                y1_diff = y0 - (-90.0)
                 y0 = 90.0
                 y1 = y0 + target_height
             if y1 > 90.0:
-                y1_diff = 90.0 - y1
                 y1 = 90.0
                 y0 = y1 - target_height
 
@@ -4383,9 +4214,11 @@ class App:
                 self.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
                 self.clear_storm_extrema_annotations()
                 self.update_axes()
-                self.fig.canvas.draw()
+                AnnotatedCircles.changed_extent(self.ax)
+                self.measure_tool.changed_extent(self.ax)
+                self.ax.figure.canvas.draw()
                 self.rvor_labels_new_extent()
-                self.fig.canvas.draw()
+                self.ax.figure.canvas.draw()
 
         else:
             # Define zoom factor or step size
@@ -4415,9 +4248,12 @@ class App:
                 self.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
                 self.clear_storm_extrema_annotations()
                 self.update_axes()
-                self.fig.canvas.draw()
+                AnnotatedCircles.changed_extent(self.ax)
+                # do measure last as we are going to remove and redraw it
+                self.measure_tool.changed_extent(self.ax)
+                self.ax.figure.canvas.draw()
                 self.rvor_labels_new_extent()
-                self.fig.canvas.draw()
+                self.ax.figure.canvas.draw()
 
     def show_config_genesis_dialog(self):
         self.show_config_dialog()
@@ -4491,7 +4327,8 @@ class App:
         # fix focus back to root
         self.canvas.get_tk_widget().focus_set()
 
-    def load_settings(self):
+    @staticmethod
+    def load_settings():
         try:
             global displayed_functional_annotation_options
             global ANNOTATE_COLOR_LEVELS
@@ -4510,8 +4347,8 @@ class App:
                     if key == 'annotation_label_options':
                         DISPLAYED_FUNCTIONAL_ANNOTATIONS = [option for option in displayed_functional_annotation_options if option in val]
                     elif key == 'settings':
-                        for global_setting_name, val in val.items():
-                            globals()[global_setting_name] = val
+                        for global_setting_name, v in val.items():
+                            globals()[global_setting_name] = v
                 ANNOTATE_COLOR_LEVELS = {
                     0: DEFAULT_ANNOTATE_TEXT_COLOR,
                     1: ANNOTATE_DT_START_COLOR,
@@ -4521,6 +4358,7 @@ class App:
         except FileNotFoundError:
             pass
 
+    # noinspection PyUnusedLocal
     def take_screenshot(self, *args):
         # Get the current UTC date and time
         current_time = datetime.utcnow().strftime("%Y-%m-%d-%H-%M-%S")
@@ -4541,8 +4379,8 @@ class App:
         dialog.geometry("200x100")  # Set the dialog size
 
         # Center the dialog
-        x = (root.winfo_screenwidth() - 200) // 2
-        y = (root.winfo_screenheight() - 100) // 2
+        x = (tk_root.winfo_screenwidth() - 200) // 2
+        y = (tk_root.winfo_screenheight() - 100) // 2
         dialog.geometry(f"+{x}+{y}")
 
         label = tk.Label(dialog, text="Screenshot saved", bg="#000000", fg="#FFFFFF")
@@ -4561,11 +4399,206 @@ class App:
         # Bind the FocusOut event to the dialog's destroy method
         dialog.bind("<FocusOut>", lambda event: dialog.destroy())
 
+# Blitting measure tool (single instance)
+class MeasureTool:
+    def __init__(self, ax):
+        self.ax = ax
+        self.measure_mode = False
+        self.start_point = None
+        self.end_point = None
+        self.line = None
+        self.distance_text = None
+        self.distance = 0
+        # Save background
+        self.bg = None
+        self.blocking = False
+
+    def in_measure_mode(self):
+        return self.measure_mode
+
+    def unblock_for_measure(self):
+        if self.blocking:
+            self.blocking = False
+            if EventManager.get_blocking_purpose():
+                EventManager.unblock_events()
+
+    def block_for_measure(self):
+        if self.measure_mode:
+            if not EventManager.get_blocking_purpose():
+                blocking_for_measure = EventManager.block_events('measure')
+                if not blocking_for_measure:
+                    print(EventManager.get_blocking_purpose())
+                    raise ValueError("Failed to block events for MeasureTool")
+            self.blocking = True
+            return True
+        return False
+
+    def changed_extent(self, ax):
+        self.ax = ax
+        if self.line or self.distance_text:
+            self.remove_artists()
+            ax.figure.canvas.draw()
+            # update background region
+            self.bg = ax.figure.canvas.copy_from_bbox(ax.bbox)
+            self.create_artists()
+
+    @staticmethod
+    def calculate_distance(start_point, end_point):
+        geod = cgeo.Geodesic()
+        line = LineString([start_point, end_point])
+        total_distance = geod.geometry_length(line)
+        nautical_miles = total_distance / 1852.0
+        return nautical_miles
+
+    def on_key_press(self, event):
+        if event.key == 'shift':
+            self.measure_mode = True
+            self.block_for_measure()
+
+    def on_key_release(self, event):
+        if event.key == 'shift':
+            self.measure_mode = False
+            self.unblock_for_measure()
+
+    def on_motion(self, event, inbound):
+        ax = self.ax
+        if not self.measure_mode:
+            return False
+
+        if not self.start_point:
+            return False
+
+        if not inbound:
+            return False
+
+        self.end_point = (event.xdata, event.ydata)
+
+        try:
+            if not self.line:
+                self.bg = ax.figure.canvas.copy_from_bbox(ax.bbox)
+                self.create_line_artist()
+        except:
+            traceback.print_exc()
+            pass
+
+        try:
+            self.line.set_data([self.start_point[0], self.end_point[0]],
+                               [self.start_point[1], self.end_point[1]])
+        except:
+            pass
+
+        self.remove_distance_text_artist()
+
+        try:
+            self.distance = self.calculate_distance(self.start_point, self.end_point)
+            self.create_distance_text_artist(self.distance)
+        except:
+            self.distance = 0
+
+        self.restore_region()
+        if self.line:
+            ax.draw_artist(self.line)
+        if self.distance_text:
+            ax.draw_artist(self.distance_text)
+        ax.figure.canvas.blit(ax.bbox)
+        return True
+
+    def create_artists(self):
+        self.create_line_artist()
+        self.create_distance_text_artist(self.distance)
+
+    def restore_region(self):
+        if self.bg:
+            self.ax.figure.canvas.restore_region(self.bg)
+
+    def remove_line_artist(self):
+        if self.line:
+            try:
+                self.line.remove()
+            except:
+                pass
+            self.line = None
+
+    def remove_distance_text_artist(self):
+        if self.distance_text:
+            try:
+                self.distance_text.remove()
+            except:
+                pass
+            self.distance_text = None
+
+    def remove_artists(self):
+        self.remove_line_artist()
+        self.remove_distance_text_artist()
+
+    def on_click(self, event):
+        if self.measure_mode:
+            if event.button == 1:
+                self.start_point = (event.xdata, event.ydata)
+                self.end_point = (event.xdata, event.ydata)
+                return True
+            elif event.button == 3:
+                self.reset_measurement()
+        return False
+
+    def create_line_artist(self):
+        if self.ax and self.start_point and self.end_point:
+            self.line = self.ax.plot([self.start_point[0], self.end_point[0]],
+                                    [self.start_point[1], self.end_point[1]],
+                                    color='cyan', linewidth=2, transform=ccrs.PlateCarree())[0]
+
+    def create_distance_text_artist(self, distance):
+        if self.start_point and self.end_point:
+            mid_point = ((self.start_point[0] + self.end_point[0]) / 2,
+                         (self.start_point[1] + self.end_point[1]) / 2)
+
+            dx = self.end_point[0] - self.start_point[0]
+            dy = self.end_point[1] - self.start_point[1]
+            angle = np.degrees(np.arctan2(dy, dx))
+
+            # Fixed offset distance in pixels
+            offset_pixels = 20  # Adjust as needed
+
+            # Calculate degrees per pixel in both x and y directions
+            extent = self.ax.get_extent()
+            lon_diff = extent[1] - extent[0]
+            lat_diff = extent[3] - extent[2]
+
+            lon_deg_per_pixel = lon_diff / self.ax.get_window_extent().width
+            lat_deg_per_pixel = lat_diff / self.ax.get_window_extent().height
+
+            # Convert offset from pixels to degrees
+            offset_degrees_x = offset_pixels * lon_deg_per_pixel
+            offset_degrees_y = offset_pixels * lat_deg_per_pixel
+
+            # Calculate offset in degrees in x and y directions
+            offset_x_deg = offset_degrees_x * np.cos(np.radians(angle + 90))
+            offset_y_deg = offset_degrees_y * np.sin(np.radians(angle + 90))
+
+            # Adjust angle to ensure text is always right-side up
+            if angle > 90 or angle < -90:
+                angle += 180
+                offset_x_deg = -offset_x_deg
+                offset_y_deg = -offset_y_deg
+
+            self.distance_text = self.ax.text(mid_point[0] + offset_x_deg, mid_point[1] + offset_y_deg,
+                                              f"{distance:.2f} NM", color='white', fontsize=12,
+                                              ha='center', va='center', rotation=angle,
+                                              bbox=dict(facecolor='black', alpha=0.5))
+
+    def reset_measurement(self):
+        self.remove_artists()
+        self.ax.set_yscale('linear')
+        self.start_point = None
+        self.end_point = None
+        self.line = None
+        self.distance = 0
+        self.ax.figure.canvas.draw()
 
 # blitting box for map (for zooms / selections)
 class SelectionBox:
     def __init__(self, ax):
-        block_for_zoom = self.event_manager.block('zoom')
+        block_for_zoom = EventManager.block_events('zoom')
         if not block_for_zoom:
             raise ValueError("Failed to block events for SelectionBox")
         else:
@@ -4619,33 +4652,49 @@ class SelectionBox:
         self.remove()
         self.restore_region()  # Restore regions without drawing
         self.ax.figure.canvas.blit(self.ax.bbox)
-        self.event_manager.unblock_events()
+        EventManager.unblock_events()
 
 # for mutex blocking of mouse hover events
 class EventManager:
-    def __init__(self):
-        self.blocked = False
-        self.blocking_purpose = None
+    blocked = False
+    blocking_purpose = None
 
-    def block_events(self, purpose):
-        if self.blocked:
+    @classmethod
+    def reset(cls):
+        cls.blocked = False
+        cls.blocking_purpose = False
+
+    @classmethod
+    def block_events(cls, purpose):
+        if cls.blocked:
             return False
-        self.blocked = True
-        self.blocking_purpose = purpose
+        cls.blocked = True
+        cls.blocking_purpose = purpose
         return True
 
-    def unblock_events(self):
-        if not self.blocked:
+    @classmethod
+    def unblock_events(cls):
+        if not cls.blocked:
             raise ValueError("Events are not blocked")
-        self.blocked = False
-        self.blocking_purpose = None
+        cls.blocked = False
+        cls.blocking_purpose = None
 
-    def get_blocking_purpose(self):
-        return self.blocking_purpose
+    @classmethod
+    def get_blocking_purpose(cls):
+        return cls.blocking_purpose
 
 # use toplevel rather than simple dialog as with this we can center the dialog
 class ConfigDialog(tk.Toplevel):
     def __init__(self, parent, annotation_label_options, selected_annotation_label_options, settings, root_width, root_height):
+        self.buttonbox = None
+        self.notebook = None
+        self.default_annotate_marker_color_label = None
+        self.default_annotate_text_color_label = None
+        self.annotate_dt_start_color_label = None
+        self.annotate_earliest_named_color_label = None
+        self.annotate_vmax_color_label = None
+        self.color_labels = None
+        self.annotation_label_checkboxes = None
         self.result = None
         self.annotation_label_options = annotation_label_options
         self.selected_annotation_label_options = selected_annotation_label_options
@@ -4653,9 +4702,9 @@ class ConfigDialog(tk.Toplevel):
         self.root_width = root_width
         self.root_height = root_height
 
-        sd = super().__init__(parent)  # Set the title her
+        super().__init__(parent)  # Set the title here
         self.title('Settings')
-        # this is required so we can center the dialog on the window
+        # this is required to center the dialog on the window
         self.transient(parent)
         self.parent = parent
 
@@ -4666,7 +4715,7 @@ class ConfigDialog(tk.Toplevel):
         self.button_frame.pack(padx=5, pady=5)
 
         self.body(self.body_frame, )
-        self.buttonbox(self.button_frame)
+        self.create_buttonbox(self.button_frame)
 
         self.protocol("WM_DELETE_WINDOW", self.cancel)
         self.grab_set()
@@ -4698,7 +4747,7 @@ class ConfigDialog(tk.Toplevel):
         os.remove('settings_tcviewer.json')
         self.cancel()
 
-    def buttonbox(self, master):
+    def create_buttonbox(self, master):
         self.buttonbox = tk.Frame(master)
         w = tk.Button(self.buttonbox, text="Restore All Defaults (requires restart)", command=self.restore_defaults)
         w.pack(side=tk.LEFT, padx=5, pady=5)
@@ -4750,7 +4799,7 @@ class ConfigDialog(tk.Toplevel):
 
         for varname, option in overlay_var_text.items():
             var = self.settings[varname]
-            cb = tk.Checkbutton(overlay_settings_frame, text=option, variable=self.settings[varname])
+            cb = tk.Checkbutton(overlay_settings_frame, text=option, variable=var)
             cb.pack(anchor=tk.W)
 
         tk.Label(overlay_settings_frame, text="Min. contour pixels X:").pack()
@@ -4807,9 +4856,6 @@ class ConfigDialog(tk.Toplevel):
             if option in self.selected_annotation_label_options:
                 var.set(1)
 
-    def get_height(self):
-        height = self.master.winfo_height()
-
     def choose_color(self, setting_name):
         color_obj = self.settings[setting_name]
         if color_obj:
@@ -4824,41 +4870,43 @@ class ConfigDialog(tk.Toplevel):
             'settings': {key: var.get() for key, var in self.settings.items()}
         }
 
+    # noinspection PyUnusedLocal
     def ok(self, event=None):
         self.withdraw()
         self.update_idletasks()
         self.apply()
         self.cancel()
 
+    # noinspection PyUnusedLocal
     def cancel(self, event=None):
         self.parent.focus_set()
         self.destroy()
 
 if __name__ == "__main__":
-    root = tk.Tk()
+    tk_root = tk.Tk()
 
     # Style configuration for ttk widgets
-    style = ttk.Style()
-    style.theme_use('clam')  # Ensure using a theme that supports customization
+    tk_style = ttk.Style()
+    tk_style.theme_use('clam')  # Ensure using a theme that supports customization
     default_bg = "black"
     default_fg = "white"
-    style.configure("TButton", background=default_bg, foreground=default_fg)
-    style.configure("White.TButton", background=default_bg, foreground="white")
-    style.configure("Red.TButton", background=default_bg, foreground="red")
-    style.configure("Orange.TButton", background=default_bg, foreground="orange")
-    style.configure("Yellow.TButton", background=default_bg, foreground="yellow")
+    tk_style.configure("TButton", background=default_bg, foreground=default_fg)
+    tk_style.configure("White.TButton", background=default_bg, foreground="white")
+    tk_style.configure("Red.TButton", background=default_bg, foreground="red")
+    tk_style.configure("Orange.TButton", background=default_bg, foreground="orange")
+    tk_style.configure("Yellow.TButton", background=default_bg, foreground="yellow")
 
-    style.configure("TLabel", background=default_bg, foreground=default_fg)
-    style.configure("FixedWidthWhite.TLabel", font=("Latin Modern Mono", 12), background=default_bg, foreground="white")
-    style.configure("FixedWidthRed.TLabel", font=("Latin Modern Mono", 12), background=default_bg, foreground="red")
+    tk_style.configure("TLabel", background=default_bg, foreground=default_fg)
+    tk_style.configure("FixedWidthWhite.TLabel", font=("Latin Modern Mono", 12), background=default_bg, foreground="white")
+    tk_style.configure("FixedWidthRed.TLabel", font=("Latin Modern Mono", 12), background=default_bg, foreground="red")
 
-    style.configure("TCheckbutton", background=default_bg, foreground=default_fg)
-    style.configure("TopFrame.TFrame", background=default_bg)
-    style.configure("ToolsFrame.TFrame", background=default_bg)
-    style.configure("CanvasFrame.TFrame", background=default_bg)
+    tk_style.configure("TCheckbutton", background=default_bg, foreground=default_fg)
+    tk_style.configure("TopFrame.TFrame", background=default_bg)
+    tk_style.configure("ToolsFrame.TFrame", background=default_bg)
+    tk_style.configure("CanvasFrame.TFrame", background=default_bg)
 
-    style.configure("TMessaging", background=default_bg, foreground=default_fg)
+    tk_style.configure("TMessaging", background=default_bg, foreground=default_fg)
 
-    app = App(root)
+    app = App(tk_root)
 
-    root.mainloop()
+    tk_root.mainloop()
