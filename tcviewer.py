@@ -23,6 +23,7 @@
 # TOGGLE RVOR CONTOURS = v key
 # TOGGLE RVOR CONTOUR LABELS = l key
 # SHOW RVOR LEVELS CHOOSER = V key
+# TOGGLE LOOP SELECTION MODE = s key (also use button); used for selecting storm tracks (to group as a storm) for analysis
 
 # Click on (colored) legend for valid time days to cycle between what to display
 #   (relative to (00Z) start of earliest model init day)
@@ -278,6 +279,7 @@ import copy
 # for plotting boundaries
 import geopandas as gpd
 from shapely.geometry import Polygon
+from shapely.strtree import STRtree
 
 import traceback
 import requests
@@ -1845,6 +1847,7 @@ class App:
         self.reload_button_adeck = None
         self.label_adeck_mode = None
         self.adeck_selected_combobox = None
+        self.adeck_selection_info_label = None
         self.switch_to_genesis_button = None
         self.adeck_config_button = None
         self.genesis_mode_frame = None
@@ -1854,6 +1857,7 @@ class App:
         self.prev_genesis_cycle_button = None
         self.latest_genesis_cycle_button = None
         self.genesis_models_label = None
+        self.genesis_selection_info_label = None
         self.switch_to_adeck_button = None
         self.genesis_config_button = None
         self.add_marker_button = None
@@ -2041,6 +2045,9 @@ class App:
 
         self.measure_tool = MeasureTool(self.ax)
         self.selection_loop_mode = False
+        self.str_tree = None
+        self.lon_lat_tc_records = []
+
         self.display_map()
 
     def updated_rvor_levels(self):
@@ -2242,6 +2249,7 @@ class App:
         # reset all labels
         self.update_tc_status_labels()
         self.clear_circle_patch()
+        self.lon_lat_tc_records = []
 
     def update_plotted_list(self, internal_id, tc_candidate):
         # zero indexed
@@ -2842,6 +2850,11 @@ class App:
 
         self.adeck_selected_combobox.bind("<<ComboboxSelected>>", self.combo_selected_models_event)
 
+        self.adeck_selection_info_label = ttk.Label(self.adeck_mode_frame,
+                                                      text="",
+                                                      style="TLabel")
+        self.adeck_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
+
         self.switch_to_genesis_button = ttk.Button(self.adeck_mode_frame, text="SWITCH TO GENESIS MODE", command=self.switch_mode, style="TButton")
         self.switch_to_genesis_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
@@ -2871,6 +2884,11 @@ class App:
 
         self.genesis_models_label = ttk.Label(self.genesis_mode_frame, text="Models: GFS [--/--Z], ECM[--/--Z], NAV[--/--Z], CMC[--/--Z]", style="TLabel")
         self.genesis_models_label.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.genesis_selection_info_label = ttk.Label(self.genesis_mode_frame,
+                                              text="",
+                                              style="TLabel")
+        self.genesis_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
 
         self.switch_to_adeck_button = ttk.Button(self.genesis_mode_frame, text="SWITCH TO ADECK MODE", command=self.switch_mode, style="TButton")
         self.switch_to_adeck_button.pack(side=tk.RIGHT, padx=5, pady=5)
@@ -3162,6 +3180,7 @@ class App:
         valid_day = start_of_day.isoformat()
 
         self.clear_plotted_list()
+        lon_lat_tc_records = []
         numc = 0
         for storm_atcf_id, tc in tc_candidates.items():
             numc += 1
@@ -3184,6 +3203,7 @@ class App:
                             continue
 
                     lat_lon_with_time_step_list = []
+                    lon_lat_tuples = []
                     # handle when we are hiding certain time steps or whether the storm itself should be hidden based on time step
                     have_displayed_points = False
                     for valid_time, candidate in disturbance_candidates.items():
@@ -3280,6 +3300,7 @@ class App:
                                         lats[marker] = []
                                     lons[marker].append(point['lon_repeat'])
                                     lats[marker].append(point['lat'])
+                                    lon_lat_tuples.append([point['lon_repeat'], point['lat']])
 
                                 #self.ax.plot([point['lon_repeat']], [point['lat']], marker=marker, color=colors[i], markersize=radius, alpha=opacity)
 
@@ -3315,6 +3336,17 @@ class App:
                         if internal_id not in self.line_collection_objects:
                             self.line_collection_objects[internal_id] = []
                         self.line_collection_objects[internal_id].append(line_collection)
+
+                    # add the visible points for the track to the m-tree
+                    if lon_lat_tuples and len(lon_lat_tuples) > 1:
+                        line_string = LineString(lon_lat_tuples)
+                        record = dict()
+                        record['geometry'] = line_string
+                        record['value'] = internal_id
+                        lon_lat_tc_records.append(record)
+
+        self.lon_lat_tc_records = lon_lat_tc_records
+        self.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
 
         labels_positive = [f' D+{str(i): >2} ' for i in range(len(self.time_step_marker_colors)-1)]  # Labels corresponding to colors
         labels = [' D-   ']
@@ -3442,6 +3474,7 @@ class App:
         most_recent_timestamp = None
 
         self.clear_plotted_list()
+        lon_lat_tc_records = []
         numc = 0
         for tc in tc_candidates:
             numc += 1
@@ -3475,6 +3508,7 @@ class App:
                     continue
 
                 lat_lon_with_time_step_list = []
+                lon_lat_tuples = []
                 # handle when we are hiding certain time steps or whether the storm itself should be hidden based on time step
                 have_displayed_points = False
                 for time_step_str, valid_time_str, candidate in disturbance_candidates:
@@ -3588,6 +3622,7 @@ class App:
                                 lats[marker] = []
                             lons[marker].append(point['lon_repeat'])
                             lats[marker].append(point['lat'])
+                            lon_lat_tuples.append([point['lon_repeat'], point['lat']])
 
                             #self.ax.plot([point['lon_repeat']], [point['lat']], marker=marker, color=colors[i], markersize=radius, alpha=opacity)
 
@@ -3623,6 +3658,17 @@ class App:
                     if internal_id not in self.line_collection_objects:
                         self.line_collection_objects[internal_id] = []
                     self.line_collection_objects[internal_id].append(line_collection)
+
+                # add the visible points for the track to the m-tree
+                if lon_lat_tuples and len(lon_lat_tuples) > 1:
+                    line_string = LineString(lon_lat_tuples)
+                    record = dict()
+                    record['geometry'] = line_string
+                    record['value'] = internal_id
+                    lon_lat_tc_records.append(record)
+
+        self.lon_lat_tc_records = lon_lat_tc_records
+        self.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
 
         labels_positive = [f' D+{str(i): >2} ' for i in range(len(self.time_step_marker_colors)-1)]  # Labels corresponding to colors
         labels = [' D-   ']
@@ -3849,9 +3895,8 @@ class App:
         if event.key == 'n':
             self.cycle_to_next_overlapped_point()
 
-        if event.key == 'g':
-            #TODO DEBUGGING ONLY (incomplete functionality)
-            print(SelectionLoops.get_polygons())
+        if event.key == 's':
+            self.toggle_selection_loop_mode()
 
         if event.key == 'h':
             if self.selection_loop_mode:
@@ -3866,6 +3911,7 @@ class App:
         if event.key == 'c':
             if self.selection_loop_mode:
                 SelectionLoops.clear()
+                self.update_selection_info_label()
             # clear storm extrema annotation(s)
             # check if any annotations has focus
             elif self.annotated_circle_objects:
@@ -4009,6 +4055,7 @@ class App:
 
         if self.selection_loop_mode:
             SelectionLoops.on_release(event)
+            self.update_selection_info_label()
             return
 
         doing_measurement = self.measure_tool.in_measure_mode()
@@ -4452,6 +4499,35 @@ class App:
         self.selection_loop_mode = not(self.selection_loop_mode)
         self.update_toggle_selection_loop_button_color()
         self.set_focus_on_map()
+        
+    # uses str_tree and the SelectionLoops to get a list of storm internal ids that are in the lassod boundary
+    #   this will only cover storms that have been rendered through display_*
+    #   as those are the only ones we make internal ids for
+    def get_selected_internal_storm_ids(self):
+        selection_surface_polygons = SelectionLoops.get_polygons()
+
+        result_items = set()
+        if not self.lon_lat_tc_records:
+            return
+        tc_internal_ids = [record["value"] for record in self.lon_lat_tc_records]
+        # internal id is an integer for genesis, and a tuple for abdeck (storm id, model id)
+        for query_polygon in selection_surface_polygons:
+            result = self.str_tree.query(query_polygon, predicate='intersects')
+            if result.size > 0:
+                result_ids = [tc_internal_ids[i] for i in result]
+                for result_id in result_ids:
+                    result_items.add(result_id)
+
+        return list(result_items)
+
+    def update_selection_info_label(self):
+        # self.genesis_selection_info_label.config(text="---.- kt")
+        internal_ids = self.get_selected_internal_storm_ids()
+        num_tracks = len(internal_ids)
+        if num_tracks > 0:
+            self.genesis_selection_info_label.config(text=f"# Selected Tracks: {num_tracks}")
+        else:
+            self.genesis_selection_info_label.config(text="")
 
 # Blitting measure tool (single instance)
 class MeasureTool:
