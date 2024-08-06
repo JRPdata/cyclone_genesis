@@ -619,8 +619,6 @@ global_models = [
     'NGX',
     'NGX2',
     'NGXI',
-    'NNIB',
-    'NNIC',
     'NVG2',
     'NVGI',
     'NVGM',
@@ -3628,6 +3626,8 @@ class App:
         self.display_custom_boundaries()
         self.display_custom_overlay()
         self.axes_size = self.ax.get_figure().get_size_inches() * self.ax.get_figure().dpi
+        # make sure focus is always on map after updating
+        self.set_focus_on_map()
 
     def get_contour_min_span_deg(self):
         global MINIMUM_CONTOUR_PX_X
@@ -3674,21 +3674,30 @@ class App:
         selected_model_data = {}
         actual_models = set()
         all_models = set()
+        # assume invests older than this are different storms (must have correct datetime on computer)
+        max_time_delta = timedelta(days=4)
         if self.adeck and self.adeck.keys():
             for storm_atcf_id in self.adeck.keys():
                 if storm_atcf_id in self.adeck and self.adeck[storm_atcf_id]:
                     for model_id, models in self.adeck[storm_atcf_id].items():
                         if models:
+                            model_is_from_old_invest = True
                             for valid_time, data in models.items():
                                 dt = datetime.fromisoformat(valid_time)
-                                if dt < earliest_model_valid_datetime:
+                                # 9X are invests... may not have yet model data for new invest (and identify wrong date for old one)
+                                is_invest = (int(storm_atcf_id[2:3]) == 9)
+                                tcvitals_model_diff = earliest_model_valid_datetime - dt
+                                is_old_invest = is_invest and (tcvitals_model_diff > max_time_delta)
+                                model_is_from_old_invest = model_is_from_old_invest and is_old_invest
+                                if dt < earliest_model_valid_datetime and not(is_old_invest):
                                     earliest_model_valid_datetime = dt
-                            all_models.add(model_id)
-                            if model_id in selected_models:
-                                if storm_atcf_id not in selected_model_data.keys():
-                                    selected_model_data[storm_atcf_id] = {}
-                                selected_model_data[storm_atcf_id][model_id] = models
-                                actual_models.add(model_id)
+                            if not model_is_from_old_invest:
+                                all_models.add(model_id)
+                                if model_id in selected_models:
+                                    if storm_atcf_id not in selected_model_data.keys():
+                                        selected_model_data[storm_atcf_id] = {}
+                                    selected_model_data[storm_atcf_id][model_id] = models
+                                    actual_models.add(model_id)
 
         if self.bdeck:
             for storm_atcf_id in self.bdeck.keys():
@@ -3702,13 +3711,18 @@ class App:
 
         # tcvitals
         if self.recent_storms:
+            # max time delta for invests, to mark models corresponding to old invests
             for storm_atcf_id, data in self.recent_storms.items():
                 valid_date_str = data['valid_time']
                 if storm_atcf_id not in selected_model_data.keys():
                     selected_model_data[storm_atcf_id] = {}
                 selected_model_data[storm_atcf_id]['TCVITALS'] = {valid_date_str: data}
+                # 9X are invests... may not have yet model data for new invest (and identify wrong date for old one)
+                is_invest = (int(storm_atcf_id[2:3]) == 9)
                 dt = datetime.fromisoformat(valid_date_str)
-                if dt < earliest_model_valid_datetime:
+                tcvitals_model_diff = earliest_model_valid_datetime - dt
+                is_old_invest = is_invest and (tcvitals_model_diff > max_time_delta)
+                if dt < earliest_model_valid_datetime and not is_old_invest:
                     earliest_model_valid_datetime = dt
 
         return earliest_model_valid_datetime, len(all_models), len(actual_models), selected_model_data
