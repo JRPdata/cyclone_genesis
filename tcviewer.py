@@ -324,7 +324,7 @@ from matplotlib.patches import Polygon as MPLPolygon
 
 # main app gui imports
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, font
 
 # config dialog
 from tkinter import colorchooser
@@ -5356,6 +5356,12 @@ class App:
 if __name__ == "__main__":
     tk_root = tk.Tk()
 
+    available_fonts = font.families()
+    mono_fonts = [x.lower() for x in available_fonts if 'mono' in x]
+    mono_font = "Latin Modern Mono"
+    if mono_font not in mono_fonts and mono_fonts:
+        mono_font = mono_fonts[0]
+
     # Style configuration for ttk widgets
     tk_style = ttk.Style()
     tk_style.theme_use('clam')  # Ensure using a theme that supports customization
@@ -5371,9 +5377,9 @@ if __name__ == "__main__":
     tk_style.configure("WhiteAndBorder.TButton", background=default_bg, foreground="white", bordercolor="white")
 
     tk_style.configure("TLabel", background=default_bg, foreground=default_fg)
-    tk_style.configure("FixedWidthWhite.TLabel", font=("Latin Modern Mono", 12), background=default_bg,
+    tk_style.configure("FixedWidthWhite.TLabel", font=(mono_font, 12), background=default_bg,
                        foreground="white")
-    tk_style.configure("FixedWidthRed.TLabel", font=("Latin Modern Mono", 12), background=default_bg, foreground="red")
+    tk_style.configure("FixedWidthRed.TLabel", font=(mono_font, 12), background=default_bg, foreground="red")
 
     tk_style.configure("TCheckbutton", background=default_bg, foreground=default_fg)
     tk_style.configure("TopFrame.TFrame", background=default_bg)
