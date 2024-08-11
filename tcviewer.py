@@ -3710,6 +3710,7 @@ class App:
     # get model data from adeck, plus bdeck and tcvitals
     def get_selected_model_candidates_from_decks(self):
         selected_models = self.get_selected_model_list()
+        # reference current datetime since we are checking for old invests
         valid_datetime = datetime.utcnow()
         earliest_model_valid_datetime = valid_datetime
         selected_model_data = {}
