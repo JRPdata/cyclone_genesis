@@ -34,6 +34,7 @@
 #       2: hide all storms with tracks with the first valid day later than selected (changes successive edges dark pink)
 #       3: hide all points with tracks later than valid day
 #   clicking on a pink/dark pink edge switches it to (1) white edge for all prior and (2) pink edge for days after
+#  D- works differently in mode 3 (flips visible/invisible) for ADECK mode (to show/hide old best track data)
 
 ## MEASURE TOOL DOC
 #   HOLDING SHIFT KEY TOGGLES UPDATING END POINT, ALLOWING ZOOMING IN/OUT:
@@ -262,6 +263,14 @@ bdeck_urls = [
     "https://ftp.nhc.noaa.gov/atcf/btk/b{basin_id}{storm_number}{year}.dat",
     "https://ftp.nhc.noaa.gov/atcf/btk/cphc/b{basin_id}{storm_number}{year}.dat"
 ]
+
+# SKIPS urls with string (if only want AL/EP/CP data
+#SKIP_SOURCE = []
+SKIP_SOURCES = ['ucar.edu']
+
+for urls in [tcvitals_urls, adeck_urls, bdeck_urls]:
+    # Filter out URLs containing SKIP_SOURCES substrings
+    urls[:] = [url for url in urls if not any(skip_source in url for skip_source in SKIP_SOURCES)]
 
 ### END CONFIG ###
 ##################
@@ -2492,8 +2501,20 @@ class SelectionLoops:
             cls.selecting = True
             cls.block()
             return True
-        else:
-            return False
+        elif event.button == 3: # right click
+            if cls.selecting:
+                cls.unblock()
+            cls.selecting = False
+            if cls.selection_loop_objects:
+                # remove last item added (an undo type feature; no redo)
+                cls.selection_loop_objects[-1].remove()
+                del cls.selection_loop_objects[-1]
+                if cls.selection_loop_objects:
+                    cls.last_loop = cls.selection_loop_objects[-1]
+                else:
+                    cls.last_loop = None
+                cls.ax.figure.canvas.draw_idle()
+            return True
 
     @classmethod
     def on_motion(cls, event):
@@ -2600,6 +2621,7 @@ class App:
         self.prev_genesis_cycle_button = None
         self.latest_genesis_cycle_button = None
         self.genesis_models_label = None
+        self.adeck_selection_info_label = None
         self.genesis_selection_info_label = None
         self.switch_to_adeck_button = None
         self.genesis_config_button = None
@@ -3039,6 +3061,11 @@ class App:
                                                     style="TLabel")
         self.adeck_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
 
+        self.adeck_selection_info_label = ttk.Label(self.adeck_mode_frame,
+                                                      text="",
+                                                      style="TLabel")
+        self.adeck_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
+
         self.switch_to_genesis_button = ttk.Button(self.adeck_mode_frame, text="SWITCH TO GENESIS MODE",
                                                    command=self.switch_mode, style="TButton")
         self.switch_to_genesis_button.pack(side=tk.RIGHT, padx=5, pady=5)
@@ -3328,6 +3355,7 @@ class App:
         self.clear_plotted_list()
         lon_lat_tc_records = []
         numc = 0
+        day_minus_toggle_3rd_mode = (self.time_step_opacity[0] == 1.0) and all(q==0.3 for q in self.time_step_opacity[1:])
         for storm_atcf_id, tc in tc_candidates.items():
             numc += 1
             numd = 0
@@ -3352,6 +3380,7 @@ class App:
                     lon_lat_tuples = []
                     # handle when we are hiding certain time steps or whether the storm itself should be hidden based on time step
                     have_displayed_points = False
+                    flip_for_best = False
                     for valid_time, candidate in disturbance_candidates.items():
                         if 'time_step' in candidate.keys():
                             time_step_int = candidate['time_step']
@@ -3412,12 +3441,23 @@ class App:
 
                         # check whether we want to display it (first valid time limit)
                         for i, (start, end) in list(enumerate(self.time_step_ranges)):
+                            # opacity == 0.3 case (hide all points beyond legend valid time)
+                            # for D- we will treat it differently for a-deck mode
+                            # this is so we can selectively show only or hide all but old data from best tracks
+                            # this flips the function of toggling the legend for D- only for the third mode in adeck mode
+                            if i == 0 and day_minus_toggle_3rd_mode:
+                                flip_for_best = True
+                                continue
+
                             hours_after = candidate_info['hours_after_valid_day']
                             if start <= hours_after <= end:
                                 if self.time_step_opacity[i] == 1.0:
                                     lat_lon_with_time_step_list.append(candidate_info)
                                     have_displayed_points = True
                                 elif have_displayed_points and self.time_step_opacity[i] == 0.6:
+                                    # for D- this effectively hides model data and shows best track data
+                                    lat_lon_with_time_step_list.append(candidate_info)
+                                elif flip_for_best:
                                     lat_lon_with_time_step_list.append(candidate_info)
                                 else:
                                     # opacity == 0.3 case (hide all points beyond legend valid time)
@@ -3621,6 +3661,7 @@ class App:
         self.clear_storm_extrema_annotations()
         AnnotatedCircles.changed_extent(self.ax)
         SelectionLoops.changed_extent(self.ax)
+        self.update_selection_info_label()
         self.measure_tool.changed_extent(self.ax)
         self.canvas.draw()
         self.display_custom_boundaries()
@@ -3669,7 +3710,7 @@ class App:
     # get model data from adeck, plus bdeck and tcvitals
     def get_selected_model_candidates_from_decks(self):
         selected_models = self.get_selected_model_list()
-        valid_datetime = datetime.max
+        valid_datetime = datetime.utcnow()
         earliest_model_valid_datetime = valid_datetime
         selected_model_data = {}
         actual_models = set()
@@ -3701,7 +3742,7 @@ class App:
 
         if self.bdeck:
             for storm_atcf_id in self.bdeck.keys():
-                if storm_atcf_id in self.bdeck[storm_atcf_id] and self.bdeck[storm_atcf_id]:
+                if storm_atcf_id in self.bdeck and self.bdeck[storm_atcf_id]:
                     for model_id, models in self.bdeck[storm_atcf_id].items():
                         if models:
                             if model_id in selected_models:
@@ -3724,6 +3765,10 @@ class App:
                 is_old_invest = is_invest and (tcvitals_model_diff > max_time_delta)
                 if dt < earliest_model_valid_datetime and not is_old_invest:
                     earliest_model_valid_datetime = dt
+
+        # case where there are only invests
+        if valid_datetime == datetime.max:
+            valid_datetime = datetime.utcnow()
 
         return earliest_model_valid_datetime, len(all_models), len(actual_models), selected_model_data
 
@@ -3993,6 +4038,8 @@ class App:
             if inbound:
                 if self.selection_loop_mode:
                     SelectionLoops.on_click(event)
+                    if event.button == 3:
+                        self.update_selection_info_label()
                     return
                 try:
                     do_measure = self.measure_tool.on_click(event)
@@ -4023,7 +4070,7 @@ class App:
                                     changed_opacity = True
                                     # clicked on legend
                                     changed_opacity_index = i
-                                    # cycle between:
+                                    # for almost all models/modes, cycle between:
                                     #   1.0:    all visible
                                     #   0.6:    hide all storms tracks with start valid_time later than selected
                                     #   0.3:    hide all points beyond valid_time later than selected
@@ -4745,41 +4792,6 @@ class App:
                                 # opacity == 0.3 case (hide all points beyond legend valid time)
                                 break
 
-                    """
-                    # add copies to extend the map left and right
-                    ccopy = candidate_info.copy()
-                    lon_repeat2 = lon - 360
-                    ccopy['lon_repeat'] = f"{lon_repeat2:3.2f}"
-                    if prev_lon_repeat2:
-                        prev_lon_repeat2_f = float(prev_lon_repeat2)
-                        if abs(prev_lon_repeat2_f - lon_repeat2) > 270:
-                            if prev_lon_repeat2_f < lon_repeat2:
-                                prev_lon_repeat2 = f"{prev_lon_repeat2_f + 360:3.2f}"
-                            else:
-                                prev_lon_repeat2 = f"{prev_lon_repeat2_f - 360:3.2f}"
-
-                    ccopy['prev_lon_repeat'] = prev_lon_repeat2
-                    prev_lon_repeat2 = ccopy['lon_repeat']
-
-                    lat_lon_with_time_step_list.append(ccopy)
-                    ccopy = candidate_info.copy()
-                    lon_repeat3 = lon + 360
-                    ccopy['lon_repeat'] = f"{lon_repeat3:3.2f}"
-                    if prev_lon_repeat3:
-                        prev_lon_repeat3_f = float(prev_lon_repeat3)
-                        if abs(prev_lon_repeat3_f - lon_repeat3) > 270:
-                            if prev_lon_repeat3_f < lon_repeat3:
-                                prev_lon_repeat3 = f"{prev_lon_repeat3_f + 360:3.2f}"
-                            else:
-                                prev_lon_repeat3 = f"{prev_lon_repeat3_f - 360:3.2f}"
-
-                    ccopy['prev_lon_repeat'] = prev_lon_repeat3
-                    prev_lon_repeat3 = ccopy['lon_repeat']
-
-                    lat_lon_with_time_step_list.append(ccopy)
-
-                    """
-
                 if lat_lon_with_time_step_list:
                     self.update_plotted_list(internal_id, lat_lon_with_time_step_list)
 
@@ -5036,11 +5048,16 @@ class App:
     def update_selection_info_label(self):
         # self.genesis_selection_info_label.config(text="---.- kt")
         internal_ids = self.get_selected_internal_storm_ids()
-        num_tracks = len(internal_ids)
+        num_tracks = 0
+        if internal_ids:
+            num_tracks = len(internal_ids)
+        num_tracks_str = ""
         if num_tracks > 0:
-            self.genesis_selection_info_label.config(text=f"# Selected Tracks: {num_tracks}")
-        else:
-            self.genesis_selection_info_label.config(text="")
+            num_tracks_str=f"# Selected Tracks: {num_tracks}"
+        if self.mode == "GENESIS":
+            self.genesis_selection_info_label.config(text=num_tracks_str)
+        elif self.mode == "ADECK":
+            self.adeck_selection_info_label.config(text=num_tracks_str)
 
     def update_tc_status_labels(self,tc_index=None, tc_point_index=None, overlapped_point_num=0, total_num_overlapped_points=0):
         # may not have init interface yet
@@ -5162,6 +5179,7 @@ class App:
             self.update_axes()
             AnnotatedCircles.changed_extent(self.ax)
             SelectionLoops.changed_extent(self.ax)
+            self.update_selection_info_label()
             self.measure_tool.changed_extent(self.ax)
             self.ax.figure.canvas.draw()
             self.rvor_labels_new_extent()
@@ -5231,6 +5249,7 @@ class App:
             self.update_axes()
             AnnotatedCircles.changed_extent(self.ax)
             SelectionLoops.changed_extent(self.ax)
+            self.update_selection_info_label()
             self.measure_tool.changed_extent(self.ax)
             self.ax.figure.canvas.draw()
             self.rvor_labels_new_extent()
@@ -5289,6 +5308,7 @@ class App:
                 self.update_axes()
                 AnnotatedCircles.changed_extent(self.ax)
                 SelectionLoops.changed_extent(self.ax)
+                self.update_selection_info_label()
                 self.measure_tool.changed_extent(self.ax)
                 self.ax.figure.canvas.draw()
                 self.rvor_labels_new_extent()
@@ -5324,6 +5344,7 @@ class App:
                 self.update_axes()
                 AnnotatedCircles.changed_extent(self.ax)
                 SelectionLoops.changed_extent(self.ax)
+                self.update_selection_info_label()
                 # do measure last as we are going to remove and redraw it
                 self.measure_tool.changed_extent(self.ax)
                 self.ax.figure.canvas.draw()
