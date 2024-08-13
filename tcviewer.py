@@ -18,7 +18,7 @@
 # VIEW NEXT OVERLAPPED HOVER POINT STATUS = n key  (this will not redraw points of overlapped storms, only update hover text)
 # CIRCLE & ANNOTATE STORM EXTREMA = x key  (annotates either the selected storm in circle patch, or all storms in current view (zoom))
 # CLEAR (ALL OR SINGLE BOX) STORM EXTREMA ANNOTATIONS = c key
-# HIDE (MOUSE HOVERED) STORMS / SHOW ALL HIDDEN = h key
+# HIDE (MOUSE HOVERED) STORMS / SHOW ALL HIDDEN = h key (also hides tracks under selection loops)
 # SAVE SCREENSHOT = p key
 # TOGGLE RVOR CONTOURS = v key
 # TOGGLE RVOR CONTOUR LABELS = l key
@@ -2494,6 +2494,13 @@ class SelectionLoops:
         return all_polygons
 
     @classmethod
+    def is_empty(cls):
+        if cls.selection_loop_objects:
+            return False
+        else:
+            return True
+
+    @classmethod
     def on_click(cls, event):
         if event.button == 1:  # left click
             cls.last_loop = cls.SelectionLoop(cls.ax, event)
@@ -3795,10 +3802,48 @@ class App:
 
     # hide selected, or show all if none selected
     def hide_tc_candidate(self):
+        # two modes now
+        # when no selection loops present: hide mouse hovered storm, or unhide all
+        # when selection loops present: hide mouse hovered storm, or if no hover, hide all tracks in selection
         total_num_overlapped_points = len(self.nearest_point_indices_overlapped)
         if total_num_overlapped_points == 0:
+            if not SelectionLoops.is_empty():
+                to_hide_internal_ids = self.get_selected_internal_storm_ids()
+
+                for to_hide_internal_id in to_hide_internal_ids:
+                    #cursor_internal_id, tc_index, tc_point_index = cursor_point_index
+                    self.hidden_tc_candidates.add(to_hide_internal_id)
+
+                    if self.scatter_objects:
+                        for internal_id, scatters in self.scatter_objects.items():
+                            if to_hide_internal_id == internal_id:
+                                try:
+                                    for scatter in scatters:
+                                        scatter.set_visible(False)
+                                except:
+                                    traceback.print_exc()
+
+                    if self.line_collection_objects:
+                        for internal_id, line_collections in self.line_collection_objects.items():
+                            if to_hide_internal_id == internal_id:
+                                try:
+                                    for line_collection in line_collections:
+                                        line_collection.set_visible(False)
+                                except:
+                                    traceback.print_exc()
+
+                    if self.annotated_circle_objects:
+                        for internal_id, annotated_circles in self.annotated_circle_objects.items():
+                            if to_hide_internal_id == internal_id:
+                                try:
+                                    for annotated_circle in annotated_circles:
+                                        annotated_circle.set_visible(False)
+                                except:
+                                    traceback.print_exc()
+
+                self.ax.figure.canvas.draw()
             # unhide all
-            if len(self.hidden_tc_candidates) > 0:
+            elif len(self.hidden_tc_candidates) > 0:
                 if self.scatter_objects:
                     for internal_id, scatters in self.scatter_objects.items():
                         try:
