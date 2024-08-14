@@ -26,6 +26,8 @@
 # TOGGLE SELECTION LOOPS MODE = s key (also use button); used for selecting storm tracks (to group as a storm) for analysis
 #   CLEAR SELECTION LOOPS = c key (only in selection loop mode)
 #   HIDE SELECTION LOOPS = h key (only in selection loop mode)
+# TOGGLE ANALYSIS MODE = a key (must have selection loop on tracks)
+#   SAVE FIGURE = s key (or p key) (saves current figure in analysis mode)
 
 # Click on (colored) legend for valid time days to cycle between what to display
 #   (relative to (00Z) start of earliest model init day)
@@ -291,6 +293,7 @@ import json
 import numpy as np
 import os
 import requests
+import pytz
 import traceback
 
 # main app imports for map charts and plotting
@@ -302,6 +305,10 @@ from matplotlib.collections import LineCollection
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle
 from mpl_toolkits.axes_grid1 import Divider, Size
+# for analysis
+import matplotlib.dates as mdates
+import matplotlib.ticker as ticker
+import colorspacious as cs
 
 # for mouse hover features
 from rtree import index
@@ -831,6 +838,7 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_bdeck):
                                         adeck[storm_id] = {}
                                     if model_id not in adeck[storm_id].keys():
                                         adeck[storm_id][model_id] = {}
+                                    ab_deck_line_dict['basin'] = basin_id.upper()
                                     adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
                                 elif model_date >= (latest_date - timedelta(hours=6)):
                                     # GEFS members ATCF is reported late by 6 hours...
@@ -843,6 +851,7 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_bdeck):
                                             adeck[storm_id] = {}
                                         if model_id not in adeck[storm_id].keys():
                                             adeck[storm_id][model_id] = {}
+                                        ab_deck_line_dict['basin'] = basin_id.upper()
                                         adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
 
                     dt_mods_adeck[file_url] = dt_mod
@@ -890,6 +899,7 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_bdeck):
                                         bdeck[storm_id] = {}
                                     if bdeck_id not in bdeck[storm_id].keys():
                                         bdeck[storm_id][bdeck_id] = {}
+                                    ab_deck_line_dict['basin'] = basin_id.upper()
                                     bdeck[storm_id][bdeck_id][valid_datetime.isoformat()] = ab_deck_line_dict
 
                         dt_mods_bdeck[file_url] = dt_mod
@@ -940,7 +950,8 @@ def get_recent_storms(urls):
                     if storm_id not in storms or storms[storm_id]['timestamp'] < timestamp:
                         storms[storm_id] = {
                             'timestamp': timestamp,
-                            'data': line
+                            'data': line,
+                            'basin': basin
                         }
 
             dt_mods_tcvitals[url] = dt_mod
@@ -949,6 +960,7 @@ def get_recent_storms(urls):
     for storm_id, val in storms.items():
         data = val['data']
         storm_dict = tcvitals_line_to_dict(data)
+        storm_dict['basin'] = val['basin']
         recent_storms[storm_id] = storm_dict
     return dt_mods_tcvitals, recent_storms
 
@@ -1270,6 +1282,584 @@ def tcvitals_line_to_dict(line):
 
 # Classes used by App class
 
+class AnalysisDialog(tk.Toplevel):
+    def __init__(self, parent, plotted_tc_candidates, root_width, root_height):
+        self.selected_internal_storm_ids = App.get_selected_internal_storm_ids()
+        if not self.selected_internal_storm_ids:
+            return
+
+        self.plotted_tc_candidates = plotted_tc_candidates
+        self.buttonbox = None
+        self.notebook = None
+        self.root_width = root_width
+        self.root_height = root_height
+
+        self.notebook_tab_names = dict()
+        self.notebook_figs = dict()
+
+        super().__init__(parent)  # Set the title here
+        self.title('Analysis on Selected Tracks')
+        self.wm_protocol("WM_TAKE_FOCUS", self.wm_title)
+        # this is required to center the dialog on the window
+        self.transient(parent)
+        self.parent = parent
+
+        # Create a StringVar to store the selected timezone
+        self.selected_timezone = tk.StringVar(value="UTC")
+
+        self.body_frame = ttk.Frame(self, style='CanvasFrame.TFrame')
+        self.body_frame.pack(padx=5, pady=5, fill="both", expand=True)
+
+        self.button_frame = ttk.Frame(self, style='CanvasFrame.TFrame')
+        self.button_frame.pack(padx=5, pady=5)
+
+        self.body(self.body_frame, )
+        self.create_buttonbox(self.button_frame)
+
+        self.attributes('-fullscreen', True)
+
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.grab_set()
+        self.geometry("500x500+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
+        self.wait_visibility()
+        self.center_window()
+        self.wait_window(self)
+
+    def body(self, master):
+        frame = ttk.Frame(master, style='CanvasFrame.TFrame')
+        frame.pack(fill="both", expand=True)
+        self.notebook = ttk.Notebook(frame, style='TNotebook')
+        self.notebook.pack(fill="both", expand=True)
+
+        tab_index = 0
+        # Create a frame for each tab
+        self.intensity_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        self.notebook.add(self.intensity_frame, text="Vmax")
+        self.notebook_tab_names[tab_index] = 'vmax'
+        tab_index += 1
+
+        self.pressure_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        self.notebook.add(self.pressure_frame, text="Pres")
+        self.notebook_tab_names[tab_index] = 'pres'
+        tab_index += 1
+
+        self.size_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        self.notebook.add(self.size_frame, text="Size")
+        self.notebook_tab_names[tab_index] = 'size'
+        tab_index += 1
+
+        self.rvor_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        self.notebook.add(self.rvor_frame, text="RVor")
+        self.notebook_tab_names[tab_index] = 'rvor'
+        tab_index += 1
+
+        self.track_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        self.notebook.add(self.track_frame, text="Track")
+        self.notebook_tab_names[tab_index] = 'track'
+        tab_index += 1
+
+        self.pdf_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        self.notebook.add(self.pdf_frame, text="PDF")
+        self.notebook_tab_names[tab_index] = 'pdf'
+        tab_index += 1
+
+        self.cdf_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        self.notebook.add(self.cdf_frame, text="CDF")
+        self.notebook_tab_names[tab_index] = 'cdf'
+        tab_index += 1
+
+        self.model_info_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        self.notebook.add(self.model_info_frame, text="Models")
+        self.notebook_tab_names[tab_index] = 'models'
+        tab_index += 1
+
+        self.tz_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        self.notebook.add(self.tz_frame, text="TZ")
+        self.notebook_tab_names[tab_index] = 'tz'
+        tab_index += 1
+
+        # Get the list of all timezones with offsets
+        self.timezones = self.get_timezones_with_offsets()
+
+        self.label_tz = ttk.Label(self.tz_frame, text="Timezone:", style='TLabel')
+        self.label_tz.pack()
+        # Create the timezone dropdown menu
+        # Create a combobox widget with the new style
+
+        self.tz_combobox = ttk.Combobox(self.tz_frame, textvariable=self.selected_timezone, values=self.timezones,
+                                        width=50, state='readonly', style="Black.TCombobox")
+        self.tz_combobox.pack()
+
+        self.update_vmax_chart()
+        self.update_pres_chart()
+        self.update_tc_size_chart()
+        self.update_rvor_chart()
+
+    def cancel(self, event=None):
+        self.parent.focus_set()
+        self.destroy()
+
+    def center_window(self):
+        self.update_idletasks()
+
+        # Get the dimensions of the dialog
+        dialog_width = self.winfo_width()
+        dialog_height = self.winfo_height() + 20
+
+        # Get the dimensions of the parent window
+        parent_width = self.parent.winfo_width()
+        parent_height = self.parent.winfo_height()
+
+        # Calculate the position to center the dialog on the parent window
+        x = self.parent.winfo_x() + (parent_width // 2) - (dialog_width // 2)
+        y = self.parent.winfo_y() + (parent_height // 2) - (dialog_height // 2)
+
+        # Set the position of the dialog
+        self.geometry(f'{dialog_width}x{dialog_height}+{x}+{y}')
+        self.update_idletasks()  # Force update after centering
+        self.parent.update_idletasks()  # Force update after centering
+
+    def convert_to_selected_timezone(self, dt, timezone_str):
+        """Convert a datetime object from UTC to the selected timezone."""
+        # Get the timezone string without the UTC offset
+        timezone_name = timezone_str.split(') ')[-1]
+        # Assign UTC timezone to the input datetime
+        dt_utc = dt.replace(tzinfo=pytz.utc)
+        # Convert to the selected timezone
+        target_timezone = pytz.timezone(timezone_name)
+        dt_converted = dt_utc.astimezone(target_timezone)
+        return dt_converted
+
+    def create_buttonbox(self, master):
+        self.buttonbox = ttk.Frame(master, style="CanvasFrame.TFrame")
+        ok_w = ttk.Button(self.buttonbox, text="OK", command=self.ok, style='TButton')
+        ok_w.pack(side=tk.LEFT, padx=5, pady=5)
+
+        save_w = ttk.Button(self.buttonbox, text="Save", command=self.save, style='TButton')
+        save_w.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.bind("s", self.save)
+        self.bind("p", self.save)
+
+        self.bind("<Return>", self.ok)
+        self.bind("<Escape>", self.cancel)
+        # Set focus on the OK button
+        ok_w.focus_set()
+
+        self.buttonbox.pack()
+        return self.buttonbox
+
+    @staticmethod
+    def generate_distinct_colors(n):
+        # Generates evenly spaced colors in Lab color space
+        colors_lab = np.zeros((n, 3))
+        for i in range(n):
+            angle = 2 * np.pi * i / n
+            lightness = 65
+            chroma = 60
+            a = chroma * np.cos(angle)
+            b = chroma * np.sin(angle)
+            colors_lab[i] = [lightness, a, b]
+
+        # Lab to RGB
+        colors_rgb = cs.cspace_convert(colors_lab, "CIELab", "sRGB1")
+        colors_rgb = np.clip(colors_rgb, 0, 1)
+
+        return colors_rgb
+
+    def get_timezones_with_offsets(self):
+        """Get a list of all timezones with their UTC offsets."""
+        timezones = []
+        for tz in pytz.all_timezones:
+            timezone = pytz.timezone(tz)
+            offset = datetime.now(timezone).strftime('%z')
+            hours, minutes = int(offset[:3]), int(offset[0] + offset[3:])
+            formatted_offset = f"{'+' if hours >= 0 else '-'}{abs(hours):02}:{abs(minutes):02}"
+            timezones.append(f"(UTC{formatted_offset}) {tz}")
+        return timezones
+
+    def generate_time_series(self, internal_id, dependent_variable):
+        # Find the matching tc_candidate
+        tc_candidate = next((tc for iid, tc in self.plotted_tc_candidates if iid == internal_id), None)
+
+        if tc_candidate is None:
+            return None
+
+        # Extract and convert datetimes
+        datetimes = [
+            self.convert_to_selected_timezone(tc['valid_time'], self.selected_timezone.get()) for
+            tc in tc_candidate]
+
+        model_name = tc_candidate[0]['model_name']
+
+        # Extract dependent variable values
+        try:
+            values = [tc[dependent_variable] for tc in tc_candidate]
+        except:
+            values = None
+
+        if values is not None:
+            filtered_values = [val for val, dt in zip(values, datetimes) if val is not None]
+            filtered_datetimes = [dt for val, dt in zip(values, datetimes) if val is not None]
+            if len(filtered_values) == 0:
+                filtered_values = None
+                filtered_datetimes = None
+                series_sum = 0
+            else:
+                series_sum = sum(filtered_values)
+            datetimes = filtered_datetimes
+            values = filtered_values
+        else:
+            series_sum = 0
+            values = None
+            datetimes = None
+
+        # Return the time series data as a tuple (x, y)
+        return (model_name, series_sum, datetimes, values,)
+
+    def get_current_tab_name(self):
+        current_tab_index = self.notebook.index("current")
+        return self.notebook_tab_names[current_tab_index]
+
+    @staticmethod
+    def get_secondary_sort_indices(sort_0, reverse=False):
+        # Create a list of tuples (1th element, original index)
+        indexed_list = [(element[1], index) for index, element in enumerate(sort_0)]
+        # Sort by the 1th element (which is the first element in the tuple)
+        indexed_list.sort(reverse=reverse)
+        # Extract the original indices from the sorted list
+        sorted_indices = [index for (_, index) in indexed_list]
+        return sorted_indices
+
+    def ok(self, event=None):
+        self.withdraw()
+        self.update_idletasks()
+        self.cancel()
+
+    # Function to save the current figure
+    def save(self, *args):
+        current_tab_name = self.get_current_tab_name()
+        # Use the current_tab_index to determine which figure to save
+        if current_tab_name not in self.notebook_figs:
+            return
+        fig = self.notebook_figs[current_tab_name]
+
+        current_time = datetime.utcnow().strftime("%Y-%m-%d-%H-%M-%S")
+        # Create the screenshots folder if it doesn't exist
+        if not os.path.exists("screenshots"):
+            os.makedirs("screenshots")
+
+        # Save the screenshot as a PNG file
+        fig.savefig(f"screenshots/analysis-{current_time}-{current_tab_name}.png")
+
+    def show_converted_time(self):
+        """Convert and show the current UTC time in the selected timezone."""
+        now_utc = datetime.utcnow()  # current time in UTC (without tzinfo)
+        converted_time = self.convert_to_selected_timezone(now_utc, self.selected_timezone.get())
+        tk.messagebox.showinfo("Converted Time", f"Current time in {self.selected_timezone.get()}:\n{converted_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    def update_pres_chart(self):
+        with plt.style.context('dark_background'):
+            # Create a figure and axis object
+            self.fig_pres, self.ax_pres = plt.subplots(figsize=(6, 4), dpi=100)
+            # Initialize lists to store all x and y values
+            all_x = []
+            all_y = []
+            # Plot the data for all storms
+            any_data = False
+            num_tracks_with_data = 0
+            series_data = []
+            for internal_storm_id in self.selected_internal_storm_ids:
+                model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'mslp_value')
+                if y is not None:
+                    any_data = True
+                    all_x.extend(x)
+                    all_y.extend(y)
+                    series_data.append([model_name, series_sum, x, y])
+                    num_tracks_with_data += 1
+            if not any_data:
+                return
+
+            series_data.sort(key=lambda x: x[0])
+            color_indices = self.get_secondary_sort_indices(series_data)
+            distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
+            for i, series in enumerate(series_data):
+                model_name, series_sum, x, y = series
+                self.ax_pres.plot(x, y, label=model_name, color=distinct_colors[color_indices[i]])
+
+            # Find the overall min/max of all x and y values
+            x_min = min(all_x)
+            x_max = max(all_x)
+            y_min = min(all_y)
+            y_max = max(all_y)
+            y_lim_min = -10 + ((y_min // 10) * 10)
+            y_lim_max = 10 + ((y_max // 10) * 10)
+            # Set the x-axis to display dates
+            self.ax_pres.xaxis.set_major_locator(mdates.DayLocator())
+            self.ax_pres.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            # Set the x-axis to display minor ticks every 6 hours
+            self.ax_pres.xaxis.set_minor_locator(mdates.HourLocator(interval=6))
+            # Set the x-axis limits to start at the first day - 1 and end at the last day + 1
+            start_of_day = x_min.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            end_of_day = x_max.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            self.ax_pres.set_xlim([start_of_day, end_of_day])
+            self.ax_pres.yaxis.set_major_locator(ticker.MultipleLocator(10))
+            self.ax_pres.yaxis.set_minor_locator(ticker.MultipleLocator(5))
+            self.ax_pres.set_ylim([y_lim_min, y_lim_max])
+            # Set title and labels
+            num_storm_ids = len(self.selected_internal_storm_ids)
+            self.ax_pres.set_title(f'TC MSLP, {num_tracks_with_data}/{num_storm_ids} tracks\n\nMin MSLP: {int(round(y_min))} mb')
+            self.ax_pres.set_ylabel('MSLP (mb)')
+            self.ax_pres.set_xlabel(self.selected_timezone.get())
+            self.ax_pres.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
+            self.ax_pres.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
+            self.ax_pres.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
+            # TODO: add hlines for NATL/EPAC pressure medians on initial classification
+            # Add a legend
+            self.ax_pres.legend(loc='lower left', bbox_to_anchor=(1.05, 0), borderaxespad=0)
+            # Add horizontal gridlines at the Saffir-Simpson scale with labels
+            # Use tight_layout to ensure everything fits within the figure area
+            self.fig_pres.tight_layout(rect=[0, 0, 0.95, 1])
+            # Create a canvas to display the plot in the frame
+            self.canvas = FigureCanvasTkAgg(self.fig_pres, master=self.pressure_frame)
+            self.canvas.draw()
+            self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+            self.notebook_figs['pres'] = self.fig_pres
+
+    def update_rvor_chart(self):
+        # Create a figure and axis object
+        with plt.style.context('dark_background'):
+            self.fig_rvor, self.ax_rvor = plt.subplots(figsize=(6, 4), dpi=100)
+            # Initialize lists to store all x and y values
+            all_x = []
+            all_y = []
+            # Plot the data for all storms
+            any_data = False
+            num_tracks_with_data = 0
+            series_data = []
+            for internal_storm_id in self.selected_internal_storm_ids:
+                model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'rv850max')
+                if y is not None:
+                    any_data = True
+                    all_x.extend(x)
+                    all_y.extend(y)
+                    series_data.append([model_name, series_sum, x, y])
+                    num_tracks_with_data += 1
+            if not any_data:
+                return
+
+            series_data.sort(key=lambda x: x[0])
+            color_indices = self.get_secondary_sort_indices(series_data, reverse=True)
+            distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
+            for i, series in enumerate(series_data):
+                model_name, series_sum, x, y = series
+                self.ax_rvor.plot(x, y, label=model_name, color=distinct_colors[color_indices[i]])
+
+            # Find the overall min/max of all x and y values
+            x_min = min(all_x)
+            x_max = max(all_x)
+            y_min = min(all_y)
+            y_max = max(all_y)
+            y_lim_min = min(0, -10 + ((y_min // 10) * 10))
+            y_lim_max = 10 + ((y_max // 10) * 10)
+            # Set the x-axis to display dates
+            self.ax_rvor.xaxis.set_major_locator(mdates.DayLocator())
+            self.ax_rvor.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            # Set the x-axis to display minor ticks every 6 hours
+            self.ax_rvor.xaxis.set_minor_locator(mdates.HourLocator(interval=6))
+            # Set the x-axis limits to start at the first day - 1 and end at the last day + 1
+            start_of_day = x_min.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            end_of_day = x_max.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            self.ax_rvor.set_xlim([start_of_day, end_of_day])
+            if y_lim_max - y_lim_min > 150:
+                self.ax_rvor.yaxis.set_major_locator(ticker.MultipleLocator(20))
+                self.ax_rvor.yaxis.set_minor_locator(ticker.MultipleLocator(10))
+            else:
+                self.ax_rvor.yaxis.set_major_locator(ticker.MultipleLocator(10))
+                self.ax_rvor.yaxis.set_minor_locator(ticker.MultipleLocator(5))
+            self.ax_rvor.set_ylim([y_lim_min, y_lim_max])
+            # Set title and labels
+            num_storm_ids = len(self.selected_internal_storm_ids)
+            self.ax_rvor.set_title(f'TC RVOR (* 10^-5 m/s), {num_tracks_with_data}/{num_storm_ids} tracks\n\nMax RVOR: {round(y_max,1)} * 10^-5 m/s')
+            self.ax_rvor.set_ylabel('Relative Vorticity (* 10^-5 m/s)')
+            self.ax_rvor.set_xlabel(self.selected_timezone.get())
+            self.ax_rvor.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
+            self.ax_rvor.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
+            self.ax_rvor.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
+            # Add a legend
+            self.ax_rvor.legend(loc='lower left', bbox_to_anchor=(1.05, 0), borderaxespad=0)
+
+            # Use tight_layout to ensure everything fits within the figure area
+            self.fig_rvor.tight_layout(rect=[0, 0, 0.95, 1])
+            # Create a canvas to display the plot in the frame
+            self.canvas = FigureCanvasTkAgg(self.fig_rvor, master=self.rvor_frame)
+            self.canvas.draw()
+            self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+            self.notebook_figs['rvor'] = self.fig_rvor
+
+    def update_tc_size_chart(self):
+        with plt.style.context('dark_background'):
+            # Create a figure and axis object
+            self.fig_size, self.ax_size = plt.subplots(figsize=(6, 4), dpi=100)
+            # Initialize lists to store all x and y values
+            all_x = []
+            all_y = []
+            # Plot the data for all storms
+            any_data = False
+            num_tracks_with_data = 0
+            series_data = []
+            for internal_storm_id in self.selected_internal_storm_ids:
+                model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'roci')
+                if y is not None:
+                    any_data = True
+                    all_x.extend(x)
+                    all_y.extend(y)
+                    series_data.append([model_name, series_sum, x, y])
+                    num_tracks_with_data += 1
+            if not any_data:
+                return
+
+            series_data.sort(key=lambda x: x[0])
+            color_indices = self.get_secondary_sort_indices(series_data, reverse=True)
+            distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
+            for i, series in enumerate(series_data):
+                model_name, series_sum, x, y = series
+                self.ax_size.plot(x, y, label=model_name, color=distinct_colors[color_indices[i]])
+
+            # Find the overall min/max of all x and y values
+            x_min = min(all_x)
+            x_max = max(all_x)
+            y_min = min(all_y)
+            y_max = max(all_y)
+            y_lim_min = min(0, -100 + ((y_min // 100) * 100))
+            y_lim_max = 100 + ((y_max // 100) * 100)
+            # Set the x-axis to display dates
+            self.ax_size.xaxis.set_major_locator(mdates.DayLocator())
+            self.ax_size.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            # Set the x-axis to display minor ticks every 6 hours
+            self.ax_size.xaxis.set_minor_locator(mdates.HourLocator(interval=6))
+            # Set the x-axis limits to start at the first day - 1 and end at the last day + 1
+            start_of_day = x_min.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            end_of_day = x_max.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            self.ax_size.set_xlim([start_of_day, end_of_day])
+            self.ax_size.yaxis.set_major_locator(ticker.MultipleLocator(100))
+            self.ax_size.yaxis.set_minor_locator(ticker.MultipleLocator(50))
+            self.ax_size.set_ylim([y_lim_min, y_lim_max])
+            # Set title and labels
+            num_storm_ids = len(self.selected_internal_storm_ids)
+            self.ax_size.set_title(f'TC ROCI (km), {num_tracks_with_data}/{num_storm_ids} tracks\n\n(Min, Max) ROCI: ({int(round(y_min))}, {int(round(y_max))}) km')
+            self.ax_size.set_ylabel('ROCI (km)')
+            self.ax_size.set_xlabel(self.selected_timezone.get())
+            self.ax_size.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
+            self.ax_size.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
+            self.ax_size.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
+            # Add a legend
+            self.ax_size.legend(loc='lower left', bbox_to_anchor=(1.05, 0), borderaxespad=0)
+
+            # ROCI scale (degrees of latitude)
+            roci_scale = np.array([0, 2, 3, 6, 8]).astype(float)
+            # convert degree latitude to km
+            roci_scale = roci_scale * 111.1
+            roci_labels = ['Very small', 'Small', 'Medium', 'Large', 'Very large']
+
+            # Add horizontal gridlines at the ROCI scale with labels
+            for i, (value, label) in enumerate(zip(roci_scale, roci_labels)):
+                # convert to degrees from km
+                if value >= self.ax_size.get_ylim()[0] and value <= self.ax_size.get_ylim()[1]:
+                    self.ax_size.axhline(y=value, color='blue', linestyle='-', linewidth=1.5, zorder=0)
+                # Calculate the y-position for the label, halfway between the current and next line
+                if i < len(roci_scale) - 1:
+                    y_pos = (value + (roci_scale[i + 1])) / 2
+                else:
+                    y_pos = value * 111.1  # for the last label, just use the line value
+                if y_pos >= self.ax_size.get_ylim()[0] and value <= self.ax_size.get_ylim()[1]:
+                    self.ax_size.text(1.02, y_pos / self.ax_size.get_ylim()[1], label, ha='left', va='center',
+                                      transform=self.ax_size.transAxes)
+
+            # Use tight_layout to ensure everything fits within the figure area
+            self.fig_size.tight_layout(rect=[0, 0, 0.95, 1])
+            # Create a canvas to display the plot in the frame
+            self.canvas = FigureCanvasTkAgg(self.fig_size, master=self.size_frame)
+            self.canvas.draw()
+            self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+            self.notebook_figs['size'] = self.fig_size
+
+    def update_vmax_chart(self):
+        with plt.style.context('dark_background'):
+            # Create a figure and axis object
+            self.fig_vmax, self.ax_vmax = plt.subplots(figsize=(6, 4), dpi=100)
+            # Initialize lists to store all x and y values
+            all_x = []
+            all_y = []
+            # Plot the data for all storms
+            any_data = False
+            num_tracks_with_data = 0
+            series_data = []
+            for internal_storm_id in self.selected_internal_storm_ids:
+                model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'vmax10m')
+                if y is not None:
+                    any_data = True
+                    all_x.extend(x)
+                    all_y.extend(y)
+                    series_data.append([model_name, series_sum, x, y])
+                    num_tracks_with_data += 1
+            if not any_data:
+                return
+
+            series_data.sort(key=lambda x: x[0])
+            color_indices = self.get_secondary_sort_indices(series_data, reverse=True)
+            distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
+            for i, series in enumerate(series_data):
+                model_name, series_sum, x, y = series
+                self.ax_vmax.plot(x, y, label=model_name, color=distinct_colors[color_indices[i]])
+
+            # Find the overall min/max of all x and y values
+            x_min = min(all_x)
+            x_max = max(all_x)
+            y_max = max(all_y)
+            y_lim_min = 0
+            y_lim_max = 10 + ((y_max // 10) * 10)
+            # Set the x-axis to display dates
+            self.ax_vmax.xaxis.set_major_locator(mdates.DayLocator())
+            self.ax_vmax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            # Set the x-axis to display minor ticks every 6 hours
+            self.ax_vmax.xaxis.set_minor_locator(mdates.HourLocator(interval=6))
+            # Set the x-axis limits to start at the first day - 1 and end at the last day + 1
+            start_of_day = x_min.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            end_of_day = x_max.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            self.ax_vmax.set_xlim([start_of_day, end_of_day])
+            # Set y-axis major ticks and labels every 10 kt
+            self.ax_vmax.yaxis.set_major_locator(ticker.MultipleLocator(10))
+            # Set y-axis minor ticks (no label) every 5 kt
+            self.ax_vmax.yaxis.set_minor_locator(ticker.MultipleLocator(5))
+            self.ax_vmax.set_ylim([y_lim_min, y_lim_max])
+            # Set title and labels
+            num_storm_ids = len(self.selected_internal_storm_ids)
+            self.ax_vmax.set_title(f'TC VMax @ 10m, {num_tracks_with_data}/{num_storm_ids} tracks\n\nPeak VMax: {int(round(y_max))} kt')
+            self.ax_vmax.set_ylabel('VMax @ 10m (kt)')
+            self.ax_vmax.set_xlabel(self.selected_timezone.get())
+            self.ax_vmax.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
+            self.ax_vmax.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
+            self.ax_vmax.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
+            # Add a legend
+            self.ax_vmax.legend(loc='lower left', bbox_to_anchor=(1.05, 0), borderaxespad=0)
+            # Saffir-Simpson scale (kt)
+            saffir_simpson_scale = [34, 64, 83, 96, 113, 137]
+            saffir_simpson_labels = ['TS', 'CAT1', 'CAT2', 'CAT3', 'CAT4', 'CAT5']
+            # Add horizontal gridlines at the Saffir-Simpson scale with labels
+            for value, label in zip(saffir_simpson_scale, saffir_simpson_labels):
+                self.ax_vmax.axhline(y=value, color='blue', linestyle='-', linewidth=1.5, zorder=0)
+                if value >= self.ax_vmax.get_ylim()[0] and value <= self.ax_vmax.get_ylim()[1]:
+                    self.ax_vmax.text(1.02, value / self.ax_vmax.get_ylim()[1], label, ha='left', va='center',
+                                      transform=self.ax_vmax.transAxes)
+            # Use tight_layout to ensure everything fits within the figure area
+            self.fig_vmax.tight_layout(rect=[0, 0, 0.95, 1])
+            # Create a canvas to display the plot in the frame
+            self.canvas = FigureCanvasTkAgg(self.fig_vmax, master=self.intensity_frame)
+            self.canvas.draw()
+            self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+            self.notebook_figs['vmax'] = self.fig_vmax
+
 # For extrema annotations (holds a collection of AnnotatedCircle)
 class AnnotatedCircles:
     ax = None
@@ -1572,11 +2162,11 @@ class ConfigDialog(tk.Toplevel):
         self.transient(parent)
         self.parent = parent
 
-        self.body_frame = tk.Frame(self)
-        self.body_frame.pack(padx=5, pady=5)
+        self.body_frame = ttk.Frame(self, style='CanvasFrame.TFrame')
+        self.body_frame.pack(padx=5, pady=10, fill="both", expand=True)
 
-        self.button_frame = tk.Frame(self)
-        self.button_frame.pack(padx=5, pady=5)
+        self.button_frame = ttk.Frame(self, style='CanvasFrame.TFrame')
+        self.button_frame.pack(padx=5, pady=10)
 
         self.body(self.body_frame, )
         self.create_buttonbox(self.button_frame)
@@ -1596,31 +2186,44 @@ class ConfigDialog(tk.Toplevel):
         }
 
     def body(self, master):
-        frame = ttk.Frame(master)
-        frame.pack(fill="both", expand=True)
-        self.notebook = ttk.Notebook(frame)
+        #frame = ttk.Frame(master)
+        #frame.pack(fill="both", expand=True)
+        self.notebook = ttk.Notebook(master, style="TNotebook")
         self.notebook.pack(fill="both", expand=True)
 
         # Create a frame for each tab
-        map_settings_frame = tk.Frame(self.notebook)
+        map_settings_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        map_settings_frame.grid()
         self.notebook.add(map_settings_frame, text="Map")
 
         # Create a frame for each tab
-        overlay_settings_frame = tk.Frame(self.notebook)
+        overlay_settings_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        overlay_settings_frame.grid()
         self.notebook.add(overlay_settings_frame, text="Overlay")
 
-        annotation_colors_frame = tk.Frame(self.notebook)
+        annotation_colors_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        annotation_colors_frame.grid()
         self.notebook.add(annotation_colors_frame, text="Annotation Colors")
 
-        extrema_annotations_frame = tk.Frame(self.notebook)
+        extrema_annotations_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        extrema_annotations_frame.grid()
         self.notebook.add(extrema_annotations_frame, text="Annotation Labels")
 
-        tk.Label(map_settings_frame, text="Circle patch radius (pixels):").pack()
-        tk.Entry(map_settings_frame, textvariable=self.settings['DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS']).pack()
-        tk.Label(map_settings_frame, text="Zoom in step factor:").pack()
-        tk.Entry(map_settings_frame, textvariable=self.settings['ZOOM_IN_STEP_FACTOR']).pack()
-        tk.Label(map_settings_frame, text="Min grid line spacing (inches):").pack()
-        tk.Entry(map_settings_frame, textvariable=self.settings['MIN_GRID_LINE_SPACING_INCHES']).pack()
+        r = 0
+        ttk.Label(map_settings_frame, text="Circle patch radius (pixels):", style='TLabel').grid(row=r, column=0, sticky='w')
+        ttk.Entry(map_settings_frame, textvariable=self.settings['DEFAULT_CIRCLE_PATCH_RADIUS_PIXELS'], style='TEntry', width=5).grid(row=r, column=1)
+        r += 1
+        ttk.Label(map_settings_frame, text="Zoom in step factor:", style='TLabel').grid(row=r, column=0, sticky='w')
+        ttk.Entry(map_settings_frame, textvariable=self.settings['ZOOM_IN_STEP_FACTOR'], style='TEntry', width=5).grid(row=r, column=1)
+        r += 1
+        ttk.Label(map_settings_frame, text="Min grid line spacing (inches):", style='TLabel').grid(row=r, column=0, sticky='w')
+        ttk.Entry(map_settings_frame, textvariable=self.settings['MIN_GRID_LINE_SPACING_INCHES'], style='TEntry', width=5).grid(row=r, column=1)
+        r += 1
+
+        for i in range(2):
+            map_settings_frame.grid_columnconfigure(i, pad=10)
+        for i in range(r):
+            map_settings_frame.grid_rowconfigure(i, pad=5)
 
         overlay_var_text = {
             'RVOR_CYCLONIC_CONTOURS': 'RVOR Cyclonic Contours',
@@ -1629,55 +2232,70 @@ class ConfigDialog(tk.Toplevel):
             'RVOR_ANTICYCLONIC_LABELS': 'RVOR Anti-cyclonic Labels',
         }
 
+        r = 0
         for varname, option in overlay_var_text.items():
             var = self.settings[varname]
-            cb = tk.Checkbutton(overlay_settings_frame, text=option, variable=var)
-            cb.pack(anchor=tk.W)
+            cb = ttk.Checkbutton(overlay_settings_frame, text=option, variable=var, style='TCheckbutton')
+            cb.grid(row=r, column=0, sticky='w')
+            r += 1
 
-        tk.Label(overlay_settings_frame, text="Min. contour pixels X:").pack()
-        tk.Entry(overlay_settings_frame, textvariable=self.settings['MINIMUM_CONTOUR_PX_X']).pack()
+        ttk.Label(overlay_settings_frame, text="Min. contour pixels X:", style='TLabel').grid(row=r, column=0, sticky='w')
+        ttk.Entry(overlay_settings_frame, textvariable=self.settings['MINIMUM_CONTOUR_PX_X'], style='TEntry', width=5).grid(row=r, column=1)
+        r += 1
 
-        tk.Label(overlay_settings_frame, text="Min. contour pixels Y:").pack()
-        tk.Entry(overlay_settings_frame, textvariable=self.settings['MINIMUM_CONTOUR_PX_Y']).pack()
+        ttk.Label(overlay_settings_frame, text="Min. contour pixels Y:", style='TLabel').grid(row=r, column=0, sticky='w')
+        ttk.Entry(overlay_settings_frame, textvariable=self.settings['MINIMUM_CONTOUR_PX_Y'], style='TEntry', width=5).grid(row=r, column=1)
+        r += 1
 
-        tk.Label(map_settings_frame, text="Zoom in step factor:").pack()
-        tk.Entry(map_settings_frame, textvariable=self.settings['ZOOM_IN_STEP_FACTOR']).pack()
-        tk.Label(map_settings_frame, text="Min grid line spacing (inches):").pack()
-        tk.Entry(map_settings_frame, textvariable=self.settings['MIN_GRID_LINE_SPACING_INCHES']).pack()
+        for i in range(2):
+            overlay_settings_frame.grid_columnconfigure(i, pad=10)
+        for i in range(r):
+            overlay_settings_frame.grid_rowconfigure(i, pad=5)
 
-        tk.Label(annotation_colors_frame, text="(Circle hover) Marker color:").pack()
+        r = 0
+        ttk.Label(annotation_colors_frame, text="(Circle hover) Marker color:", style='TLabel').grid(row=r, column=0, sticky='w')
         self.default_annotate_marker_color_label = tk.Label(annotation_colors_frame, text="", width=10,
                                                             bg=self.settings['DEFAULT_ANNOTATE_MARKER_COLOR'].get())
-        self.default_annotate_marker_color_label.pack()
+        self.default_annotate_marker_color_label.grid(row=r, column=1)
         self.default_annotate_marker_color_label.bind("<Button-1>",
                                                       lambda event: self.choose_color('DEFAULT_ANNOTATE_MARKER_COLOR'))
+        r += 1
 
-        tk.Label(annotation_colors_frame, text="Default annotation text color:").pack()
+        ttk.Label(annotation_colors_frame, text="Default annotation text color:", style='TLabel').grid(row=r, column=0, sticky='w')
         self.default_annotate_text_color_label = tk.Label(annotation_colors_frame, text="", width=10,
                                                           bg=self.settings['DEFAULT_ANNOTATE_TEXT_COLOR'].get())
-        self.default_annotate_text_color_label.pack()
+        self.default_annotate_text_color_label.grid(row=r, column=1)
         self.default_annotate_text_color_label.bind("<Button-1>",
                                                     lambda event: self.choose_color('DEFAULT_ANNOTATE_TEXT_COLOR'))
+        r += 1
 
-        tk.Label(annotation_colors_frame, text="TC start text color:").pack()
+        ttk.Label(annotation_colors_frame, text="TC start text color:", style='TLabel').grid(row=r, column=0, sticky='w')
         self.annotate_dt_start_color_label = tk.Label(annotation_colors_frame, text="", width=10,
                                                       bg=self.settings['ANNOTATE_DT_START_COLOR'].get())
-        self.annotate_dt_start_color_label.pack()
+        self.annotate_dt_start_color_label.grid(row=r, column=1)
         self.annotate_dt_start_color_label.bind("<Button-1>",
                                                 lambda event: self.choose_color('ANNOTATE_DT_START_COLOR'))
+        r += 1
 
-        tk.Label(annotation_colors_frame, text="Earliest named text color:").pack()
+        ttk.Label(annotation_colors_frame, text="Earliest named text color:", style='TLabel').grid(row=r, column=0, sticky='w')
         self.annotate_earliest_named_color_label = tk.Label(annotation_colors_frame, text="", width=10,
                                                             bg=self.settings['ANNOTATE_EARLIEST_NAMED_COLOR'].get())
-        self.annotate_earliest_named_color_label.pack()
+        self.annotate_earliest_named_color_label.grid(row=r, column=1)
         self.annotate_earliest_named_color_label.bind("<Button-1>",
                                                       lambda event: self.choose_color('ANNOTATE_EARLIEST_NAMED_COLOR'))
+        r += 1
 
-        tk.Label(annotation_colors_frame, text="Vmax text color:").pack()
+        ttk.Label(annotation_colors_frame, text="Vmax text color:", style='TLabel').grid(row=r, column=0, sticky='w')
         self.annotate_vmax_color_label = tk.Label(annotation_colors_frame, text="", width=10,
                                                   bg=self.settings['ANNOTATE_VMAX_COLOR'].get())
-        self.annotate_vmax_color_label.pack()
+        self.annotate_vmax_color_label.grid(row=r, column=1)
         self.annotate_vmax_color_label.bind("<Button-1>", lambda event: self.choose_color('ANNOTATE_VMAX_COLOR'))
+        r += 1
+
+        for i in range(2):
+            annotation_colors_frame.grid_columnconfigure(i, pad=10)
+        for i in range(r):
+            annotation_colors_frame.grid_rowconfigure(i, pad=10)
 
         self.color_labels = {
             'DEFAULT_ANNOTATE_MARKER_COLOR': self.default_annotate_marker_color_label,
@@ -1687,15 +2305,22 @@ class ConfigDialog(tk.Toplevel):
             'ANNOTATE_VMAX_COLOR': self.annotate_vmax_color_label,
         }
 
+        r = 0
         # Add your widgets for the "Extrema Annotations" tab here
         self.annotation_label_checkboxes = {}
         for option in self.annotation_label_options:
             var = tk.IntVar()
-            cb = tk.Checkbutton(extrema_annotations_frame, text=option, variable=var)
-            cb.pack(anchor=tk.W)
+            cb = ttk.Checkbutton(extrema_annotations_frame, text=option, variable=var, style='TCheckbutton')
+            cb.grid(row=r, column=0, sticky='w')
+            r += 1
             self.annotation_label_checkboxes[option] = var
             if option in self.selected_annotation_label_options:
                 var.set(1)
+
+        for i in range(2):
+            extrema_annotations_frame.grid_columnconfigure(i, pad=10)
+        for i in range(r):
+            extrema_annotations_frame.grid_rowconfigure(i, pad=5)
 
     def cancel(self, event=None):
         self.parent.focus_set()
@@ -1706,7 +2331,7 @@ class ConfigDialog(tk.Toplevel):
 
         # Get the dimensions of the dialog
         dialog_width = self.winfo_width()
-        dialog_height = self.winfo_height()
+        dialog_height = self.winfo_height() + 20
 
         # Get the dimensions of the parent window
         parent_width = self.parent.winfo_width()
@@ -1728,12 +2353,12 @@ class ConfigDialog(tk.Toplevel):
                 self.color_labels[setting_name].config(bg=color)
 
     def create_buttonbox(self, master):
-        self.buttonbox = tk.Frame(master)
-        w = tk.Button(self.buttonbox, text="Restore All Defaults (requires restart)", command=self.restore_defaults)
+        self.buttonbox = ttk.Frame(master, style='CanvasFrame.TFrame')
+        w = ttk.Button(self.buttonbox, text="Restore All Defaults (requires restart)", command=self.restore_defaults, style='TButton')
         w.pack(side=tk.LEFT, padx=5, pady=5)
-        ok_w = tk.Button(self.buttonbox, text="OK", command=self.ok)
+        ok_w = ttk.Button(self.buttonbox, text="OK", command=self.ok, style='TButton')
         ok_w.pack(side=tk.LEFT, padx=5, pady=5)
-        w = tk.Button(self.buttonbox, text="Cancel", command=self.cancel)
+        w = ttk.Button(self.buttonbox, text="Cancel", command=self.cancel, style='TButton')
         w.pack(side=tk.LEFT, padx=5, pady=5)
         self.bind("<Return>", self.ok)
         self.bind("<Escape>", self.cancel)
@@ -2606,6 +3231,10 @@ class SortedCyclicEnumDict(OrderedDict):
 # Main app class
 
 class App:
+    lon_lat_tc_records = []
+    str_tree = None
+    root = None
+
     # Initialize app and its tools
     def __init__(self, root):
         self.level_vars = None
@@ -2655,6 +3284,7 @@ class App:
         self.ax = None
         self.canvas = None
         self.axes_size = None
+        App.root = root
         self.root = root
         self.root.title("tcviewer")
         self.root.attributes('-fullscreen', True)
@@ -2801,13 +3431,15 @@ class App:
         # self.root.bind("v", self.toggle_rvor_contours)
         self.rvor_dialog_open = False
         self.root.bind("V", self.show_rvor_dialog)
+
+        self.analysis_dialog_open = False
+        self.root.bind("a", self.show_analysis_dialog)
+
         # setup widges
         self.create_widgets()
         # setup tools
         self.measure_tool = MeasureTool(self.ax)
         self.selection_loop_mode = False
-        self.str_tree = None
-        self.lon_lat_tc_records = []
         # display initial map
         self.display_map()
 
@@ -3013,7 +3645,7 @@ class App:
         # reset all labels
         self.update_tc_status_labels()
         self.clear_circle_patch()
-        self.lon_lat_tc_records = []
+        App.lon_lat_tc_records = []
 
     @staticmethod
     def clear_storm_extrema_annotations():
@@ -3047,13 +3679,8 @@ class App:
         self.label_adeck_mode = ttk.Label(self.adeck_mode_frame, text="ADECK MODE. Models: 0", style="TLabel")
         self.label_adeck_mode.pack(side=tk.LEFT, padx=5, pady=5)
 
-        style = ttk.Style()
-        style.map('TCombobox', fieldbackground=[('readonly', 'black')])
-        style.map('TCombobox', foreground=[('readonly', 'white')])
-        style.map('TCombobox', selectbackground=[('readonly', 'black')])
-        style.map('TCombobox', selectforeground=[('readonly', 'white')])
         self.adeck_selected_combobox = ttk.Combobox(self.adeck_mode_frame, width=14, textvariable=self.adeck_selected,
-                                                    state='readonly')
+                                                    state='readonly', style='Black.TCombobox')
         self.adeck_selected_combobox.pack(side=tk.LEFT, padx=5, pady=5)
         self.adeck_selected_combobox['state'] = 'readonly'  # Set the state according to configure colors
         self.adeck_selected_combobox['values'] = (
@@ -3404,6 +4031,10 @@ class App:
                         candidate_info['lon_repeat'] = candidate_info['lon']
                         candidate_info['valid_time'] = datetime.fromisoformat(valid_time)
                         candidate_info['time_step'] = time_step_int
+                        if 'basin' in candidate.keys():
+                            candidate_info['basin'] = candidate['basin']
+                        else:
+                            candidate_info['basin'] = ""
 
                         # calculate the difference in hours
                         hours_diff = (candidate_info['valid_time'] - datetime.fromisoformat(
@@ -3541,8 +4172,8 @@ class App:
                         record['value'] = internal_id
                         lon_lat_tc_records.append(record)
 
-        self.lon_lat_tc_records = lon_lat_tc_records
-        self.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
+        App.lon_lat_tc_records = lon_lat_tc_records
+        App.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
 
         labels_positive = [f' D+{str(i): >2} ' for i in
                            range(len(self.time_step_marker_colors) - 1)]  # Labels corresponding to colors
@@ -3697,16 +4328,19 @@ class App:
     # uses str_tree and the SelectionLoops to get a list of storm internal ids that are in the lassod boundary
     #   this will only cover storms that have been rendered through display_*
     #   as those are the only ones we make internal ids for
-    def get_selected_internal_storm_ids(self):
+    @classmethod
+    def get_selected_internal_storm_ids(cls):
         selection_surface_polygons = SelectionLoops.get_polygons()
 
         result_items = set()
-        if not self.lon_lat_tc_records:
+        lon_lat_tc_records = cls.lon_lat_tc_records
+        str_tree = cls.str_tree
+        if not lon_lat_tc_records:
             return
-        tc_internal_ids = [record["value"] for record in self.lon_lat_tc_records]
+        tc_internal_ids = [record["value"] for record in lon_lat_tc_records]
         # internal id is an integer for genesis, and a tuple for abdeck (storm id, model id)
         for query_polygon in selection_surface_polygons:
-            result = self.str_tree.query(query_polygon, predicate='intersects')
+            result = str_tree.query(query_polygon, predicate='intersects')
             if result.size > 0:
                 result_ids = [tc_internal_ids[i] for i in result]
                 for result_id in result_ids:
@@ -3808,7 +4442,7 @@ class App:
         total_num_overlapped_points = len(self.nearest_point_indices_overlapped)
         if total_num_overlapped_points == 0:
             if not SelectionLoops.is_empty():
-                to_hide_internal_ids = self.get_selected_internal_storm_ids()
+                to_hide_internal_ids = App.get_selected_internal_storm_ids()
 
                 for to_hide_internal_id in to_hide_internal_ids:
                     #cursor_internal_id, tc_index, tc_point_index = cursor_point_index
@@ -3963,6 +4597,12 @@ class App:
                 }
         except FileNotFoundError:
             pass
+
+    def on_analysis_dialog_close(self, dialog):
+        self.analysis_dialog_open = False
+        dialog.destroy()
+        # focus back on app
+        self.set_focus_on_map()
 
     def on_rvor_dialog_close(self, dialog):
         self.rvor_dialog_open = False
@@ -4313,6 +4953,21 @@ class App:
     def set_focus_on_map(self):
         self.canvas.get_tk_widget().focus_set()
 
+    def show_analysis_dialog(self, event=None):
+        if not self.analysis_dialog_open:
+            self.analysis_dialog_open = True
+        else:
+            return
+
+        root_width = self.root.winfo_screenwidth()
+        root_height = self.root.winfo_screenheight()
+        dialog = AnalysisDialog(self.root, self.plotted_tc_candidates, root_width, root_height)
+
+        # fix focus back to map
+        self.set_focus_on_map()
+
+        self.analysis_dialog_open = False
+
     def show_config_adeck_dialog(self):
         self.show_config_dialog()
         self.set_focus_on_map()
@@ -4396,11 +5051,11 @@ class App:
             return
         # Create the toplevel dialog
         global SELECTED_PRESSURE_LEVELS
-        dialog = tk.Toplevel(self.root)
+        dialog = tk.Toplevel(self.root, bg="#000000")
         dialog.protocol("WM_DELETE_WINDOW", lambda: self.on_rvor_dialog_close(dialog))
         dialog.title("Selected RVOR levels:")
-        height = 300
-        width = 250
+        height = 275
+        width = 240
         dialog.geometry(f"{width}x{height}")  # Set the width to 300 and height to 250
         dialog.geometry(
             f"+{tk_root.winfo_x() - width // 2 + tk_root.winfo_width() // 2}+{tk_root.winfo_y() - height // 2 + tk_root.winfo_height() // 2}")
@@ -4408,8 +5063,8 @@ class App:
         dialog.grab_set()
 
         # Create a frame to hold the checkboxes
-        frame = tk.Frame(dialog)
-        frame.pack(fill="both", expand=True)
+        frame = ttk.Frame(dialog, style='CanvasFrame.TFrame')
+        frame.grid()
 
         # Create the checkboxes and their corresponding variables
         self.level_vars = {}
@@ -4417,7 +5072,7 @@ class App:
         for i, level in enumerate([925, 850, 700, 500, 200], start=1):
             val = 1 if level in SELECTED_PRESSURE_LEVELS else 0
             var = tk.IntVar(value=val)
-            chk = tk.Checkbutton(frame, text=f"{level} mb", variable=var, pady=5)
+            chk = ttk.Checkbutton(frame, text=f"{level} mb", variable=var, style='TCheckbutton')
             var.set(val)
             if not chk_first:
                 chk_first = chk
@@ -4428,20 +5083,24 @@ class App:
             chk.columnconfigure(0, weight=1)
             self.level_vars[level] = var
 
+        for i in range(9):
+            frame.grid_columnconfigure(i, pad=15)
+            frame.grid_rowconfigure(i, pad=10)
+
         # Focus on the first checkbox
         frame.focus_set()
         frame.focus()  # Set focus on the frame
         chk_first.focus_set()
 
         # OK button
-        ok_btn = tk.Button(dialog, text="OK",
-                           command=lambda: [self.update_rvor_levels(), self.on_rvor_dialog_close(dialog)])
-        ok_btn.pack(fill="x", pady=5)
+        ok_btn = ttk.Button(dialog, text="OK",
+                           command=lambda: [self.update_rvor_levels(), self.on_rvor_dialog_close(dialog)], style='TButton')
+        ok_btn.grid(row=8, column=0)
 
         # Cancel button
-        cancel_btn = tk.Button(dialog, text="Cancel", command=dialog.destroy)
+        cancel_btn = ttk.Button(dialog, text="Cancel", command=dialog.destroy, style='TButton')
         cancel_btn.config(width=ok_btn.cget("width"))  # Set the width of the Cancel button to match the OK button
-        cancel_btn.pack(fill="x", pady=5)
+        cancel_btn.grid(row=8, column=1)
 
         dialog.bind("<Return>", lambda e: [self.update_rvor_levels(), self.on_rvor_dialog_close(dialog)])
         dialog.bind("<Escape>", lambda e: self.on_rvor_dialog_close(dialog))
@@ -4475,9 +5134,9 @@ class App:
         y = (tk_root.winfo_screenheight() - 100) // 2
         dialog.geometry(f"+{x}+{y}")
 
-        label = tk.Label(dialog, text="Screenshot saved", bg="#000000", fg="#FFFFFF")
+        label = ttk.Label(dialog, text="Screenshot saved", style='TLabel')
         label.pack(pady=10)
-        button = tk.Button(dialog, text="OK", command=dialog.destroy)
+        button = ttk.Button(dialog, text="OK", command=dialog.destroy, style='TButton')
         button.pack(pady=10)
 
         # Set focus on the OK button
@@ -4795,6 +5454,7 @@ class App:
                     candidate_info['lon_repeat'] = candidate_info['lon']
                     candidate_info['valid_time'] = datetime.fromisoformat(valid_time_str)
                     candidate_info['time_step'] = time_step_int
+                    candidate_info['basin'] = candidate['basin']
 
                     # calculate the difference in hours
                     hours_diff = (candidate_info['valid_time'] - datetime.fromisoformat(
@@ -4804,6 +5464,7 @@ class App:
                     candidate_info['hours_after_valid_day'] = hours_diff_rounded
 
                     candidate_info['roci'] = candidate['roci'] / 1000
+                    candidate_info['rv850max'] = candidate['rv850max'] * 100000
                     vmaxkt = candidate['vmax10m_in_roci'] * 1.9438452
                     candidate_info['vmax10m_in_roci'] = vmaxkt
                     candidate_info['vmax10m'] = vmaxkt
@@ -4908,8 +5569,8 @@ class App:
                     record['value'] = internal_id
                     lon_lat_tc_records.append(record)
 
-        self.lon_lat_tc_records = lon_lat_tc_records
-        self.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
+        App.lon_lat_tc_records = lon_lat_tc_records
+        App.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
 
         labels_positive = [f' D+{str(i): >2} ' for i in
                            range(len(self.time_step_marker_colors) - 1)]  # Labels corresponding to colors
@@ -5093,7 +5754,7 @@ class App:
 
     def update_selection_info_label(self):
         # self.genesis_selection_info_label.config(text="---.- kt")
-        internal_ids = self.get_selected_internal_storm_ids()
+        internal_ids = App.get_selected_internal_storm_ids()
         num_tracks = 0
         if internal_ids:
             num_tracks = len(internal_ids)
@@ -5410,9 +6071,10 @@ if __name__ == "__main__":
     # Style configuration for ttk widgets
     tk_style = ttk.Style()
     tk_style.theme_use('clam')  # Ensure using a theme that supports customization
-    default_bg = "black"
-    default_fg = "white"
+    default_bg = "#000000"
+    default_fg = "#FFFFFF"
     tk_style.configure("TButton", background=default_bg, foreground=default_fg)
+
     tk_style.configure("White.TButton", background=default_bg, foreground="white")
     tk_style.configure("Red.TButton", background=default_bg, foreground="red")
     tk_style.configure("Orange.TButton", background=default_bg, foreground="orange")
@@ -5421,17 +6083,43 @@ if __name__ == "__main__":
     tk_style.configure("YellowAndBorder.TButton", background=default_bg, foreground="yellow", bordercolor="yellow")
     tk_style.configure("WhiteAndBorder.TButton", background=default_bg, foreground="white", bordercolor="white")
 
+    # change hover color
+    tk_style.map('TButton', background=[('active', '#444444')])  # change hover color to dark grey
+
     tk_style.configure("TLabel", background=default_bg, foreground=default_fg)
+    tk_style.configure("TEntry", background=default_bg, foreground=default_fg, fieldbackground=default_bg)
     tk_style.configure("FixedWidthWhite.TLabel", font=(mono_font, 12), background=default_bg,
                        foreground="white")
     tk_style.configure("FixedWidthRed.TLabel", font=(mono_font, 12), background=default_bg, foreground="red")
 
     tk_style.configure("TCheckbutton", background=default_bg, foreground=default_fg)
-    tk_style.configure("TopFrame.TFrame", background=default_bg)
-    tk_style.configure("ToolsFrame.TFrame", background=default_bg)
-    tk_style.configure("CanvasFrame.TFrame", background=default_bg)
+    # change hover color
+    tk_style.map('TCheckbutton', background=[('active', '#555555')],
+                 foreground=[('active', default_fg)])  # change hover color to dark grey
+
+    tk_style.configure("TopFrame.TFrame", background=default_bg, foreground=default_fg)
+    tk_style.configure("ToolsFrame.TFrame", background=default_bg, foreground=default_fg)
+    tk_style.configure("CanvasFrame.TFrame", background=default_bg, foreground=default_fg)
 
     tk_style.configure("TMessaging", background=default_bg, foreground=default_fg)
+
+    #tk_style.configure('Black.TCombobox', foreground=default_fg)
+    tk_style.map('Black.TCombobox', fieldbackground=[('readonly', default_bg)])
+    tk_style.map('Black.TCombobox', foreground=[('readonly', default_fg)])
+    tk_style.map('Black.TCombobox', selectbackground=[('readonly', default_bg)])
+    tk_style.map('Black.TCombobox', selectforeground=[('readonly', default_fg)])
+
+    # Configure the notebook style
+    tk_style.configure('TNotebook', background=default_bg, foreground='grey')
+    tk_style.configure('TNotebook.Tab', background=default_bg, foreground=default_fg)
+    tk_style.map('TNotebook.Tab', background=[('selected', default_bg)], foreground=[('selected', 'pink')])
+    tk_style.configure("CanvasFrame", background=default_bg, foreground=default_fg)
+    tk_style.configure("CanvasFrame.TFrame", background=default_bg, foreground=default_fg)
+    tk_style.map('CanvasFrame.TFrame', background=[('selected', default_bg)], foreground=[('selected', 'pink')])
+
+    tk_root.configure(background=default_bg, borderwidth=0)
+    tk_root.option_add('*background', '#000000')
+    tk_root.option_add('*foreground', '#FFFFFF')
 
     app = App(tk_root)
 
