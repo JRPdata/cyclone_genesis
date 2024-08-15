@@ -143,12 +143,12 @@ all_time_steps_by_model = {
         '18': ['gfso', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30']
     },
     'GEPS-TCGEN': {
-        '00': ['cmc', 'cc00', 'cp01', 'cp02', 'cp03', 'cp04', 'cp05', 'cp06', 'cp07', 'cp08', 'cp09', 'cp10', 'cp11', 'cp12', 'cp13', 'cp14', 'cp15', 'cp16', 'cp17', 'cp18', 'cp19', 'cp20', 'cp21', 'cp22', 'cp23', 'cp24', 'cp25', 'cp26', 'cp27', 'cp28', 'cp29', 'cp30'],
-        '12': ['cmc', 'cc00', 'cp01', 'cp02', 'cp03', 'cp04', 'cp05', 'cp06', 'cp07', 'cp08', 'cp09', 'cp10', 'cp11', 'cp12', 'cp13', 'cp14', 'cp15', 'cp16', 'cp17', 'cp18', 'cp19', 'cp20', 'cp21', 'cp22', 'cp23', 'cp24', 'cp25', 'cp26', 'cp27', 'cp28', 'cp29', 'cp30']
+        '00': ['cmc', 'cc00', 'cp01', 'cp02', 'cp03', 'cp04', 'cp05', 'cp06', 'cp07', 'cp08', 'cp09', 'cp10', 'cp11', 'cp12', 'cp13', 'cp14', 'cp15', 'cp16', 'cp17', 'cp18', 'cp19', 'cp20'],
+        '12': ['cmc', 'cc00', 'cp01', 'cp02', 'cp03', 'cp04', 'cp05', 'cp06', 'cp07', 'cp08', 'cp09', 'cp10', 'cp11', 'cp12', 'cp13', 'cp14', 'cp15', 'cp16', 'cp17', 'cp18', 'cp19', 'cp20']
     },
     'FNMOC-TCGEN': {
-        '00': ['ngx', 'nc00', 'np01', 'np02', 'np03', 'np04', 'np05', 'np06', 'np07', 'np08', 'np09', 'np10', 'np11', 'np12', 'np13', 'np14', 'np15', 'np16', 'np17', 'np18', 'np19', 'np20', 'np21', 'np22', 'np23', 'np24', 'np25', 'np26', 'np27', 'np28', 'np29', 'np30'],
-        '12': ['ngx', 'nc00', 'np01', 'np02', 'np03', 'np04', 'np05', 'np06', 'np07', 'np08', 'np09', 'np10', 'np11', 'np12', 'np13', 'np14', 'np15', 'np16', 'np17', 'np18', 'np19', 'np20', 'np21', 'np22', 'np23', 'np24', 'np25', 'np26', 'np27', 'np28', 'np29', 'np30']
+        '00': ['ngx', 'nc00', 'np01', 'np02', 'np03', 'np04', 'np05', 'np06', 'np07', 'np08', 'np09', 'np10', 'np11', 'np12', 'np13', 'np14', 'np15', 'np16', 'np17', 'np18', 'np19', 'np20'],
+        '12': ['ngx', 'nc00', 'np01', 'np02', 'np03', 'np04', 'np05', 'np06', 'np07', 'np08', 'np09', 'np10', 'np11', 'np12', 'np13', 'np14', 'np15', 'np16', 'np17', 'np18', 'np19', 'np20']
     },
     'GFS': {
         '00': [0, 6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 78, 84, 90, 96, 102, 108, 114, 120, 126, 132, 138, 144, 150, 156, 162, 168, 174, 180, 186, 192, 198, 204, 210, 216, 222, 228, 234, 240, 246, 252, 258, 264, 270, 276, 282, 288, 294, 300, 306, 312, 318, 324, 330, 336, 342, 348, 354, 360, 366, 372, 378, 384],
@@ -1019,6 +1019,16 @@ def download_thread(model_names):
                         # get the next one after backing off
                         if model_timestamp not in complete_model_runs[model_name]:
                             complete_model_runs[model_name].append(model_timestamp)
+                        if model_name in ['GEFS-TCGEN', 'GEPS-TCGEN', 'FNMOC-TCGEN']:
+                            # create the flag directory 'COMPLETE' for completed folders in TCGEN (NON EPS)
+                            model_date = datetime.strftime(model_timestamp, '%Y%m%d')
+                            model_hour = datetime.strftime(model_timestamp, '%H')
+                            output_dir = model_data_folders_by_model_name[model_name]
+                            timestamp_prefix = f'{model_date}{model_hour}'
+                            output_dir_timestamp = os.path.join(output_dir, timestamp_prefix)
+                            complete_dir_path = os.path.join(output_dir_timestamp, '_COMPLETE_')
+                            if not os.path.exists(complete_dir_path):
+                                os.makedirs(complete_dir_path, exist_ok=True)
                 if exiting:
                     break
             if exiting:
