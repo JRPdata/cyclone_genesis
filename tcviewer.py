@@ -115,6 +115,9 @@ ANNOTATE_COLOR_LEVELS = {
     3: ANNOTATE_VMAX_COLOR
 }
 
+# settable as a setting in the analysis window
+ANALYSIS_TZ = "UTC"
+
 # remove any from list not wanted visible for extrema annotations (x key)
 #   closed_isobar_delta is only from tc_candidates.db
 #      (it is the difference in pressure from the outermost closed isobar to the innermost closed isobar)
@@ -247,12 +250,16 @@ annotations_color_level = {
 }
 
 from datetime import datetime, timedelta
+import pytz
+def datetime_utcnow():
+    return datetime.now(pytz.utc).replace(tzinfo=None)
+
 
 # URLs
 tcvitals_urls = [
     "https://ftp.nhc.noaa.gov/atcf/com/tcvitals",
     "https://hurricanes.ral.ucar.edu/repository/data/tcvitals_open/combined_tcvitals.{year}.dat".format(
-        year=datetime.utcnow().year)
+        year=datetime_utcnow().year)
 ]
 
 adeck_urls = [
@@ -293,7 +300,6 @@ import json
 import numpy as np
 import os
 import requests
-import pytz
 import traceback
 
 # main app imports for map charts and plotting
@@ -774,7 +780,7 @@ def download_file(url, local_filename):
 def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_bdeck):
     adeck = defaultdict(dict)
     bdeck = defaultdict(dict)
-    year = datetime.utcnow().year
+    year = datetime_utcnow().year
     most_recent_model_dates = defaultdict(lambda: datetime.min)
     most_recent_bdeck_dates = defaultdict(lambda: datetime.min)
     dt_mods_adeck = {}
@@ -928,7 +934,7 @@ def get_modification_date_from_header(response_headers):
 def get_recent_storms(urls):
     storms = {}
     dt_mods_tcvitals = {}
-    current_time = datetime.utcnow()
+    current_time = datetime_utcnow()
     for url in urls:
         response = None
         try:
@@ -1297,6 +1303,23 @@ class AnalysisDialog(tk.Toplevel):
         self.notebook_tab_names = dict()
         self.notebook_figs = dict()
 
+        self.tz_selected_timezone = tk.StringVar()
+        self.tz_previous_selected = None
+
+        self.ax_pres = None
+        self.ax_rvor = None
+        self.ax_size = None
+        self.ax_vmax = None
+        self.fig_pres = None
+        self.fig_rvor = None
+        self.fig_size = None
+        self.fig_vmax = None
+        self.canvas_pres = None
+        self.canvas_rvor = None
+        self.canvas_size = None
+        self.canvas_vmax = None
+
+
         super().__init__(parent)  # Set the title here
         self.title('Analysis on Selected Tracks')
         self.wm_protocol("WM_TAKE_FOCUS", self.wm_title)
@@ -1326,6 +1349,7 @@ class AnalysisDialog(tk.Toplevel):
         self.wait_window(self)
 
     def body(self, master):
+        global ANALYSIS_TZ
         frame = ttk.Frame(master, style='CanvasFrame.TFrame')
         frame.pack(fill="both", expand=True)
         self.notebook = ttk.Notebook(frame, style='TNotebook')
@@ -1388,14 +1412,46 @@ class AnalysisDialog(tk.Toplevel):
 
         self.tz_combobox = ttk.Combobox(self.tz_frame, textvariable=self.selected_timezone, values=self.timezones,
                                         width=50, state='readonly', style="Black.TCombobox")
+        tz_names = self.get_timezones()
+        if ANALYSIS_TZ in tz_names:
+            tzindex = tz_names.index(ANALYSIS_TZ)
+            self.tz_combobox.current(tzindex)
+        else:
+            # bad tz?
+            if 'UTC' in tz_names:
+                tzindex = tz_names.index('UTC')
+                self.tz_combobox.current(tzindex)
+        self.tz_previous_selected = self.selected_timezone.get()
         self.tz_combobox.pack()
+        self.tz_combobox.bind("<<ComboboxSelected>>", self.combo_selected_tz_event)
 
-        self.update_vmax_chart()
-        self.update_pres_chart()
-        self.update_tc_size_chart()
-        self.update_rvor_chart()
+        save_tz_session_btn = ttk.Button(self.tz_frame, text="Save TZ (this session)", command=self.save_tz_session, style='TButton')
+        save_tz_session_btn.pack(padx=10, pady=10)
+
+        save_tz_setting = ttk.Button(self.tz_frame, text="Save TZ (as setting)", command=self.save_tz_setting, style='TButton')
+        save_tz_setting.pack(padx=10, pady=10)
+
+        self.update_all_charts()
 
     def cancel(self, event=None):
+        # close figures to free up memory
+        if self.fig_pres:
+            plt.close(self.fig_pres)
+            self.fig_pres = None
+            self.notebook_figs['pres'] = None
+        if self.fig_rvor:
+            plt.close(self.fig_rvor)
+            self.fig_rvor = None
+            self.notebook_figs['rvor'] = None
+        if self.fig_size:
+            plt.close(self.fig_size)
+            self.fig_size = None
+            self.notebook_figs['size'] = None
+        if self.fig_vmax:
+            plt.close(self.fig_vmax)
+            self.fig_vmax = None
+            self.notebook_figs['vmax'] = None
+
         self.parent.focus_set()
         self.destroy()
 
@@ -1419,6 +1475,13 @@ class AnalysisDialog(tk.Toplevel):
         self.update_idletasks()  # Force update after centering
         self.parent.update_idletasks()  # Force update after centering
 
+    def combo_selected_tz_event(self, event):
+        current_value = self.tz_combobox.get()
+        if current_value != self.tz_previous_selected:
+            self.tz_previous_selected = current_value
+            self.update_all_charts()
+
+    # convert it to native (strip tz) for easier charting
     def convert_to_selected_timezone(self, dt, timezone_str):
         """Convert a datetime object from UTC to the selected timezone."""
         # Get the timezone string without the UTC offset
@@ -1428,7 +1491,8 @@ class AnalysisDialog(tk.Toplevel):
         # Convert to the selected timezone
         target_timezone = pytz.timezone(timezone_name)
         dt_converted = dt_utc.astimezone(target_timezone)
-        return dt_converted
+        dt_native = dt_converted.replace(tzinfo=None)
+        return dt_native
 
     def create_buttonbox(self, master):
         self.buttonbox = ttk.Frame(master, style="CanvasFrame.TFrame")
@@ -1467,17 +1531,6 @@ class AnalysisDialog(tk.Toplevel):
 
         return colors_rgb
 
-    def get_timezones_with_offsets(self):
-        """Get a list of all timezones with their UTC offsets."""
-        timezones = []
-        for tz in pytz.all_timezones:
-            timezone = pytz.timezone(tz)
-            offset = datetime.now(timezone).strftime('%z')
-            hours, minutes = int(offset[:3]), int(offset[0] + offset[3:])
-            formatted_offset = f"{'+' if hours >= 0 else '-'}{abs(hours):02}:{abs(minutes):02}"
-            timezones.append(f"(UTC{formatted_offset}) {tz}")
-        return timezones
-
     def generate_time_series(self, internal_id, dependent_variable):
         # Find the matching tc_candidate
         tc_candidate = next((tc for iid, tc in self.plotted_tc_candidates if iid == internal_id), None)
@@ -1487,7 +1540,7 @@ class AnalysisDialog(tk.Toplevel):
 
         # Extract and convert datetimes
         datetimes = [
-            self.convert_to_selected_timezone(tc['valid_time'], self.selected_timezone.get()) for
+            self.convert_to_selected_timezone(tc['valid_time'], self.tz_previous_selected) for
             tc in tc_candidate]
 
         model_name = tc_candidate[0]['model_name']
@@ -1521,15 +1574,20 @@ class AnalysisDialog(tk.Toplevel):
         current_tab_index = self.notebook.index("current")
         return self.notebook_tab_names[current_tab_index]
 
-    @staticmethod
-    def get_secondary_sort_indices(sort_0, reverse=False):
-        # Create a list of tuples (1th element, original index)
-        indexed_list = [(element[1], index) for index, element in enumerate(sort_0)]
-        # Sort by the 1th element (which is the first element in the tuple)
-        indexed_list.sort(reverse=reverse)
-        # Extract the original indices from the sorted list
-        sorted_indices = [index for (_, index) in indexed_list]
-        return sorted_indices
+    def get_timezones_with_offsets(self):
+        """Get a list of all timezones with their UTC offsets."""
+        timezones = []
+        for tz in pytz.all_timezones:
+            timezone = pytz.timezone(tz)
+            offset = datetime.now(timezone).strftime('%z')
+            hours, minutes = int(offset[:3]), int(offset[0] + offset[3:])
+            formatted_offset = f"{'+' if hours >= 0 else '-'}{abs(hours):02}:{abs(minutes):02}"
+            timezones.append(f"(UTC{formatted_offset}) {tz}")
+        return timezones
+
+    def get_timezones(self):
+        """Get a list of all timezones with their UTC offsets."""
+        return pytz.all_timezones
 
     def ok(self, event=None):
         self.withdraw()
@@ -1544,7 +1602,7 @@ class AnalysisDialog(tk.Toplevel):
             return
         fig = self.notebook_figs[current_tab_name]
 
-        current_time = datetime.utcnow().strftime("%Y-%m-%d-%H-%M-%S")
+        current_time = datetime_utcnow().strftime("%Y-%m-%d-%H-%M-%S")
         # Create the screenshots folder if it doesn't exist
         if not os.path.exists("screenshots"):
             os.makedirs("screenshots")
@@ -1552,15 +1610,38 @@ class AnalysisDialog(tk.Toplevel):
         # Save the screenshot as a PNG file
         fig.savefig(f"screenshots/analysis-{current_time}-{current_tab_name}.png")
 
+    def save_tz_session(self, *args):
+        tz_name = self.tz_previous_selected.split(') ')[-1]
+        print('save tz session', tz_name)
+        App.save_analysis_tz('session', tz_name)
+
+    def save_tz_setting(self, *args):
+        tz_name = self.tz_previous_selected.split(') ')[-1]
+        print('save tz setting', tz_name)
+        App.save_analysis_tz('setting', tz_name)
+
     def show_converted_time(self):
         """Convert and show the current UTC time in the selected timezone."""
-        now_utc = datetime.utcnow()  # current time in UTC (without tzinfo)
-        converted_time = self.convert_to_selected_timezone(now_utc, self.selected_timezone.get())
-        tk.messagebox.showinfo("Converted Time", f"Current time in {self.selected_timezone.get()}:\n{converted_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        now_utc = datetime_utcnow()  # current time in UTC (without tzinfo)
+        converted_time = self.convert_to_selected_timezone(now_utc, self.tz_previous_selected)
+        tk.messagebox.showinfo("Converted Time", f"Current time in {self.tz_previous_selected}:\n{converted_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    def update_all_charts(self):
+        self.update_vmax_chart()
+        self.update_pres_chart()
+        self.update_tc_size_chart()
+        self.update_rvor_chart()
 
     def update_pres_chart(self):
         with plt.style.context('dark_background'):
             # Create a figure and axis object
+            if self.fig_pres:
+                plt.close(self.fig_pres)
+                self.fig_pres = None
+                self.notebook_pres['size'] = None
+            if self.canvas_pres is not None:
+                self.canvas_pres.get_tk_widget().destroy()
+                self.canvas_pres = None
             self.fig_pres, self.ax_pres = plt.subplots(figsize=(6, 4), dpi=100)
             # Initialize lists to store all x and y values
             all_x = []
@@ -1581,11 +1662,10 @@ class AnalysisDialog(tk.Toplevel):
                 return
 
             series_data.sort(key=lambda x: x[0])
-            color_indices = self.get_secondary_sort_indices(series_data)
             distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
             for i, series in enumerate(series_data):
                 model_name, series_sum, x, y = series
-                self.ax_pres.plot(x, y, label=model_name, color=distinct_colors[color_indices[i]])
+                self.ax_pres.plot(x, y, label=model_name, color=distinct_colors[i])
 
             # Find the overall min/max of all x and y values
             x_min = min(all_x)
@@ -1610,7 +1690,7 @@ class AnalysisDialog(tk.Toplevel):
             num_storm_ids = len(self.selected_internal_storm_ids)
             self.ax_pres.set_title(f'TC MSLP, {num_tracks_with_data}/{num_storm_ids} tracks\n\nMin MSLP: {int(round(y_min))} mb')
             self.ax_pres.set_ylabel('MSLP (mb)')
-            self.ax_pres.set_xlabel(self.selected_timezone.get())
+            self.ax_pres.set_xlabel(self.tz_previous_selected)
             self.ax_pres.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
             self.ax_pres.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
             self.ax_pres.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
@@ -1621,14 +1701,21 @@ class AnalysisDialog(tk.Toplevel):
             # Use tight_layout to ensure everything fits within the figure area
             self.fig_pres.tight_layout(rect=[0, 0, 0.95, 1])
             # Create a canvas to display the plot in the frame
-            self.canvas = FigureCanvasTkAgg(self.fig_pres, master=self.pressure_frame)
-            self.canvas.draw()
-            self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+            self.canvas_pres = FigureCanvasTkAgg(self.fig_pres, master=self.pressure_frame)
+            self.canvas_pres.draw()
+            self.canvas_pres.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
             self.notebook_figs['pres'] = self.fig_pres
 
     def update_rvor_chart(self):
         # Create a figure and axis object
         with plt.style.context('dark_background'):
+            if self.fig_rvor:
+                plt.close(self.fig_rvor)
+                self.fig_rvor = None
+                self.notebook_figs['rvor'] = None
+            if self.canvas_rvor is not None:
+                self.canvas_rvor.get_tk_widget().destroy()
+                self.canvas_rvor = None
             self.fig_rvor, self.ax_rvor = plt.subplots(figsize=(6, 4), dpi=100)
             # Initialize lists to store all x and y values
             all_x = []
@@ -1649,11 +1736,10 @@ class AnalysisDialog(tk.Toplevel):
                 return
 
             series_data.sort(key=lambda x: x[0])
-            color_indices = self.get_secondary_sort_indices(series_data, reverse=True)
             distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
             for i, series in enumerate(series_data):
                 model_name, series_sum, x, y = series
-                self.ax_rvor.plot(x, y, label=model_name, color=distinct_colors[color_indices[i]])
+                self.ax_rvor.plot(x, y, label=model_name, color=distinct_colors[i])
 
             # Find the overall min/max of all x and y values
             x_min = min(all_x)
@@ -1682,7 +1768,7 @@ class AnalysisDialog(tk.Toplevel):
             num_storm_ids = len(self.selected_internal_storm_ids)
             self.ax_rvor.set_title(f'TC RVOR (* 10^-5 m/s), {num_tracks_with_data}/{num_storm_ids} tracks\n\nMax RVOR: {round(y_max,1)} * 10^-5 m/s')
             self.ax_rvor.set_ylabel('Relative Vorticity (* 10^-5 m/s)')
-            self.ax_rvor.set_xlabel(self.selected_timezone.get())
+            self.ax_rvor.set_xlabel(self.tz_previous_selected)
             self.ax_rvor.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
             self.ax_rvor.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
             self.ax_rvor.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
@@ -1692,13 +1778,20 @@ class AnalysisDialog(tk.Toplevel):
             # Use tight_layout to ensure everything fits within the figure area
             self.fig_rvor.tight_layout(rect=[0, 0, 0.95, 1])
             # Create a canvas to display the plot in the frame
-            self.canvas = FigureCanvasTkAgg(self.fig_rvor, master=self.rvor_frame)
-            self.canvas.draw()
-            self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+            self.canvas_rvor = FigureCanvasTkAgg(self.fig_rvor, master=self.rvor_frame)
+            self.canvas_rvor.draw()
+            self.canvas_rvor.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
             self.notebook_figs['rvor'] = self.fig_rvor
 
     def update_tc_size_chart(self):
         with plt.style.context('dark_background'):
+            if self.fig_size:
+                plt.close(self.fig_size)
+                self.fig_size = None
+                self.notebook_figs['size'] = None
+            if self.canvas_size is not None:
+                self.canvas_size.get_tk_widget().destroy()
+                self.canvas_size = None
             # Create a figure and axis object
             self.fig_size, self.ax_size = plt.subplots(figsize=(6, 4), dpi=100)
             # Initialize lists to store all x and y values
@@ -1720,11 +1813,10 @@ class AnalysisDialog(tk.Toplevel):
                 return
 
             series_data.sort(key=lambda x: x[0])
-            color_indices = self.get_secondary_sort_indices(series_data, reverse=True)
             distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
             for i, series in enumerate(series_data):
                 model_name, series_sum, x, y = series
-                self.ax_size.plot(x, y, label=model_name, color=distinct_colors[color_indices[i]])
+                self.ax_size.plot(x, y, label=model_name, color=distinct_colors[i])
 
             # Find the overall min/max of all x and y values
             x_min = min(all_x)
@@ -1749,7 +1841,7 @@ class AnalysisDialog(tk.Toplevel):
             num_storm_ids = len(self.selected_internal_storm_ids)
             self.ax_size.set_title(f'TC ROCI (km), {num_tracks_with_data}/{num_storm_ids} tracks\n\n(Min, Max) ROCI: ({int(round(y_min))}, {int(round(y_max))}) km')
             self.ax_size.set_ylabel('ROCI (km)')
-            self.ax_size.set_xlabel(self.selected_timezone.get())
+            self.ax_size.set_xlabel(self.tz_previous_selected)
             self.ax_size.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
             self.ax_size.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
             self.ax_size.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
@@ -1779,13 +1871,20 @@ class AnalysisDialog(tk.Toplevel):
             # Use tight_layout to ensure everything fits within the figure area
             self.fig_size.tight_layout(rect=[0, 0, 0.95, 1])
             # Create a canvas to display the plot in the frame
-            self.canvas = FigureCanvasTkAgg(self.fig_size, master=self.size_frame)
-            self.canvas.draw()
-            self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+            self.canvas_size = FigureCanvasTkAgg(self.fig_size, master=self.size_frame)
+            self.canvas_size.draw()
+            self.canvas_size.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
             self.notebook_figs['size'] = self.fig_size
 
     def update_vmax_chart(self):
         with plt.style.context('dark_background'):
+            if self.fig_vmax:
+                plt.close(self.fig_vmax)
+                self.fig_vmax = None
+                self.notebook_figs['vmax'] = None
+            if self.canvas_vmax is not None:
+                self.canvas_vmax.get_tk_widget().destroy()
+                self.canvas_vmax = None
             # Create a figure and axis object
             self.fig_vmax, self.ax_vmax = plt.subplots(figsize=(6, 4), dpi=100)
             # Initialize lists to store all x and y values
@@ -1807,11 +1906,10 @@ class AnalysisDialog(tk.Toplevel):
                 return
 
             series_data.sort(key=lambda x: x[0])
-            color_indices = self.get_secondary_sort_indices(series_data, reverse=True)
             distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
             for i, series in enumerate(series_data):
                 model_name, series_sum, x, y = series
-                self.ax_vmax.plot(x, y, label=model_name, color=distinct_colors[color_indices[i]])
+                self.ax_vmax.plot(x, y, label=model_name, color=distinct_colors[i])
 
             # Find the overall min/max of all x and y values
             x_min = min(all_x)
@@ -1837,7 +1935,7 @@ class AnalysisDialog(tk.Toplevel):
             num_storm_ids = len(self.selected_internal_storm_ids)
             self.ax_vmax.set_title(f'TC VMax @ 10m, {num_tracks_with_data}/{num_storm_ids} tracks\n\nPeak VMax: {int(round(y_max))} kt')
             self.ax_vmax.set_ylabel('VMax @ 10m (kt)')
-            self.ax_vmax.set_xlabel(self.selected_timezone.get())
+            self.ax_vmax.set_xlabel(self.tz_previous_selected)
             self.ax_vmax.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
             self.ax_vmax.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
             self.ax_vmax.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
@@ -1855,9 +1953,9 @@ class AnalysisDialog(tk.Toplevel):
             # Use tight_layout to ensure everything fits within the figure area
             self.fig_vmax.tight_layout(rect=[0, 0, 0.95, 1])
             # Create a canvas to display the plot in the frame
-            self.canvas = FigureCanvasTkAgg(self.fig_vmax, master=self.intensity_frame)
-            self.canvas.draw()
-            self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+            self.canvas_vmax = FigureCanvasTkAgg(self.fig_vmax, master=self.intensity_frame)
+            self.canvas_vmax.draw()
+            self.canvas_vmax.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
             self.notebook_figs['vmax'] = self.fig_vmax
 
 # For extrema annotations (holds a collection of AnnotatedCircle)
@@ -4352,7 +4450,7 @@ class App:
     def get_selected_model_candidates_from_decks(self):
         selected_models = self.get_selected_model_list()
         # reference current datetime since we are checking for old invests
-        valid_datetime = datetime.utcnow()
+        valid_datetime = datetime_utcnow()
         earliest_model_valid_datetime = valid_datetime
         selected_model_data = {}
         actual_models = set()
@@ -4410,7 +4508,7 @@ class App:
 
         # case where there are only invests
         if valid_datetime == datetime.max:
-            valid_datetime = datetime.utcnow()
+            valid_datetime = datetime_utcnow()
 
         return earliest_model_valid_datetime, len(all_models), len(actual_models), selected_model_data
 
@@ -4580,8 +4678,14 @@ class App:
             global ANNOTATE_DT_START_COLOR
             global ANNOTATE_EARLIEST_NAMED_COLOR
             global ANNOTATE_VMAX_COLOR
+            global ANALYSIS_TZ
             with open('settings_tcviewer.json', 'r') as f:
-                settings = json.load(f)
+                try:
+                    settings = json.load(f)
+                except:
+                    print("Could not load JSON from settings_tcviewer.json. Using defuaults.")
+                    return
+
                 for key, val in settings.items():
                     if key == 'annotation_label_options':
                         DISPLAYED_FUNCTIONAL_ANNOTATIONS = [option for option in displayed_functional_annotation_options
@@ -4950,6 +5054,18 @@ class App:
 
         self.overlay_rvor_label_last_alpha = alpha_label_visible
 
+    @classmethod
+    def save_analysis_tz(cls, duration, tz):
+        global ANALYSIS_TZ
+        ANALYSIS_TZ = tz
+        if duration == "setting":
+            with open('settings_tcviewer.json', 'r') as f:
+                settings = json.load(f)
+            if settings:
+                settings['settings']['ANALYSIS_TZ'] = ANALYSIS_TZ
+                with open('settings_tcviewer.json', 'w') as f:
+                    json.dump(settings, f, indent=4)
+
     def set_focus_on_map(self):
         self.canvas.get_tk_widget().focus_set()
 
@@ -4990,6 +5106,7 @@ class App:
         global ANNOTATE_DT_START_COLOR
         global ANNOTATE_EARLIEST_NAMED_COLOR
         global ANNOTATE_VMAX_COLOR
+        global ANALYSIS_TZ
         settings = {
             'RVOR_CYCLONIC_CONTOURS': tk.BooleanVar(value=RVOR_CYCLONIC_CONTOURS),
             'RVOR_CYCLONIC_LABELS': tk.BooleanVar(value=RVOR_CYCLONIC_LABELS),
@@ -5005,6 +5122,7 @@ class App:
             'ANNOTATE_DT_START_COLOR': tk.StringVar(value=ANNOTATE_DT_START_COLOR),
             'ANNOTATE_EARLIEST_NAMED_COLOR': tk.StringVar(value=ANNOTATE_EARLIEST_NAMED_COLOR),
             'ANNOTATE_VMAX_COLOR': tk.StringVar(value=ANNOTATE_VMAX_COLOR),
+            'ANALYSIS_TZ': tk.StringVar(value=ANALYSIS_TZ)
         }
         root_width = self.root.winfo_screenwidth()
         root_height = self.root.winfo_screenheight()
@@ -5112,7 +5230,7 @@ class App:
 
     def take_screenshot(self, *args):
         # Get the current UTC date and time
-        current_time = datetime.utcnow().strftime("%Y-%m-%d-%H-%M-%S")
+        current_time = datetime_utcnow().strftime("%Y-%m-%d-%H-%M-%S")
 
         # Create the screenshots folder if it doesn't exist
         if not os.path.exists("screenshots"):
@@ -5365,7 +5483,7 @@ class App:
         vmax_labels = ['\u25BD TD', '\u25B3 TS', '\u25A1 1', '\u25C1 2', '\u25B7 3', '\u25C7 4', '\u2605 5']
         marker_sizes = {'v': 6, '^': 6, 's': 8, '<': 10, '>': 12, 'D': 12, '*': 14}
         # disturbance_candidates = get_disturbances_from_db(model_name, model_timestamp)
-        # now = datetime.utcnow()
+        # now = datetime_utcnow()
         # start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         # valid_day = start_of_day.isoformat()
         # model_init_times, tc_candidates = get_tc_candidates_from_valid_time(now.isoformat())
