@@ -315,6 +315,7 @@ from mpl_toolkits.axes_grid1 import Divider, Size
 import matplotlib.dates as mdates
 import matplotlib.ticker as ticker
 import colorspacious as cs
+from geopy.distance import geodesic
 
 # for mouse hover features
 from rtree import index
@@ -1313,10 +1314,12 @@ class AnalysisDialog(tk.Toplevel):
         self.fig_pres = None
         self.fig_rvor = None
         self.fig_size = None
+        self.fig_track_spread = None
         self.fig_vmax = None
         self.canvas_pres = None
         self.canvas_rvor = None
         self.canvas_size = None
+        self.canvas_track_spread = None
         self.canvas_vmax = None
 
 
@@ -1433,6 +1436,80 @@ class AnalysisDialog(tk.Toplevel):
 
         self.update_all_charts()
 
+    # Example Usage inside a class
+    def analyze_tracks(self):
+        all_datetimes = self.get_unique_datetimes()
+        mean_track = self.calculate_mean_track(all_datetimes)
+        cross_track_spread, along_track_spread = self.calculate_spread(mean_track)
+
+    def calculate_mean_track(self, all_datetimes):
+        # Filter plotted_tc_candidates based on selected_internal_storm_ids
+        filtered_candidates = [(iid, tc) for iid, tc in self.plotted_tc_candidates if
+                               iid in self.selected_internal_storm_ids]
+
+        mean_track = []
+        for dt in all_datetimes:
+            latitudes = []
+            longitudes = []
+            for internal_id, tc_candidate in filtered_candidates:
+                for tc in tc_candidate:
+                    if tc['valid_time'] == dt:
+                        latitudes.append(tc['lat'])
+                        longitudes.append(tc['lon'])
+            if latitudes and longitudes:
+                mean_lat = np.mean(latitudes)
+                mean_lon = np.mean(longitudes)
+                mean_track.append({'valid_time': dt, 'lat': mean_lat, 'lon': mean_lon})
+        return mean_track
+
+    def calculate_spread(self, mean_track):
+        # Filter plotted_tc_candidates based on selected_internal_storm_ids
+        filtered_candidates = [(iid, tc) for iid, tc in self.plotted_tc_candidates if
+                               iid in self.selected_internal_storm_ids]
+
+        cross_track_spread = []
+        along_track_spread = []
+
+        for mean_point in mean_track:
+            dt = mean_point['valid_time']
+            mean_lat = mean_point['lat']
+            mean_lon = mean_point['lon']
+
+            cross_diffs = []
+            along_diffs = []
+
+            for internal_id, tc_candidate in filtered_candidates:
+                for tc in tc_candidate:
+                    if tc['valid_time'] == dt:
+                        model_lat = tc['lat']
+                        model_lon = tc['lon']
+
+                        # Calculate cross-track difference
+                        if len(mean_track) > 1:
+                            before_idx = max(0, mean_track.index(mean_point) - 1)
+                            after_idx = min(len(mean_track) - 1, mean_track.index(mean_point) + 1)
+                            before_lat = mean_track[before_idx]['lat']
+                            before_lon = mean_track[before_idx]['lon']
+                            after_lat = mean_track[after_idx]['lat']
+                            after_lon = mean_track[after_idx]['lon']
+
+                            # Distance from model point to mean track line segments
+                            before_dist = geodesic((model_lat, model_lon), (before_lat, before_lon)).nm
+                            after_dist = geodesic((model_lat, model_lon), (after_lat, after_lon)).nm
+                            cross_diffs.append(min(before_dist, after_dist))
+
+                        # Calculate along-track difference
+                        along_dist = geodesic((mean_lat, mean_lon), (model_lat, model_lon)).nm
+                        along_diffs.append(along_dist)
+
+            # Compute spread measures (e.g., standard deviation)
+            if cross_diffs:
+                cross_track_spread.append(np.std(cross_diffs))
+            if along_diffs:
+                along_track_spread.append(np.std(along_diffs))
+
+        return cross_track_spread, along_track_spread
+
     def cancel(self, event=None):
         # close figures to free up memory
         if self.fig_pres:
@@ -1447,6 +1524,10 @@ class AnalysisDialog(tk.Toplevel):
             plt.close(self.fig_size)
             self.fig_size = None
             self.notebook_figs['size'] = None
+        if self.fig_track_spread:
+            plt.close(self.fig_track_spread)
+            self.fig_track_spread = None
+            self.notebook_figs['track'] = None
         if self.fig_vmax:
             plt.close(self.fig_vmax)
             self.fig_vmax = None
@@ -1589,6 +1670,21 @@ class AnalysisDialog(tk.Toplevel):
         """Get a list of all timezones with their UTC offsets."""
         return pytz.all_timezones
 
+    def get_unique_datetimes(self):
+        # Filter plotted_tc_candidates based on selected_internal_storm_ids
+        filtered_candidates = [(iid, tc) for iid, tc in self.plotted_tc_candidates if
+                               iid in self.selected_internal_storm_ids]
+
+        # Collect all unique datetimes across all models
+        all_datetimes = set()
+        tz = self.tz_previous_selected
+        for internal_id, tc_candidate in filtered_candidates:
+            for tc in tc_candidate:
+                valid_dt = tc['valid_time']
+                converted_valid_dt = self.convert_to_selected_timezone(valid_dt, tz)
+                all_datetimes.add(converted_valid_dt)
+        return sorted(all_datetimes)
+
     def ok(self, event=None):
         self.withdraw()
         self.update_idletasks()
@@ -1630,6 +1726,7 @@ class AnalysisDialog(tk.Toplevel):
         self.update_vmax_chart()
         self.update_pres_chart()
         self.update_tc_size_chart()
+        self.update_track_spread_chart()
         self.update_rvor_chart()
 
     def update_pres_chart(self):
@@ -1782,6 +1879,76 @@ class AnalysisDialog(tk.Toplevel):
             self.canvas_rvor.draw()
             self.canvas_rvor.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
             self.notebook_figs['rvor'] = self.fig_rvor
+
+    def update_track_spread_chart(self):
+        # Create a figure and axis object
+        with plt.style.context('dark_background'):
+            if self.fig_track_spread:
+                plt.close(self.fig_track_spread)
+                self.fig_track_spread = None
+                self.notebook_figs['track'] = None
+            if self.canvas_track_spread is not None:
+                self.canvas_track_spread.get_tk_widget().destroy()
+                self.canvas_track_spread = None
+
+            unique_datetimes = self.get_unique_datetimes()
+            if not unique_datetimes:
+                return
+            mean_track = self.calculate_mean_track(unique_datetimes)
+            if not mean_track:
+                return
+            cross_track_spread, along_track_spread = self.calculate_spread(mean_track)
+            if not cross_track_spread or not along_track_spread:
+                return
+
+            self.fig_track_spread, self.ax_track_spread = plt.subplots(figsize=(6, 4), dpi=100)
+
+            # Plot cross-track and along-track spreads
+            self.ax_track_spread.plot(unique_datetimes, cross_track_spread, label='Cross-Track Spread', color='blue',
+                                linestyle='-', marker='o')
+            self.ax_track_spread.plot(unique_datetimes, along_track_spread, label='Along-Track Spread', color='red',
+                                linestyle='-', marker='x')
+
+            # Set the x-axis to display dates
+            self.ax_track_spread.xaxis.set_major_locator(mdates.DayLocator())
+            self.ax_track_spread.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            # Set the x-axis to display minor ticks every 6 hours
+            self.ax_track_spread.xaxis.set_minor_locator(mdates.HourLocator(interval=6))
+            # Set the x-axis limits to start at the first day - 1 and end at the last day + 1
+            start_of_day = unique_datetimes[0].replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            end_of_day = unique_datetimes[-1].replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            self.ax_track_spread.set_xlim([start_of_day, end_of_day])
+
+            # Set y-axis limits
+            y_min = min(min(cross_track_spread, default=0), min(along_track_spread, default=0))
+            y_max = max(max(cross_track_spread, default=0), max(along_track_spread, default=0))
+            y_lim_min = min(0, y_min - 10)  # Adding buffer for visual clarity
+            y_lim_max = y_max + 10
+            if y_lim_max - y_lim_min > 150:
+                self.ax_track_spread.yaxis.set_major_locator(ticker.MultipleLocator(20))
+                self.ax_track_spread.yaxis.set_minor_locator(ticker.MultipleLocator(10))
+            else:
+                self.ax_track_spread.yaxis.set_major_locator(ticker.MultipleLocator(10))
+                self.ax_track_spread.yaxis.set_minor_locator(ticker.MultipleLocator(5))
+            self.ax_track_spread.set_ylim([y_lim_min, y_lim_max])
+
+            # Set title and labels
+            self.ax_track_spread.set_title('Track Spread Over Time')
+            self.ax_track_spread.set_ylabel('Cross-track, Along-track spread (n. mi.)')
+            self.ax_track_spread.set_xlabel('Date')
+            self.ax_track_spread.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
+            self.ax_track_spread.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
+            self.ax_track_spread.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
+            # Add a legend
+            self.ax_track_spread.legend(loc='upper left', bbox_to_anchor=(1.05, 1), borderaxespad=0)
+
+            # Use tight_layout to ensure everything fits within the figure area
+            self.fig_track_spread.tight_layout(rect=[0, 0, 0.95, 1])
+            # Create a canvas to display the plot in the frame
+            self.canvas_track_spread = FigureCanvasTkAgg(self.fig_track_spread, master=self.track_frame)
+            self.canvas_track_spread.draw()
+            self.canvas_track_spread.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+            self.notebook_figs['track'] = self.fig_track_spread
 
     def update_tc_size_chart(self):
         with plt.style.context('dark_background'):
