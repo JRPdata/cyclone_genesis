@@ -2,7 +2,6 @@
 # Work in progress (do not use)
 
 # find TC genesis from models based on work similar to FSU's methodology
-# also process TC tracks from TCGEN (NCEP ensemble tracker of GEFS, EPS, FNMOC) and ECMWF (EPS)
 # Note: uses roughly same thresholds but for different model resolutions, so they are more sensitive than [1]
 
 # only focused on 1. so far:
@@ -761,62 +760,6 @@ def get_disturbances_from_db(model_name, model_timestamp):
             conn.close()
 
     return retrieved_data
-
-def update_disturbances_db(model_name, model_timestamp, model_time_step, candidates):
-    conn = None
-    model_time_step_str = str(model_time_step)
-    try:
-        # store disturbance candidates in database
-        conn = sqlite3.connect(disturbances_db_file_path)
-        cursor = conn.cursor()
-
-        ##### FOR PARALLELIZED CODE ONLY (ONLY UNCOMMENTED IN PARALLELIZED VERSION)
-        # Parallelization:
-        # As we are reading in a dict and appending in parallel...
-        #   we need to make this exclusive to make sure only the latest dict is used
-        #   otherwise we might clobber our work for previous time-steps for the same model & init time
-        # cursor.execute('BEGIN EXCLUSIVE TRANSACTION')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS disturbances (
-                id INTEGER PRIMARY KEY,
-                model_name TEXT,
-                data JSON,
-                date TEXT,
-                is_complete TEXT,
-                UNIQUE(model_name, date)
-            )
-        ''')
-
-        ds = model_timestamp.isoformat()
-
-        cursor.execute('SELECT data FROM disturbances WHERE model_name = ? AND date = ?', (model_name, ds))
-        result = cursor.fetchone()
-
-        if result:
-            retrieved_data = json.loads(result[0])
-        else:
-            retrieved_data = {}
-
-        retrieved_data[model_time_step_str] = candidates
-        json_data = json.dumps(retrieved_data)
-
-        num_steps_complete = len(retrieved_data.keys())
-        hour_str = datetime.strftime(model_timestamp, '%H')
-        is_complete = 0
-        if num_steps_complete == total_model_time_steps[model_name][hour_str]:
-            is_complete = 1
-
-        cursor.execute('INSERT OR REPLACE INTO disturbances (model_name, data, date, is_complete) VALUES (?, ?, ?, ?)', (model_name, json_data, ds, is_complete))
-        conn.commit()
-
-    except sqlite3.Error as e:
-        print(f"SQLite error (update_disturbances_db): {e}")
-        ###### FOR PARALLELIZED CODE ONLY. ONLY UNCOMMENTED IN PARALLELIZED CODE
-        #conn.rollback()
-    finally:
-        if conn:
-            conn.close()
 
 # call with no params before a func call, and then must pass it a func_str on the next call once func is complete
 def debug_timing(func_str = None):
