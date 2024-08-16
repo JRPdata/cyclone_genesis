@@ -12,7 +12,8 @@
 # for ROCI:
 # [4] https://journals.ametsoc.org/view/journals/wefo/28/6/waf-d-13-00008_1.xml
 
-# units are metric (except for data Vmax @ 10m in kts), but scale may be mixed between internal representations of data, thresholds, and printouts
+# all units are stored in metric (data Vmax @ 10m printed in kts), but
+# scale may be mixed between internal representations of data, thresholds, and printouts
 
 # thresholds for disturbances (reversed from text output from FSU)
 disturbance_thresholds_path = 'disturbance_thresholds.json'
