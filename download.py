@@ -38,6 +38,7 @@ num_latest_runs = 4
 disturbances_db_file_path = '/home/db/Documents/JRPdata/cyclone-genesis/disturbances.db'
 
 # GFS and NAV are in the same thread as they use the same server
+# These are the models that are downloaded
 model_names_to_download_thread_groupings = [['EPS-TCGEN'], ['GEFS-TCGEN', 'GEPS-TCGEN', 'FNMOC-TCGEN', 'GFS', 'NAV'], ['CMC'], ['ECM']]
 
 # use this to download individual grib files for NAVGEM so we can split them with grib_copy
@@ -697,8 +698,16 @@ def generate_curl_commands_eps(timestamp_prefix, url_folder, file_name_prefix, f
         all_files_list = files_list_str.split('\n')
 
         tc_files = [x.strip() for x in all_files_list if re.match(re.compile(f'{file_name_prefix}'), x.strip())]
+        # HARDCODED TO GUESS WHETHER COMPLETE OR NOT
+        completed_240h_gribs_re = re.compile(r'A_H......................................240h.*grib2\.bin')
+        completed_240h_gribs = [x.strip() for x in all_files_list if re.match(completed_240h_gribs_re, x.strip())]
+        expected_num_completed_240h_gribs = 13
+        if len(completed_240h_gribs) == expected_num_completed_240h_gribs:
+            is_gribs_complete = True
+        else:
+            is_gribs_complete = False
 
-        if not tc_files:
+        if not tc_files and is_gribs_complete:
             # Possible there are none forecast or they have not yet been created (they are the last to be created)
             # check if the correspoding bufr is complete
             #   example is: 'https://data.ecmwf.int/forecasts/20240801/12z/ifs/0p4-beta/enfo/20240801000000-240h-enfo-tf.bufr'
@@ -719,7 +728,7 @@ def generate_curl_commands_eps(timestamp_prefix, url_folder, file_name_prefix, f
         print_level(3, f"Warning: Could not get ftp listing of {url_folder}")
         return -1
 
-    if is_complete:
+    if is_complete and is_gribs_complete:
         # create the flag directory 'COMPLETE'
         os.makedirs(os.path.join(output_dir_timestamp, '_COMPLETE_'), exist_ok = True)
         return 0
@@ -752,9 +761,14 @@ def generate_curl_commands_eps(timestamp_prefix, url_folder, file_name_prefix, f
                     pass
                 return -2
 
-    # assume that all the files that would be created were got, and create the flag directory 'COMPLETE'
-    os.makedirs(os.path.join(output_dir_timestamp, '_COMPLETE_'), exist_ok=True)
-    return 0
+    if is_gribs_complete:
+        # assume that all the files that would be created were got, and create the flag directory 'COMPLETE'
+        os.makedirs(os.path.join(output_dir_timestamp, '_COMPLETE_'), exist_ok=True)
+        return 0
+    else:
+        # currently incomplete
+        print_level(4, f"Warning: Incomplete WMO essential files for finish_url_path: {finish_url_path}")
+        return -1
 
 def generate_curl_commands_gfdl(timestamp_prefix, url_folder, url_base_file_name, output_dir):
     output_dir_timestamp = os.path.join(output_dir, timestamp_prefix)
