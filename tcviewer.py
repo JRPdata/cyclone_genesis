@@ -3499,6 +3499,8 @@ class App:
     lon_lat_tc_records = []
     str_tree = None
     root = None
+    # manually hidden tc candidates and annotations
+    hidden_tc_candidates = set()
 
     # Initialize app and its tools
     def __init__(self, root):
@@ -3600,8 +3602,7 @@ class App:
         # Mapping from rtree point index to (internal_id, tc_index, tc_candidate_point_index)
         self.rtree_tuple_point_id = 0
         self.rtree_tuple_index_mapping = {}
-        # manually hidden tc candidates and annotations
-        self.hidden_tc_candidates = set()
+
         self.scatter_objects = {}
         self.line_collection_objects = {}
         self.annotated_circle_objects = {}
@@ -3827,7 +3828,7 @@ class App:
         try:
             internal_id, tc_candidate = self.plotted_tc_candidates[tc_index]
             for point in tc_candidate:
-                if len(self.hidden_tc_candidates) == 0 or internal_id not in self.hidden_tc_candidates:
+                if len(App.hidden_tc_candidates) == 0 or internal_id not in App.hidden_tc_candidates:
                     lat = point['lat']
                     lon = point['lon']
                     any_in_bound = any_in_bound or (xlim[0] <= lon <= xlim[1] and ylim[0] <= lat <= ylim[1])
@@ -3927,7 +3928,7 @@ class App:
             self.display_map()
             if not self.have_deck_data:
                 self.update_deck_data()
-            self.hidden_tc_candidates = set()
+            App.hidden_tc_candidates = set()
             self.display_deck_data()
             self.set_focus_on_map()
 
@@ -4272,7 +4273,7 @@ class App:
                         # valid_time_datetime.fromisoformat(valid_time_str)
 
                         # check for manually hidden
-                        if len(self.hidden_tc_candidates) != 0 and internal_id in self.hidden_tc_candidates:
+                        if len(App.hidden_tc_candidates) != 0 and internal_id in App.hidden_tc_candidates:
                             continue
 
                     lat_lon_with_time_step_list = []
@@ -4609,7 +4610,11 @@ class App:
             if result.size > 0:
                 result_ids = [tc_internal_ids[i] for i in result]
                 for result_id in result_ids:
-                    result_items.add(result_id)
+                    # skip internal ids that are not visible
+                    if len(cls.hidden_tc_candidates) != 0 and result_id not in cls.hidden_tc_candidates:
+                        result_items.add(result_id)
+                    else:
+                        result_items.add(result_id)
 
         return list(result_items)
 
@@ -4711,7 +4716,7 @@ class App:
 
                 for to_hide_internal_id in to_hide_internal_ids:
                     #cursor_internal_id, tc_index, tc_point_index = cursor_point_index
-                    self.hidden_tc_candidates.add(to_hide_internal_id)
+                    App.hidden_tc_candidates.add(to_hide_internal_id)
 
                     if self.scatter_objects:
                         for internal_id, scatters in self.scatter_objects.items():
@@ -4742,7 +4747,7 @@ class App:
 
                 self.ax.figure.canvas.draw()
             # unhide all
-            elif len(self.hidden_tc_candidates) > 0:
+            elif len(App.hidden_tc_candidates) > 0:
                 if self.scatter_objects:
                     for internal_id, scatters in self.scatter_objects.items():
                         try:
@@ -4768,7 +4773,7 @@ class App:
                         except:
                             traceback.print_exc()
 
-                self.hidden_tc_candidates = set()
+                App.hidden_tc_candidates = set()
                 (lon, lat) = self.last_cursor_lon_lat
                 self.update_labels_for_mouse_hover(lat=lat, lon=lon)
                 self.ax.figure.canvas.draw()
@@ -4776,7 +4781,7 @@ class App:
             num, cursor_point_index = self.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
             if cursor_point_index:
                 cursor_internal_id, tc_index, tc_point_index = cursor_point_index
-                self.hidden_tc_candidates.add(cursor_internal_id)
+                App.hidden_tc_candidates.add(cursor_internal_id)
 
                 if self.scatter_objects:
                     for internal_id, scatters in self.scatter_objects.items():
@@ -5159,7 +5164,7 @@ class App:
                 self.redraw_map_with_data(model_cycle=model_cycle)
 
     def redraw_map_with_data(self, model_cycle=None):
-        self.hidden_tc_candidates = set()
+        App.hidden_tc_candidates = set()
         self.display_map()
         if self.mode == "GENESIS" and model_cycle:
             self.update_genesis(model_cycle)
@@ -5721,7 +5726,7 @@ class App:
 
                 # check for manually hidden
                 internal_id = numc
-                if len(self.hidden_tc_candidates) != 0 and internal_id in self.hidden_tc_candidates:
+                if len(App.hidden_tc_candidates) != 0 and internal_id in App.hidden_tc_candidates:
                     continue
 
                 lat_lon_with_time_step_list = []
@@ -5925,7 +5930,7 @@ class App:
             internal_id, tc_index, point_index = self.rtree_tuple_index_mapping[unmapped_point_index]
             point = self.plotted_tc_candidates[tc_index][1][point_index]
             item_is_overlapping = False
-            if internal_id in self.hidden_tc_candidates:
+            if internal_id in App.hidden_tc_candidates:
                 continue
             if len(self.nearest_point_indices_overlapped):
                 overlapping_internal_id, overlapping_tc_index, overlapping_point_index = self.nearest_point_indices_overlapped.get_first_key()
