@@ -1133,9 +1133,12 @@ def read_gdfl_txt_file_to_df(model_file_path):
 
     # Iterate over rows to fill "ATCF_ID" and "Basin" columns
     for index, row in df.iterrows():
-        num_cyclogenesis = row['Num_Cyclogenesis']
+        num_cyclogenesis = str(row['Num_Cyclogenesis'])
         # Check if the value ends with a letter
-        basin_short = num_cyclogenesis[-1]
+        if len(num_cyclogenesis) > 0:
+            basin_short = num_cyclogenesis[-1]
+        else:
+            basin_short = ''
         if basin_short.isalpha():
             # Check if the letter is in the basin mapping dictionary
             if basin_short in gfdl_basin_to_atcf_basin:
@@ -1194,18 +1197,18 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
 
                 forecast_hour_dict = {
                     'mslp_value': float(np.round(mslp, round_float_places)),
-                    'lat': np.round(row['Lat'], round_float_places),
-                    'lon': np.round(row['Lon'], round_float_places),
+                    'lat': float(np.round(row['Lat'], round_float_places)),
+                    'lon': float(np.round(row['Lon'], round_float_places)),
                     'basin': row['Basin'],
                     'named': row['Named_Storm'],
                     'invest': None,
                     'atcf_id': atcf_id,
-                    'vmax10m_in_roci': np.round(row['Max_10m_Wind'], 1),
+                    'vmax10m_in_roci': float(np.round(row['Max_10m_Wind'], 1)),
                     'roci': float(np.nan),
                     'closed_isobar_delta': float(np.nan),
                     'rv850max': float(np.nan),
                     'rv700max': float(np.nan),
-                    'rmw': np.round(row['Radius_Max_Wind'], round_float_places),
+                    'rmw': float(np.round(row['Radius_Max_Wind'], round_float_places)),
                     'cps_b': float(np.nan),
                     'cps_vtl': float(np.nan),
                     'cps_vtu': float(np.nan),
@@ -1215,8 +1218,8 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
                     'wind_radii_34': wind_radii_34,
                     'wind_radii_50': wind_radii_50,
                     'wind_radii_64': wind_radii_64,
-                    'lat_max_wind': np.round(row['Lat_of_Max_Wind'], round_float_places),
-                    'lon_max_wind': np.round(row['Lon_of_Max_Wind'], round_float_places),
+                    'lat_max_wind': float(np.round(row['Lat_of_Max_Wind'], round_float_places)),
+                    'lon_max_wind': float(np.round(row['Lon_of_Max_Wind'], round_float_places)),
                     'criteria': {'all': True}
                 }
 
@@ -1265,10 +1268,10 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
                     roci = float(np.nan)
 
                 # only NEQ34 is seen...
-                wind_radii = [np.round(row['NE_Radius'], round_float_places),
-                              np.round(row['SE_Radius'], round_float_places),
-                              np.round(row['SW_Radius'], round_float_places),
-                              np.round(row['NW_Radius'], round_float_places)]
+                wind_radii = [float(np.round(row['NE_Radius'], round_float_places)),
+                              float(np.round(row['SE_Radius'], round_float_places)),
+                              float(np.round(row['SW_Radius'], round_float_places)),
+                              float(np.round(row['NW_Radius'], round_float_places))]
                 radii_speed = int(row['Threshold_Wind_Speed'])
                 # this will be wind_radii_34, fill in missing columns
                 wind_radii_col_name = f'wind_radii_{radii_speed}'
@@ -1279,24 +1282,24 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
 
                 forecast_hour_dict = {
                     'mslp_value': float(np.round(mslp, round_float_places)),
-                    'lat': np.round(row['Lat_Signed'], round_float_places),
-                    'lon': np.round(row['Lon_Signed'], round_float_places),
+                    'lat': float(np.round(row['Lat_Signed'], round_float_places)),
+                    'lon': float(np.round(row['Lon_Signed'], round_float_places)),
                     'basin': row['Basin'],
                     'named': row['Named_Storm'],
                     'invest': row['Invest'],
                     'atcf_id': atcf_id,
-                    'vmax10m_in_roci': np.round(row['Max_10m_Wind'], 1),
-                    'roci': np.round(roci, 0),
-                    'closed_isobar_delta': closed_isobar_delta,
-                    'rv850max': row['Max_850hPa_Vorticity'],
-                    'rv700max': row['Max_700hPa_Vorticity'],
-                    'rmw': np.round(row['Radius_Max_Wind'], 0),
-                    'cps_b': np.round(row['Phase_Space_Parameter_B'], round_float_places),
-                    'cps_vtl': np.round(row['Thermal_Wind_Lower_Troposphere'], round_float_places),
-                    'cps_vtu': np.round(row['Thermal_Wind_Lower_Troposphere'], round_float_places),
+                    'vmax10m_in_roci': float(np.round(row['Max_10m_Wind'], 1)),
+                    'roci': float(np.round(roci, 0)),
+                    'closed_isobar_delta': float(closed_isobar_delta),
+                    'rv850max': float(row['Max_850hPa_Vorticity']),
+                    'rv700max': float(row['Max_700hPa_Vorticity']),
+                    'rmw': float(np.round(row['Radius_Max_Wind'], 0)),
+                    'cps_b': float(np.round(row['Phase_Space_Parameter_B'], round_float_places)),
+                    'cps_vtl': float(np.round(row['Thermal_Wind_Lower_Troposphere'], round_float_places)),
+                    'cps_vtu': float(np.round(row['Thermal_Wind_Lower_Troposphere'], round_float_places)),
                     'warm_core': warm_core,
-                    'storm_direction': np.round(row['Storm_Moving_Direction'], round_float_places),
-                    'storm_speed': np.round(row['Storm_Moving_Speed'], round_float_places),
+                    'storm_direction': float(np.round(row['Storm_Moving_Direction'], round_float_places)),
+                    'storm_speed': float(np.round(row['Storm_Moving_Speed'], round_float_places)),
                     wind_radii_col_name: wind_radii,
                     wind_radii_col_missing1: None,
                     wind_radii_col_missing2: None,
@@ -1568,7 +1571,7 @@ def read_tc_bufr_to_df(file_path):
                     value = wind_radii[col_name][n]
                     if value is None or (value is not None and (np.isnan(value) or value < -99)):
                         value = np.nan
-                    row[col_name] = np.round(np.float32(value), 0)
+                    row[col_name] = float(np.round(np.float32(value), 0))
 
                 #for col_name in wind_radii.keys():
                 #    row[col_name] = np.int32(wind_radii[col_name][n])
