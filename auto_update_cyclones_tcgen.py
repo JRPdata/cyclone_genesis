@@ -1277,7 +1277,7 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
                 radii_speed = int(row['Threshold_Wind_Speed'])
                 # this will be wind_radii_34, fill in missing columns
                 wind_radii_col_name = f'wind_radii_{radii_speed}'
-                missing_speeds = ({34, 50, 64}) - {radii_speed})
+                missing_speeds = list({34, 50, 64} - {radii_speed})
                 # fill in None so we have same number of wind radii as EPS
                 wind_radii_col_missing1 = missing_speeds[0]
                 wind_radii_col_missing2 = missing_speeds[1]
@@ -1501,32 +1501,32 @@ def read_tc_bufr_to_df(file_path):
                     wind_radii[col_name] = wind_in_quad
 
             # Loop over the fetched lists to construct rows
-            for i in range(len(memberNumber)):
+            for n in range(len(memberNumber)):
                 valid_lat_lon = True
-                row_lat = lats[i]
+                row_lat = lats[n]
                 if row_lat is None or (row_lat is not None and (np.isinf(row_lat) or row_lat < -500)):
                     row_lat = np.nan
                     valid_lat_lon = False
 
-                row_lon = lons[i]
+                row_lon = lons[n]
                 if row_lon is None or (row_lon is not None and (np.isinf(row_lon) or row_lon < -500)):
                     row_lon = np.nan
                     valid_lat_lon = False
 
                 valid_lat_lon_vmax = True
-                row_lat_vmax = lat_vmax[i]
+                row_lat_vmax = lat_vmax[n]
                 if row_lat_vmax is None or (row_lat_vmax is not None and (np.isinf(row_lat_vmax) or row_lat_vmax < -500)):
                     row_lat_vmax = np.nan
                     valid_lat_lon_vmax = False
 
-                row_lon_vmax = lon_vmax[i]
+                row_lon_vmax = lon_vmax[n]
                 if row_lon_vmax is None or (row_lon_vmax is not None and (np.isinf(row_lon_vmax) or row_lon_vmax < -500)):
                     row_lon_vmax = np.nan
                     valid_lat_lon_vmax = False
 
                 rmw = float(0)
-                if i not in last_basin_names:
-                    last_basin_names[i] = basin_name
+                if n not in last_basin_names:
+                    last_basin_names[n] = basin_name
                 if valid_lat_lon:
                     if valid_lat_lon_vmax:
                         az12, az21, rmw = g.inv(row_lon, row_lat, row_lon_vmax, row_lat_vmax)
@@ -1536,15 +1536,15 @@ def read_tc_bufr_to_df(file_path):
                             rmw = float(np.round(rmw, 0))
                     basin_name_new = get_basin_name_from_lat_lon(row_lat, row_lon)
                     if basin_name_new is not None:
-                        last_basin_names[i] = basin_name_new
+                        last_basin_names[n] = basin_name_new
 
-                member_basin_name = last_basin_names[i]
+                member_basin_name = last_basin_names[n]
 
-                min_mslp = mslp[i]
+                min_mslp = mslp[n]
                 if np.isnan(min_mslp) or np.isinf(min_mslp) or min_mslp < -99:
                     min_mslp = np.nan
 
-                vmax = vmax10m[i]
+                vmax = vmax10m[n]
                 if np.isnan(vmax) or np.isinf(vmax) or vmax < -99:
                     vmax = np.nan
 
@@ -1552,12 +1552,12 @@ def read_tc_bufr_to_df(file_path):
                     'Storm_Name': long_storm_name,
                     "Short_Storm_ID": short_storm_id,
                     'ATCF_ID': atcf_id,
-                    'Model_ATCF_Name': model_names[i],
+                    'Model_ATCF_Name': model_names[n],
                     'Model_Init_Time': pd.Timestamp(year, month, day, hour, minute),
                     'Model_Valid_Time': pd.Timestamp(year, month, day, hour, minute) + pd.Timedelta(hours=timePeriod),
                     'Forecast_Hour': np.int32(int(np.round(timePeriod))),
                     'Named_Storm': is_named_storm,
-                    'Member_Num': np.int16(memberNumber[i]),
+                    'Member_Num': np.int16(memberNumber[n]),
                     'Lat': np.float32(row_lat),
                     'Lon': np.float32(row_lon),
                     'Basin': member_basin_name,
@@ -1570,13 +1570,13 @@ def read_tc_bufr_to_df(file_path):
                 }
 
                 for col_name in wind_radii.keys():
-                    value = wind_radii[col_name][i]
+                    value = wind_radii[col_name][n]
                     if value is None or (value is not None and (np.isnan(value) or value < -99)):
                         value = np.nan
                     row[col_name] = np.round(np.float32(value), 0)
 
                 #for col_name in wind_radii.keys():
-                #    row[col_name] = np.int32(wind_radii[col_name][i])
+                #    row[col_name] = np.int32(wind_radii[col_name][n])
                 rows.append(row)
 
         cnt += 1
