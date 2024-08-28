@@ -1,0 +1,33 @@
+# tcviewer
+shapely~=2.0.5
+future~=0.18.2
+requests~=2.31.0
+# cartopy 0.23 is glitched for axes
+Cartopy=0.22.0
+numpy~=1.23.5
+geopandas~=0.14.0
+matplotlib~=3.6.3
+Pillow~=9.5.0
+Rtree~=1.1.0
+python-dateutil~=2.8.2
+netCDF4~=1.6.4
+easyocr~=1.7.1
+xarray~=2023.5.0
+ipython~=8.12.0
+scikit-learn~=1.2.2
+scipy~=1.10.1
+pygrib~=2.1.4
+MetPy~=1.5.1
+pyproj~=3.6.0
+metview~=1.14.0
+networkx~=3.1
+ipyleaflet~=0.17.4
+ipywidgets~=7.8.1
+bs4~=0.0.1
+beautifulsoup4~=4.8.2
+# auto_update_cyclones_tcgen
+pytz>=2020.4
+colorspacious>=1.1.2
+geopy>=2.4.1
+pandas>=2.0.2
+eccodes>=1.6.0
