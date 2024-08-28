@@ -1,4 +1,3 @@
-timestamp_test = '2024082800'
 # EXPERIMENTAL
 # Work in progress (do not use)
 
@@ -39,14 +38,14 @@ gfdl_basin_to_atcf_basin = {
 prune_disturbances_without_warm_core = True
 
 # Cache size for get_basin_name_from_lat_lon (use a power of 2)
-# It is number of entries, not bytes; this may need to be made smaller if run out of memory)
+# It is number of entries, not bytes; this may need to be made smaller if run out of memory
 cache_size = 1048576
 # Here is the memory usage for a few different lru cache sizes based on a test:
 # Cache size: 65536, Memory usage: 2.75 MB
 # Cache size: 1048576, Memory usage: 44.00 MB
 # Cache size: 16777216, Memory usage: 704.00 MB
 
-# round some of the floats to 4 decimal places (lat, lon, mslp, rmw, moving_speed, direction, cps paramaters)
+# round some of the floats to 4 decimal places (lat, lon, mslp, rmw, moving_speed, direction, cps parameters)
 round_float_places = 4
 
 # show start,end,max info for each TC for each member
@@ -62,12 +61,6 @@ debug_calc_exec_time = False
 write_graphs = False
 
 graphs_folder = '/home/db/Documents/JRPdata/cyclone-genesis/graphs'
-
-# save disturbance maps
-save_disturbance_maps = False
-
-# save disturbance maps
-save_tc_maps = False
 
 import json
 import pygrib
@@ -132,6 +125,8 @@ total_model_members_by_time_step = {
     }
 }
 
+# 128 members in this super-ensemble
+# Deterministic, control and perturbation members of the ensembles
 gefs_members = ['GFSO', 'AC00', 'AP01', 'AP02', 'AP03', 'AP04', 'AP05', 'AP06', 'AP07', 'AP08', 'AP09', 'AP10', 'AP11', 'AP12', 'AP13', 'AP14', 'AP15', 'AP16', 'AP17', 'AP18', 'AP19', 'AP20', 'AP21', 'AP22', 'AP23', 'AP24', 'AP25', 'AP26', 'AP27', 'AP28', 'AP29', 'AP30']
 geps_members = ['CMC', 'CC00', 'CP01', 'CP02', 'CP03', 'CP04', 'CP05', 'CP06', 'CP07', 'CP08', 'CP09', 'CP10', 'CP11', 'CP12', 'CP13', 'CP14', 'CP15', 'CP16', 'CP17', 'CP18', 'CP19', 'CP20']
 eps_members = ['ECHR', 'ECME', 'EE01', 'EE02', 'EE03', 'EE04', 'EE05', 'EE06', 'EE07', 'EE08', 'EE09', 'EE10', 'EE11', 'EE12', 'EE13', 'EE14', 'EE15', 'EE16', 'EE17', 'EE18', 'EE19', 'EE20', 'EE21', 'EE22', 'EE23', 'EE24', 'EE25', 'EE26', 'EE27', 'EE28', 'EE29', 'EE30', 'EE31', 'EE32', 'EE33', 'EE34', 'EE35', 'EE36', 'EE37', 'EE38', 'EE39', 'EE40', 'EE41', 'EE42', 'EE43', 'EE44', 'EE45', 'EE46', 'EE47', 'EE48', 'EE49', 'EE50']
@@ -192,7 +187,7 @@ old_tc_maps = []
 meters_to_knots = 1.943844
 
 gfdl_column_names = [
-    "Track Type",  # Column 1 (Either TG (tc genesis), ML (mid latitude tc genesis), HC (no basin), or Basin (AL, WP, SI, etc) (not very useful)
+    "Track Type",  # Column 1 (Either TG (tc genesis), ML (mid-latitude tc genesis), HC (no basin), or Basin (AL, WP, SI, etc.) (not very useful)
     "Num_Cyclogenesis",  # Column 2 (Also a short version of ATCF ID for invests/named storms)
     "Cyclogenesis_ID",  # Column 3
     "Model_Init_Time",  # Column 4 (fort.64 Column 3)
@@ -743,7 +738,7 @@ def process_and_simplify_graph(graph):
                     for node in segment_nodes:
                         color_by_nodes[node] = nx_split_color
 
-                    segment_first_valid_time = not_connected_segment[0]
+                    #segment_first_valid_time = not_connected_segment[0]
                     segment_last_valid_time = not_connected_segment[-1]
                     #segment_first_index = node_valid_times.index(segment_first_valid_time)
                     segment_last_index = node_valid_times.index(segment_last_valid_time)
@@ -1255,7 +1250,7 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
                             criteria = False
 
                 # Prune disturbances by warm core and MSLP
-                # For MSLP ave to have at least 2 hPa difference between storm MSLP and POUTER)
+                # For MSLP ave to have at least 2 hPa difference between storm MSLP and POUTER
                 if not criteria:
                     continue
 
@@ -1318,7 +1313,7 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
 
     return disturbance
 
-# sometimes we get a scalar instead of an array when all of the values are the same
+# sometimes we get a scalar instead of an array when all the values are the same
 def fill_array_from_scalar(array, num):
     if array.shape[0] == num:
         return array
@@ -1438,7 +1433,7 @@ def read_tc_bufr_to_df(file_path):
         model_names = []
         for i in range(len(memberNumber)):
             if ensembleForecastType[i] == 4:
-                # Perturbatin member
+                # Perturbation member
                 mem_num = memberNumber[i]
                 model_names.append(f'EE{mem_num:02d}')
             elif ensembleForecastType[i] == 1:
@@ -1599,8 +1594,6 @@ def get_disturbances_from_gfdl_txt_files(ensemble_model_name, model_files_by_sta
     disturbances = []
 
     for model_timestamp, model_file_paths in model_files_by_stamp.items():
-        if model_timestamp != timestamp_test:
-            continue
         model_member_re = re.compile(model_member_re_str_by_model_name[ensemble_model_name])
         for model_file_path in model_file_paths:
             f = os.path.basename(model_file_path)
@@ -1629,8 +1622,6 @@ def get_disturbances_from_bufr_files(ensemble_model_name, model_files_by_stamp):
     # for EPS we have to first process all the dfs in a directory (a specific model init time)
     # then we have to merge the dfs and then split by model member to process each member's tracks
     for model_timestamp, model_file_paths in model_files_by_stamp.items():
-        if model_timestamp != timestamp_test:
-            continue
         # match whether this is the deterministic or the ensemble model
         model_type_re = re.compile(model_member_re_str_by_model_name[ensemble_model_name])
         eps_dfs = []
@@ -1710,7 +1701,7 @@ def get_all_disturbances_sorted_by_timestamp(ensemble_status_dicts):
     # as above but excluding partial directories (used to keep track of complete folders)
     complete_file_paths_by_model_name_and_timestamp = {}
     # get all relevant files first
-    # we use model name here but we mean ensemble name
+    # we use model name here, but we mean ensemble name
     for is_partial, folders_by_model_name in enumerate([
         completed_folders_by_model_name, partial_folders_by_model_name]):
         for model_name, model_folders in folders_by_model_name.items():
@@ -1742,7 +1733,7 @@ def get_all_disturbances_sorted_by_timestamp(ensemble_status_dicts):
                         if is_partial == 0:
                             if model_name not in complete_file_paths_by_model_name_and_timestamp:
                                 complete_file_paths_by_model_name_and_timestamp[model_name] = {}
-                            complete_file_paths_by_model_name_and_timestamp[model_name][model_timestamp] = model_file_paths_by_timestamp
+                            complete_file_paths_by_model_name_and_timestamp[model_name][model_timestamp] = model_file_paths
 
             if model_file_paths_by_timestamp:
                 model_file_paths_by_model_name_and_timestamp[model_name] = model_file_paths_by_timestamp
