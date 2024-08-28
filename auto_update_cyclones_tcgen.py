@@ -1,8 +1,5 @@
-test_timestamp = '2024082800'
 # EXPERIMENTAL
 # Work in progress (do not use)
-
-# TODO FIND COMPLETED _TCGEN_ FOLDERS by _COMPLETE_ subdirectory
 
 # Process TCGEN products from NCEP (ensemble GFDL tracker) and ECMWF into a SQL db (for tcviewer)
 
@@ -50,6 +47,12 @@ cache_size = 1048576
 
 # round some of the floats to 4 decimal places (lat, lon, mslp, rmw, moving_speed, direction, cps paramaters)
 round_float_places = 4
+
+# show start,end,max info for each TC for each member
+verbose_print = False
+
+# show file paths being processed
+print_file_paths = True
 
 # output calculation timing for debugging & optimization
 debug_calc_exec_time = False
@@ -131,26 +134,16 @@ total_model_members_by_time_step = {
     }
 }
 
-model_members_by_model_and_timestep = {
-    'EPS-TCGEN': {
-        '00': ['A_JSXX'],
-        '12': ['A_JSXX']
-    },
-    'GEFS-TCGEN': {
-        '00': ['gfso', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30'],
-        '06': ['gfso', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30'],
-        '12': ['gfso', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30'],
-        '18': ['gfso', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30']
-    },
-    'GEPS-TCGEN': {
-        '00': ['cmc', 'cc00', 'cp01', 'cp02', 'cp03', 'cp04', 'cp05', 'cp06', 'cp07', 'cp08', 'cp09', 'cp10', 'cp11', 'cp12', 'cp13', 'cp14', 'cp15', 'cp16', 'cp17', 'cp18', 'cp19', 'cp20'],
-        '12': ['cmc', 'cc00', 'cp01', 'cp02', 'cp03', 'cp04', 'cp05', 'cp06', 'cp07', 'cp08', 'cp09', 'cp10', 'cp11', 'cp12', 'cp13', 'cp14', 'cp15', 'cp16', 'cp17', 'cp18', 'cp19', 'cp20']
-    },
-    'FNMOC-TCGEN': {
-        '00': ['ngx', 'nc00', 'np01', 'np02', 'np03', 'np04', 'np05', 'np06', 'np07', 'np08', 'np09', 'np10', 'np11', 'np12', 'np13', 'np14', 'np15', 'np16', 'np17', 'np18', 'np19', 'np20'],
-        '12': ['ngx', 'nc00', 'np01', 'np02', 'np03', 'np04', 'np05', 'np06', 'np07', 'np08', 'np09', 'np10', 'np11', 'np12', 'np13', 'np14', 'np15', 'np16', 'np17', 'np18', 'np19', 'np20']
-    }
-}
+gefs_members = ['GFSO', 'AC00', 'AP01', 'AP02', 'AP03', 'AP04', 'AP05', 'AP06', 'AP07', 'AP08', 'AP09', 'AP10', 'AP11', 'AP12', 'AP13', 'AP14', 'AP15', 'AP16', 'AP17', 'AP18', 'AP19', 'AP20', 'AP21', 'AP22', 'AP23', 'AP24', 'AP25', 'AP26', 'AP27', 'AP28', 'AP29', 'AP30']
+geps_members = ['CMC', 'CC00', 'CP01', 'CP02', 'CP03', 'CP04', 'CP05', 'CP06', 'CP07', 'CP08', 'CP09', 'CP10', 'CP11', 'CP12', 'CP13', 'CP14', 'CP15', 'CP16', 'CP17', 'CP18', 'CP19', 'CP20']
+eps_members = ['ECHR', 'ECME', 'EE01', 'EE02', 'EE03', 'EE04', 'EE05', 'EE06', 'EE07', 'EE08', 'EE09', 'EE10', 'EE11', 'EE12', 'EE13', 'EE14', 'EE15', 'EE16', 'EE17', 'EE18', 'EE19', 'EE20', 'EE21', 'EE22', 'EE23', 'EE24', 'EE25', 'EE26', 'EE27', 'EE28', 'EE29', 'EE30', 'EE31', 'EE32', 'EE33', 'EE34', 'EE35', 'EE36', 'EE37', 'EE38', 'EE39', 'EE40', 'EE41', 'EE42', 'EE43', 'EE44', 'EE45', 'EE46', 'EE47', 'EE48', 'EE49', 'EE50']
+fnmoc_members = ['NGX', 'NC00', 'NP01', 'NP02', 'NP03', 'NP04', 'NP05', 'NP06', 'NP07', 'NP08', 'NP09', 'NP10', 'NP11', 'NP12', 'NP13', 'NP14', 'NP15', 'NP16', 'NP17', 'NP18', 'NP19', 'NP20']
+
+# Create a dictionary to map short strings to list names
+model_name_to_ensemble_name = {}
+for list_name, lst in zip(['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN'], [gefs_members, geps_members, eps_members, fnmoc_members]):
+    for model_name in lst:
+        model_name_to_ensemble_name[model_name] = list_name
 
 # number of files expected per time-step (or member for tcgen)
 expected_num_grib_files_by_model_name = {
@@ -412,32 +405,38 @@ def get_basin_name_from_lat_lon(lat, lon):
 #########################################################
 
 def get_unprocessed_disturbance_model_runs():
-    #TODO: need to create _PROCESSED_ folders still somehow, somewhere
+    ensemble_status_dicts = get_num_files_processed_in_ensembles()
     # Sort the data from disturbances
-    sorted_data = get_all_disturbances_sorted_by_timestamp()
+    sorted_data, model_file_paths_by_model_name_and_timestamp, complete_file_paths_by_model_name_and_timestamp = get_all_disturbances_sorted_by_timestamp(ensemble_status_dicts)
 
     if not sorted_data:
-        return []
+        return [], {}, {}
 
     tc_completed_by_model_name = get_model_timestamp_of_completed_tc_by_model_name()
     unprocessed_data = []
     for entry in sorted_data:
         model_name = entry['model_name']
-        model_time_stamp = entry['model_timestamp']
+        ensemble_name = entry['ensemble_name']
+        model_timestamp = entry['model_timestamp']
         if model_name in tc_completed_by_model_name:
-            if model_time_stamp in tc_completed_by_model_name[model_name]:
-                continue
+            if model_timestamp in tc_completed_by_model_name[model_name]:
+                # check first to make sure if we want to reprocess a folder (previously only partially complete)
+                if ensemble_name in ensemble_status_dicts and \
+                    model_timestamp in ensemble_status_dicts[ensemble_name] and \
+                    model_file_paths_by_model_name_and_timestamp[ensemble_name][model_timestamp] == ensemble_status_dicts[ensemble_name][model_timestamp]:
+                    continue
         unprocessed_data.append(entry)
 
-    return unprocessed_data
+    return unprocessed_data, model_file_paths_by_model_name_and_timestamp, complete_file_paths_by_model_name_and_timestamp
 
 def calc_tc_candidates():
-    unprocessed_data = get_unprocessed_disturbance_model_runs()
+    unprocessed_data, model_file_paths_by_model_name_and_timestamp, complete_file_paths_by_model_name_and_timestamp = get_unprocessed_disturbance_model_runs()
     if len(unprocessed_data) == 0:
         return
-    print("Calculate TC candidates (and simplified tracks)")
-    print(f"# Model runs to process: {len(unprocessed_data)}")
-    print("")
+    if verbose_print:
+        print("Calculate TC candidates (and simplified tracks)")
+        print(f"# Model runs to process: {len(unprocessed_data)}")
+        print("")
     for row in unprocessed_data:
         graph = create_graph_and_add_candidates(row)
         connect_graph_colocated(graph)
@@ -445,8 +444,12 @@ def calc_tc_candidates():
         remove_disturbances_not_meeting_time_criteria(graph)
         process_and_simplify_graph(graph)
 
-    print("")
-    print("Completed all model runs.")
+    if verbose_print:
+        print("")
+        print("Completed all model runs.")
+
+    # Update processed
+    update_ensemble_status(model_file_paths_by_model_name_and_timestamp, complete_file_paths_by_model_name_and_timestamp)
 
 # connect nodes at same timestep that are colocated
 def connect_graph_colocated(graph):
@@ -576,10 +579,11 @@ def process_and_simplify_graph(graph):
     g = Geod(ellps='WGS84')
 
     has_error = False
-    print("")
-    print("=========================")
-    print(graph.graph['name'])
-    print("=========================")
+    if verbose_print:
+        print("")
+        print("=========================")
+        print(graph.graph['name'])
+        print("=========================")
 
     model_name = graph.graph['model_name']
     init_time = graph.graph['init_time']
@@ -901,11 +905,14 @@ def process_and_simplify_graph(graph):
     components.sort(key=get_first_node_valid_time)
     #components_were_modified = True
     if len(components) != num_components:
-        print(f"# components (before separation): {num_components}")
+        if verbose_print:
+            print(f"# components (before separation): {num_components}")
         num_components = len(components)
-        print(f"# components (after separation): {num_components}")
+        if verbose_print:
+            print(f"# components (after separation): {num_components}")
     else:
-        print(f"# components: {num_components}")
+        if verbose_print:
+            print(f"# components: {num_components}")
 
     for i, component in enumerate(components):
         nodes_by_valid_time = {}
@@ -942,18 +949,22 @@ def process_and_simplify_graph(graph):
 
         first_valid_time = graph.nodes[first_node]["valid_time"]
         last_valid_time = graph.nodes[last_node]["valid_time"]
-        print(f"  Start Valid Time: {first_valid_time}")
-        print_candidates([graph.nodes[first_node]["data"]], no_numbering=True)
-        print(f"  Last Valid Time: {last_valid_time}")
-        print_candidates([graph.nodes[last_node]["data"]], no_numbering=True)
+        if verbose_print:
+            print(f"  Start Valid Time: {first_valid_time}")
+            print_candidates([graph.nodes[first_node]["data"]], no_numbering=True)
+            print(f"  Last Valid Time: {last_valid_time}")
+            print_candidates([graph.nodes[last_node]["data"]], no_numbering=True)
 
         max_10m_wind_speed = None
         if max_10m_wind_speed_node is not None:
             max_10m_wind_speed_valid_time = graph.nodes[max_10m_wind_speed_node]["valid_time"]
-            print(f"  Max 10m Wind Speed Valid Time: {max_10m_wind_speed_valid_time}")
-            print_candidates([graph.nodes[max_10m_wind_speed_node]["data"]], no_numbering=True)
+            if verbose_print:
+                print(f"  Max 10m Wind Speed Valid Time: {max_10m_wind_speed_valid_time}")
+                print_candidates([graph.nodes[max_10m_wind_speed_node]["data"]], no_numbering=True)
             max_10m_wind_speed = float(graph.nodes[max_10m_wind_speed_node]["data"]['vmax10m_in_roci'])
-        print("")
+
+        if verbose_print:
+            print("")
 
         # recover candidate data via simplified_nodes_by_valid_time
         tc_disturbance_candidates = []
@@ -968,13 +979,16 @@ def process_and_simplify_graph(graph):
         has_error = has_error or ret
 
     if num_removed_nodes:
-        print('# Removed nodes: ', num_removed_nodes)
+        if verbose_print:
+            print('# Removed nodes: ', num_removed_nodes)
 
     if num_removed_next_edges:
-        print('# Removed Next Edges: ', num_removed_next_edges)
+        if verbose_print:
+            print('# Removed Next Edges: ', num_removed_next_edges)
 
     if num_removed_colocated_edges:
-        print('# Removed Colocated Edges: ', num_removed_colocated_edges)
+        if verbose_print:
+            print('# Removed Colocated Edges: ', num_removed_colocated_edges)
 
     # mark model run completed if no errors
     if not has_error:
@@ -985,7 +999,8 @@ def process_and_simplify_graph(graph):
     if write_graphs:
         nx.write_gexf(graph, file_graph_path, encoding="utf-8", prettyprint=True)
 
-    print("")
+    if verbose_print:
+        print("")
 
 # returns completed and partial model folders (partial to get EPS-HRES early)
 def get_completed_unprocessed_model_folders_by_model_name():
@@ -1000,11 +1015,9 @@ def get_completed_unprocessed_model_folders_by_model_name():
         for root, dirs, files in os.walk(model_base_dir):
             for dir in dirs:
                 if os.path.exists(os.path.join(root, dir, '_COMPLETE_')):
-                    if not os.path.exists(os.path.join(root, dir, '_PROCESSED_')):
-                        model_dirs.append(os.path.join(root, dir))
+                    model_dirs.append(os.path.join(root, dir))
                 elif model_name == 'EPS-TCGEN':
-                    if not os.path.exists(os.path.join(root, dir, '_PROCESSED_')):
-                        partial_model_dirs.append(os.path.join(root, dir))
+                    partial_model_dirs.append(os.path.join(root, dir))
             # walk only the top level
             dirs.clear()
         if model_dirs:
@@ -1048,8 +1061,8 @@ def get_model_file_paths(model_dir, is_complete):
 #   Pressure of last closed isobar also seems problematic (GFDL at 977; mine at 1112, tcvitals environmental pressure at 1112 also)
 # Convert most units to metric (excepting threshold wind speed for wind radii 34/50/64)
 def read_gdfl_txt_file_to_df(model_file_path):
-    #TODO: REMOVE
-    print(model_file_path)
+    if print_file_paths:
+        print('            ', model_file_path)
     kt_to_ms = 0.514444
     nmi_to_meters = 1852.0
 
@@ -1168,7 +1181,6 @@ def read_gdfl_txt_file_to_df(model_file_path):
     return df
 
 def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
-    #TODO handle cases for GEFS,GEPS,FNMOC_ENS and EPS (HRES, control and perturbation members)
     # a row is all the disturbances generated by that model
     #  the main keys are the model forecast hour, and the value is a list of dicts
     #  each dict is then a point for that hour for each track
@@ -1183,7 +1195,6 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
 
     if ensemble_model_name == "EPS-TCGEN":
         # EPS dataframe has different data, structure
-        #TODO: check
         data = dict()
 
         for forecast_hour, tc_df in df.groupby('Forecast_Hour'):
@@ -1336,8 +1347,8 @@ def fill_array_from_scalar(array, num):
 # [2] https://confluence.ecmwf.int/display/FCST/Update+to+Tropical+Cyclone+tracks
 # https://confluence.ecmwf.int/display/FCST/New+Tropical+Cyclone+Wind+Radii+product
 def read_tc_bufr_to_df(file_path):
-    #TODO: REMOVE
-    print(file_path)
+    if print_file_paths:
+        print('            ', file_path)
     # developed in ecmwf_bufr_dev.ipynb notebook (referenced ECMWF code above)
     # open BUFR file
     f = open(file_path, 'rb')
@@ -1608,10 +1619,6 @@ def get_disturbances_from_gfdl_txt_files(ensemble_model_name, model_files_by_sta
     disturbances = []
 
     for model_timestamp, model_file_paths in model_files_by_stamp.items():
-        #TODO: REMOVE
-        # test only eps
-        if model_timestamp != test_timestamp:
-            continue
         model_member_re = re.compile(model_member_re_str_by_model_name[ensemble_model_name])
         for model_file_path in model_file_paths:
             f = os.path.basename(model_file_path)
@@ -1641,9 +1648,6 @@ def get_disturbances_from_bufr_files(ensemble_model_name, model_files_by_stamp):
     # for EPS we have to first process all the dfs in a directory (a specific model init time)
     # then we have to merge the dfs and then split by model member to process each member's tracks
     for model_timestamp, model_file_paths in model_files_by_stamp.items():
-        #TODO: REMOVE
-        if model_timestamp != test_timestamp:
-            continue
         # match whether this is the deterministic or the ensemble model
         model_type_re = re.compile(model_member_re_str_by_model_name[ensemble_model_name])
         eps_dfs = []
@@ -1710,17 +1714,20 @@ def get_disturbances_from_bufr_files(ensemble_model_name, model_files_by_stamp):
 
     return disturbances
 
-# returns all disturbances (a list of disturbance dicts, sorted by model init timestamp) for completed model runs ONLY
-def get_all_disturbances_sorted_by_timestamp():
+# returns all disturbances (a list of disturbance dicts, sorted by model init timestamp) for unprocessed runs
+def get_all_disturbances_sorted_by_timestamp(ensemble_status_dicts):
     # get completed model folders first (not processed yet)
     # ECM HRES should be an exception as it is separate from genesis
     # i.e.  files named *JSXXnnECMF* are HRES and completed earlier than the ensemble members!
     completed_folders_by_model_name, partial_folders_by_model_name = get_completed_unprocessed_model_folders_by_model_name()
     if not completed_folders_by_model_name and not partial_folders_by_model_name:
-        return []
+        return [], {}, {}
 
     model_file_paths_by_model_name_and_timestamp = {}
+    # as above but excluding partial directories (used to keep track of complete folders)
+    complete_file_paths_by_model_name_and_timestamp = {}
     # get all relevant files first
+    # we use model name here but we mean ensemble name
     for is_partial, folders_by_model_name in enumerate([
         completed_folders_by_model_name, partial_folders_by_model_name]):
         for model_name, model_folders in folders_by_model_name.items():
@@ -1739,10 +1746,20 @@ def get_all_disturbances_sorted_by_timestamp():
                 if model_file_paths:
                     model_file_paths_by_timestamp[model_timestamp] = model_file_paths
             if model_file_paths_by_timestamp:
-                model_file_paths_by_model_name_and_timestamp[model_name] = model_file_paths_by_timestamp
+                # check here whether we should skip (processed same exact number of files already)
+                if ensemble_status_dicts and model_name in ensemble_status_dicts and model_timestamp in ensemble_status_dicts[model_name]:
+                    num_files_processed = ensemble_status_dicts[model_name][model_timestamp]
+                else:
+                    num_files_processed = 0
+                # either process a new directory, or reprocess a directory that has new files (all files reprocessed)
+                # the number of components (tracks) in the candidates table should not decrease so it should be fine
+                if num_files_processed != len(model_file_paths_by_timestamp[model_timestamp]):
+                    model_file_paths_by_model_name_and_timestamp[model_name] = model_file_paths_by_timestamp
+                    if is_partial == 0:
+                        complete_file_paths_by_model_name_and_timestamp[model_name] = model_file_paths_by_timestamp
 
     if not model_file_paths_by_model_name_and_timestamp:
-        return []
+        return [], {}, {}
 
     disturbances = []
     for model_name, model_files_by_timestamp in model_file_paths_by_model_name_and_timestamp.items():
@@ -1763,7 +1780,8 @@ def get_all_disturbances_sorted_by_timestamp():
 
     sorted_disturbances = sorted(disturbances, key=lambda x: x["model_timestamp"])
 
-    return sorted_disturbances
+    # return also the files we have intermediately, but not completely processed
+    return sorted_disturbances, model_file_paths_by_model_name_and_timestamp, complete_file_paths_by_model_name_and_timestamp
 
 # Function to create graph for a model run (a row in disturbances database) and add candidates as nodes
 def create_graph_and_add_candidates(row):
@@ -1831,9 +1849,118 @@ def get_colocated_box_radii_bins(node1, node2, predefined_radii=[2]):
     else:
         return None
 
+# get dict of the completed ensembles (this only has the number of files processed)
+# dict of number of files processed by ensemble name and init date
+def get_num_files_processed_in_ensembles():
+    processed_ensembles_dicts = get_ensemble_status()
+    # create a dict by model_name from the rows
+    processed_ensembles_dicts_by_name = {}
+    if processed_ensembles_dicts:
+        for processed_ensembles_dict in processed_ensembles_dicts:
+            ensemble_name = processed_ensembles_dict['ensemble_name']
+            ensemble_init_date = processed_ensembles_dict['ensemble_init_date']
+            num_files_processed = processed_ensembles_dict['num_files_processed']
+            if ensemble_name not in processed_ensembles_dicts_by_name:
+                processed_ensembles_dicts_by_name[ensemble_name] = {}
+
+            processed_ensembles_dicts_by_name[ensemble_name][ensemble_init_date] = num_files_processed
+    return processed_ensembles_dicts_by_name
+
+# get status of how many files last processed for the ensembles
+def get_ensemble_status():
+    all_retrieved_data = []  # List to store data from all rows
+    conn = None
+    try:
+        # Connect to the SQLite database
+        conn = sqlite3.connect(tc_candidates_db_file_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ens_status (
+                id INTEGER PRIMARY KEY,
+                ensemble_name TEXT,
+                init_date TEXT,
+                num_files_processed INTEGER,
+                expected_num_files_processed INTEGER,
+                completed INTEGER,
+                UNIQUE(ensemble_name, init_date)
+            )
+        ''')
+
+        cursor.execute('SELECT ensemble_name, init_date, num_files_processed FROM ens_status ORDER BY init_date')
+        results = cursor.fetchall()
+        if results:
+            # Process data for each row
+            for row in results:
+                ensemble_name, ensemble_timestamp, num_files_processed = row
+                dt = datetime.fromisoformat(ensemble_timestamp)
+                init_date = dt.strftime('%Y%m%d%H')
+
+                retrieved_data = {
+                    "ensemble_name": ensemble_name,
+                    "ensemble_init_date": init_date,
+                    "num_files_processed": num_files_processed
+                }
+                all_retrieved_data.append(retrieved_data)
+
+    except sqlite3.Error as e:
+        print(f"SQLite error (get_completed_ensembles): {e}")
+    finally:
+        if conn:
+            conn.close()
+
+    return all_retrieved_data
+
+# store list of completed model runs in tc_candidates and tc_disturbances databases
+def update_ensemble_status(model_file_paths_by_model_name_and_timestamp, complete_file_paths_by_model_name_and_timestamp):
+    conn = None
+    try:
+        conn = sqlite3.connect(tc_candidates_db_file_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ens_status (
+                id INTEGER PRIMARY KEY,
+                ensemble_name TEXT,
+                init_date TEXT,
+                num_files_processed INTEGER,
+                expected_num_files_processed INTEGER,
+                completed INTEGER,
+                UNIQUE(ensemble_name, init_date)
+            )
+        ''')
+        # track ensemble status of files processed
+        for ensemble_name, file_paths_by_timestamp in model_file_paths_by_model_name_and_timestamp.items():
+            for model_init_time, file_paths in file_paths_by_timestamp.items():
+                dt = datetime.strptime(model_init_time, '%Y%m%d%H')
+                ensemble_timestamp = dt.isoformat()
+
+                cursor.execute('SELECT num_files_processed FROM ens_status WHERE ensemble_name = ? AND init_date = ?', (ensemble_name, ensemble_timestamp))
+                result = cursor.fetchone()
+                num_processed = len(file_paths)
+                if result is None or result != num_processed:
+                    expected_num = -1
+                    if ensemble_name in complete_file_paths_by_model_name_and_timestamp and \
+                        model_init_time in complete_file_paths_by_model_name_and_timestamp[ensemble_name]:
+                        expected_num = len(complete_file_paths_by_model_name_and_timestamp[ensemble_name][model_init_time])
+
+                    if expected_num == num_processed:
+                        completed = 1
+                        formatted_date = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        completed = 0
+                    cursor.execute('INSERT OR REPLACE INTO ens_status (ensemble_name, init_date, num_files_processed, expected_num_files_processed, completed) VALUES (?, ?, ?, ?, ?)', (ensemble_name, ensemble_timestamp, num_processed, expected_num, completed))
+                    conn.commit()
+                    if completed == 1:
+                        print(f"Completed {formatted_date} - {ensemble_name}")
+
+    except sqlite3.Error as e:
+        print(f"SQLite error (update_ensemble_status): {e}")
+    finally:
+        if conn:
+            conn.close()
+
 # get dict of the completed TC candidate (tracks) by model name
 def get_model_timestamp_of_completed_tc_by_model_name():
-    completed_tc_dicts = get_tc_completed()
+    completed_tc_dicts = get_completed_tc()
     # create a dict by model_name from the rows
     completed_tc_by_model_name = {}
     if completed_tc_dicts:
@@ -1847,7 +1974,7 @@ def get_model_timestamp_of_completed_tc_by_model_name():
     return completed_tc_by_model_name
 
 # get list of completed TC candidates (tracks)
-def get_tc_completed():
+def get_completed_tc():
     all_retrieved_data = []  # List to store data from all rows
     conn = None
     try:
@@ -1879,7 +2006,7 @@ def get_tc_completed():
                 all_retrieved_data.append(retrieved_data)
 
     except sqlite3.Error as e:
-        print(f"SQLite error (get_tc_completed): {e}")
+        print(f"SQLite error (get_completed_tc): {e}")
     finally:
         if conn:
             conn.close()
@@ -1930,6 +2057,7 @@ def add_tc_candidate(model_name, model_init_time, component_num, max_10m_wind_sp
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS tc_candidates (
                 id INTEGER PRIMARY KEY,
+                ensemble_name TEXT,
                 model_name TEXT,
                 data JSON,
                 init_date TEXT,
@@ -1959,10 +2087,12 @@ def add_tc_candidate(model_name, model_init_time, component_num, max_10m_wind_sp
             print(tc_disturbance_candidates)
             exit(1)
 
+        ensemble_name = model_name_to_ensemble_name[model_name]
+
         cursor.execute('SELECT component_id FROM tc_candidates WHERE model_name = ? AND init_date = ? AND component_id = ?', (model_name, model_init_time, component_num))
         result = cursor.fetchone()
         if not result:
-            cursor.execute('INSERT OR REPLACE INTO tc_candidates (model_name, data, init_date, component_id, start_time_step, start_valid_date, start_basin, start_lat, start_lon, ws_max_10m) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (model_name, json_data, model_init_time, component_num, start_time_step, start_valid_time, start_basin, start_lat, start_lon, max_10m_wind_speed))
+            cursor.execute('INSERT OR REPLACE INTO tc_candidates (ensemble_name, model_name, data, init_date, component_id, start_time_step, start_valid_date, start_basin, start_lat, start_lon, ws_max_10m) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', (ensemble_name, model_name, json_data, model_init_time, component_num, start_time_step, start_valid_time, start_basin, start_lat, start_lon, max_10m_wind_speed))
             conn.commit()
 
     except sqlite3.Error as e:
