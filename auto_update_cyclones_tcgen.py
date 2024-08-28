@@ -7,7 +7,7 @@
 # scale may be mixed between internal representations of data, thresholds, and printouts
 
 # this is for accessing by model and storm (internal component id)
-tc_candidates_db_file_path = 'tc_candidates_tcgen.db'
+tc_candidates_tcgen_db_file_path = 'tc_candidates_tcgen.db'
 
 # shape file for placing lat,lon in basins which we are classifying
 # each has an attr`ibute called 'basin_name', with CPAC & EPAC combined as EPAC
@@ -1855,7 +1855,7 @@ def get_ensemble_status():
     conn = None
     try:
         # Connect to the SQLite database
-        conn = sqlite3.connect(tc_candidates_db_file_path)
+        conn = sqlite3.connect(tc_candidates_tcgen_db_file_path)
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS ens_status (
@@ -1897,7 +1897,7 @@ def get_ensemble_status():
 def update_ensemble_status(model_file_paths_by_model_name_and_timestamp, complete_file_paths_by_model_name_and_timestamp):
     conn = None
     try:
-        conn = sqlite3.connect(tc_candidates_db_file_path)
+        conn = sqlite3.connect(tc_candidates_tcgen_db_file_path)
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS ens_status (
@@ -1962,7 +1962,7 @@ def get_completed_tc():
     conn = None
     try:
         # Connect to the SQLite database
-        conn = sqlite3.connect(tc_candidates_db_file_path)
+        conn = sqlite3.connect(tc_candidates_tcgen_db_file_path)
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS completed (
@@ -2000,7 +2000,7 @@ def get_completed_tc():
 def update_tc_completed(model_name, model_init_time):
     conn = None
     try:
-        conn = sqlite3.connect(tc_candidates_db_file_path)
+        conn = sqlite3.connect(tc_candidates_tcgen_db_file_path)
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS completed (
@@ -2035,7 +2035,7 @@ def add_tc_candidate(model_name, model_init_time, component_num, max_10m_wind_sp
     conn = None
     try:
         # store tc disturbance candidates in database by model name, component (storm) id, valid time (access by model/id/valid_time)
-        conn = sqlite3.connect(tc_candidates_db_file_path)
+        conn = sqlite3.connect(tc_candidates_tcgen_db_file_path)
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS tc_candidates (
