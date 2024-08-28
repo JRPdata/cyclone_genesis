@@ -1,5 +1,4 @@
-import cProfile
-
+test_timestamp = '2024082800'
 # EXPERIMENTAL
 # Work in progress (do not use)
 
@@ -49,6 +48,9 @@ cache_size = 1048576
 # Cache size: 1048576, Memory usage: 44.00 MB
 # Cache size: 16777216, Memory usage: 704.00 MB
 
+# round some of the floats to 4 decimal places (lat, lon, mslp, rmw, moving_speed, direction, cps paramaters)
+round_float_places = 4
+
 # output calculation timing for debugging & optimization
 debug_calc_exec_time = False
 
@@ -78,6 +80,8 @@ import re
 
 # cache results for calculating basin
 from functools import lru_cache
+
+import pytz
 
 import warnings
 
@@ -242,33 +246,8 @@ gfdl_column_names = [
 ########       CALCULATE DISTURBANCES            ########
 #########################################################
 
-# Define a context manager to temporarily ignore the warning
-class SuppressRuntimeWarningVortCalcs:
-    def __enter__(self):
-        self.original_filters = warnings.filters[:]
-        # first two warning are from metpy
-        warning_filter_vort_divide = (
-            "ignore",
-            ".*invalid value encountered in divide.*"
-        )
-        warnings.filterwarnings(*warning_filter_vort_divide)
-
-        #/tmp/ipykernel_701280/3056967088.py:670: UnitStrippedWarning: The unit of the quantity is stripped when downcasting to ndarray.
-        warning_filter_vort_units = (
-            "ignore",
-            ".*unit of the quantity is stripped.*"
-        )
-        warnings.filterwarnings(*warning_filter_vort_units)
-
-        # warning from metview
-        warnings_filter_vort_grib = (
-            "ignore",
-            ".*GRIB write support is experimental.*"
-        )
-        warnings.filterwarnings(*warnings_filter_vort_grib)
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        warnings.filters = self.original_filters
+def datetime_utcnow():
+    return datetime.now(pytz.utc).replace(tzinfo=None)
 
 # the full timestep string as used in the file names we are parsing from the model data
 # include any leading zeros up that make sense (only up to what the model covers)
@@ -1026,6 +1005,8 @@ def get_completed_unprocessed_model_folders_by_model_name():
                 elif model_name == 'EPS-TCGEN':
                     if not os.path.exists(os.path.join(root, dir, '_PROCESSED_')):
                         partial_model_dirs.append(os.path.join(root, dir))
+            # walk only the top level
+            dirs.clear()
         if model_dirs:
             completed_models_folder_by_model_name[model_name] = sorted(model_dirs)
         if partial_model_dirs:
@@ -1041,8 +1022,7 @@ def get_model_file_paths(model_dir, is_complete):
         return model_file_paths
 
     tcgen_file_ext = ['txt', 'bin']
-    if is_complete:
-        ecm_hres_re = re.compile(r'.*?JSXX\d\dECMF')
+    ecm_hres_re = re.compile(r'.*?JSXX\d\dECMF')
     for root, dirs, files in os.walk(model_dir):
         for file in files:
             f_ext = file.split('.')[-1]
@@ -1068,6 +1048,7 @@ def get_model_file_paths(model_dir, is_complete):
 #   Pressure of last closed isobar also seems problematic (GFDL at 977; mine at 1112, tcvitals environmental pressure at 1112 also)
 # Convert most units to metric (excepting threshold wind speed for wind radii 34/50/64)
 def read_gdfl_txt_file_to_df(model_file_path):
+    #TODO: REMOVE
     print(model_file_path)
     kt_to_ms = 0.514444
     nmi_to_meters = 1852.0
@@ -1168,10 +1149,9 @@ def read_gdfl_txt_file_to_df(model_file_path):
                 elif atcf_number >= 90:
                     df.at[index, 'Invest'] = True
                 df.at[index, 'ATCF_ID'] = f"{basin_name}{atcf_number_str}{year}"
-            else:
-                lat = df.at[index, 'Lat_Signed']
-                lon = df.at[index, 'Lon_Signed']
-                basin_name = get_basin_name_from_lat_lon(lat, lon)
+
+            lat = df.at[index, 'Lat_Signed']
+            lon = df.at[index, 'Lon_Signed']
 
             # Change the basin name depending on the storm center (don't keep originating basin)
             basin_name_new = get_basin_name_from_lat_lon(lat, lon)
@@ -1185,7 +1165,6 @@ def read_gdfl_txt_file_to_df(model_file_path):
             if basin_name is not None:
                 df.at[index, 'Basin'] = basin_name
 
-    print(" = processed")
     return df
 
 def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
@@ -1204,8 +1183,9 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
 
     if ensemble_model_name == "EPS-TCGEN":
         # EPS dataframe has different data, structure
-        # TODO
+        #TODO: check
         data = dict()
+
         for forecast_hour, tc_df in df.groupby('Forecast_Hour'):
             forecast_hour_dicts = []
             for index, row in tc_df.iterrows():
@@ -1221,19 +1201,19 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
                 wind_radii_64 = [row['NE_64'], row['SE_64'], row['SW_64'], row['NW_64']]
 
                 forecast_hour_dict = {
-                    'mslp_value': mslp,
-                    'lat': row['Lat'],
-                    'lon': row['Lon'],
+                    'mslp_value': float(np.round(mslp, round_float_places)),
+                    'lat': np.round(row['Lat'], round_float_places),
+                    'lon': np.round(row['Lon'], round_float_places),
                     'basin': row['Basin'],
                     'named': row['Named_Storm'],
                     'invest': None,
                     'atcf_id': atcf_id,
-                    'vmax10m_in_roci': row['Max_10m_Wind'],
+                    'vmax10m_in_roci': np.round(row['Max_10m_Wind'], 1),
                     'roci': float(np.nan),
                     'closed_isobar_delta': float(np.nan),
                     'rv850max': float(np.nan),
                     'rv700max': float(np.nan),
-                    'rmw': row['Radius_Max_Wind'],
+                    'rmw': np.round(row['Radius_Max_Wind'], round_float_places),
                     'cps_b': float(np.nan),
                     'cps_vtl': float(np.nan),
                     'cps_vtu': float(np.nan),
@@ -1243,8 +1223,8 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
                     'wind_radii_34': wind_radii_34,
                     'wind_radii_50': wind_radii_50,
                     'wind_radii_64': wind_radii_64,
-                    'lat_max_wind': row['Lat_of_Max_Wind'],
-                    'lon_max_wind': row['Lon_of_Max_Wind'],
+                    'lat_max_wind': np.round(row['Lat_of_Max_Wind'], round_float_places),
+                    'lon_max_wind': np.round(row['Lon_of_Max_Wind'], round_float_places),
                     'criteria': {'all': True}
                 }
 
@@ -1293,7 +1273,10 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
                     roci = float(np.nan)
 
                 # only NEQ34 is seen...
-                wind_radii = [row['NE_Radius'], row['SE_Radius'], row['SW_Radius'], row['NW_Radius']]
+                wind_radii = [np.round(row['NE_Radius'], round_float_places),
+                              np.round(row['SE_Radius'], round_float_places),
+                              np.round(row['SW_Radius'], round_float_places),
+                              np.round(row['NW_Radius'], round_float_places)]
                 radii_speed = int(row['Threshold_Wind_Speed'])
                 # this will be wind_radii_34, fill in missing columns
                 wind_radii_col_name = f'wind_radii_{radii_speed}'
@@ -1303,25 +1286,25 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
                 wind_radii_col_missing2 = missing_speeds[1]
 
                 forecast_hour_dict = {
-                    'mslp_value': mslp,
-                    'lat': row['Lat_Signed'],
-                    'lon': row['Lon_Signed'],
+                    'mslp_value': float(np.round(mslp, round_float_places)),
+                    'lat': np.round(row['Lat_Signed'], round_float_places),
+                    'lon': np.round(row['Lon_Signed'], round_float_places),
                     'basin': row['Basin'],
                     'named': row['Named_Storm'],
                     'invest': row['Invest'],
                     'atcf_id': atcf_id,
-                    'vmax10m_in_roci': row['Max_10m_Wind'],
-                    'roci': roci,
+                    'vmax10m_in_roci': np.round(row['Max_10m_Wind'], 1),
+                    'roci': np.round(roci, 0),
                     'closed_isobar_delta': closed_isobar_delta,
                     'rv850max': row['Max_850hPa_Vorticity'],
                     'rv700max': row['Max_700hPa_Vorticity'],
-                    'rmw': row['Radius_Max_Wind'],
-                    'cps_b': row['Phase_Space_Parameter_B'],
-                    'cps_vtl': row['Thermal_Wind_Lower_Troposphere'],
-                    'cps_vtu': row['Thermal_Wind_Lower_Troposphere'],
+                    'rmw': np.round(row['Radius_Max_Wind'], 0),
+                    'cps_b': np.round(row['Phase_Space_Parameter_B'], round_float_places),
+                    'cps_vtl': np.round(row['Thermal_Wind_Lower_Troposphere'], round_float_places),
+                    'cps_vtu': np.round(row['Thermal_Wind_Lower_Troposphere'], round_float_places),
                     'warm_core': warm_core,
-                    'storm_direction': row['Storm_Moving_Direction'],
-                    'storm_speed': row['Storm_Moving_Speed'],
+                    'storm_direction': np.round(row['Storm_Moving_Direction'], round_float_places),
+                    'storm_speed': np.round(row['Storm_Moving_Speed'], round_float_places),
                     wind_radii_col_name: wind_radii,
                     wind_radii_col_missing1: None,
                     wind_radii_col_missing2: None,
@@ -1343,7 +1326,9 @@ def fill_array_from_scalar(array, num):
     if array.shape[0] == num:
         return array
     elif array.shape[0] == 1:
-        return array.repeat(num)
+        if num is None or (num is not None and (np.isnan(num) or num < -999)):
+            num = np.nan
+        return array.repeat(np.round(num, 0))
 
 # Reads a tropical cyclone bufr .bin file (ECMWF) into a dataframe
 # References:
@@ -1351,6 +1336,8 @@ def fill_array_from_scalar(array, num):
 # [2] https://confluence.ecmwf.int/display/FCST/Update+to+Tropical+Cyclone+tracks
 # https://confluence.ecmwf.int/display/FCST/New+Tropical+Cyclone+Wind+Radii+product
 def read_tc_bufr_to_df(file_path):
+    #TODO: REMOVE
+    print(file_path)
     # developed in ecmwf_bufr_dev.ipynb notebook (referenced ECMWF code above)
     # open BUFR file
     f = open(file_path, 'rb')
@@ -1518,22 +1505,51 @@ def read_tc_bufr_to_df(file_path):
 
             # Loop over the fetched lists to construct rows
             for i in range(len(memberNumber)):
+                valid_lat_lon = True
                 row_lat = lats[i]
-                row_lon = lons[i]
-                row_lat_vmax = lat_vmax[i]
-                row_lon_vmax = lon_vmax[i]
+                if row_lat is None or (row_lat is not None and (np.isinf(row_lat) or row_lat < -500)):
+                    row_lat = np.nan
+                    valid_lat_lon = False
 
-                rmw = 0.0
+                row_lon = lons[i]
+                if row_lon is None or (row_lon is not None and (np.isinf(row_lon) or row_lon < -500)):
+                    row_lon = np.nan
+                    valid_lat_lon = False
+
+                valid_lat_lon_vmax = True
+                row_lat_vmax = lat_vmax[i]
+                if row_lat_vmax is None or (row_lat_vmax is not None and (np.isinf(row_lat_vmax) or row_lat_vmax < -500)):
+                    row_lat_vmax = np.nan
+                    valid_lat_lon_vmax = False
+
+                row_lon_vmax = lon_vmax[i]
+                if row_lon_vmax is None or (row_lon_vmax is not None and (np.isinf(row_lon_vmax) or row_lon_vmax < -500)):
+                    row_lon_vmax = np.nan
+                    valid_lat_lon_vmax = False
+
+                rmw = float(0)
                 if i not in last_basin_names:
                     last_basin_names[i] = basin_name
-                if row_lat and row_lon and row_lat > -500 and row_lon > -500:
-                    if row_lat_vmax and row_lon_vmax and row_lat_vmax > -500 and row_lon_vmax > -500:
+                if valid_lat_lon:
+                    if valid_lat_lon_vmax:
                         az12, az21, rmw = g.inv(row_lon, row_lat, row_lon_vmax, row_lat_vmax)
+                        if np.isnan(rmw):
+                            rmw = float(0)
+                        else:
+                            rmw = float(np.round(rmw, 0))
                     basin_name_new = get_basin_name_from_lat_lon(row_lat, row_lon)
                     if basin_name_new is not None:
                         last_basin_names[i] = basin_name_new
 
                 member_basin_name = last_basin_names[i]
+
+                min_mslp = mslp[i]
+                if np.isnan(min_mslp) or np.isinf(min_mslp) or min_mslp < -99:
+                    min_mslp = np.nan
+
+                vmax = vmax10m[i]
+                if np.isnan(vmax) or np.isinf(vmax) or vmax < -99:
+                    vmax = np.nan
 
                 row = {
                     'Storm_Name': long_storm_name,
@@ -1541,27 +1557,26 @@ def read_tc_bufr_to_df(file_path):
                     'ATCF_ID': atcf_id,
                     'Model_ATCF_Name': model_names[i],
                     'Model_Init_Time': pd.Timestamp(year, month, day, hour, minute),
-                    'Model_Valid_Time': pd.Timestamp(year, month, day, hour, minute) + pd.Timedelta(
-                        hours=timePeriod),
-                    'Forecast_Hour': int(np.round(timePeriod)),
+                    'Model_Valid_Time': pd.Timestamp(year, month, day, hour, minute) + pd.Timedelta(hours=timePeriod),
+                    'Forecast_Hour': np.int32(int(np.round(timePeriod))),
                     'Named_Storm': is_named_storm,
                     'Member_Num': np.int16(memberNumber[i]),
                     'Lat': np.float32(row_lat),
                     'Lon': np.float32(row_lon),
                     'Basin': member_basin_name,
-                    'Min_MSLP': np.float32(mslp[i]),
-                    'Max_10m_Wind': np.float32(vmax10m[i]),
+                    'Min_MSLP': np.float32(min_mslp),
+                    'Max_10m_Wind': np.float32(vmax),
                     'Lat_of_Max_Wind': np.float32(row_lat_vmax),
                     'Lon_of_Max_Wind': np.float32(row_lon_vmax),
-                    'Radius_Max_Wind': np.int32(rmw)
+                    'Radius_Max_Wind': rmw,
+                    'Valid': valid_lat_lon
                 }
 
                 for col_name in wind_radii.keys():
                     value = wind_radii[col_name][i]
-                    if isinstance(value, (int, np.integer)):
-                        row[col_name] = np.int32(value) if value != float('-inf') else np.int32(-2147483648)
-                    elif isinstance(value, (float, np.floating)):
-                        row[col_name] = np.float32(value) if not np.isnan(value) and not np.isinf(value) else np.nan
+                    if value is None or (value is not None and (np.isnan(value) or value < -99)):
+                        value = np.nan
+                    row[col_name] = np.round(np.float32(value), 0)
 
                 #for col_name in wind_radii.keys():
                 #    row[col_name] = np.int32(wind_radii[col_name][i])
@@ -1579,8 +1594,6 @@ def read_tc_bufr_to_df(file_path):
 
     # fix units for MSLP to hPa, mb from Pa
     df['Min_MSLP'] /= 100
-    # mark whether whether a TC is present for each member, forecasthour (skip this row when processing)
-    df['Valid'] = (df['Lat'] > -999) & (df['Lon'] > -999)
 
     return df
 
@@ -1596,7 +1609,7 @@ def get_disturbances_from_gfdl_txt_files(ensemble_model_name, model_files_by_sta
 
     for model_timestamp, model_file_paths in model_files_by_stamp.items():
         #TODO: REMOVE
-        test_timestamp = '2024081812'
+        # test only eps
         if model_timestamp != test_timestamp:
             continue
         model_member_re = re.compile(model_member_re_str_by_model_name[ensemble_model_name])
@@ -1629,7 +1642,6 @@ def get_disturbances_from_bufr_files(ensemble_model_name, model_files_by_stamp):
     # then we have to merge the dfs and then split by model member to process each member's tracks
     for model_timestamp, model_file_paths in model_files_by_stamp.items():
         #TODO: REMOVE
-        test_timestamp = '2024081812'
         if model_timestamp != test_timestamp:
             continue
         # match whether this is the deterministic or the ensemble model
@@ -1675,20 +1687,22 @@ def get_disturbances_from_bufr_files(ensemble_model_name, model_files_by_stamp):
             new_names = set(df['Model_ATCF_Name'])
             model_names = model_names.union(new_names)
         for model_name in model_names:
-            hres_df = next((df for df in hres_dfs if df['Model_ATCF_Name'].eq(model_name).any()), None)
-            eps_df = next((df for df in eps_dfs if df['Model_ATCF_Name'].eq(model_name).any()), None)
+            hres_dfs_filtered = [df for df in hres_dfs if df['Model_ATCF_Name'].eq(model_name).any()]
+            eps_dfs_filtered = [df for df in eps_dfs if df['Model_ATCF_Name'].eq(model_name).any()]
 
-            # Concatenate hres_df and eps_df, with hres_df taking precedence
-            if hres_df is not None and eps_df is not None:
-                concat_df = pd.concat([hres_df, eps_df]).drop_duplicates(keep='first')
-            elif hres_df is not None:
-                concat_df = hres_df
-            elif eps_df is not None:
-                concat_df = eps_df
+            # Concatenate filtered DataFrames
+            if hres_dfs_filtered and eps_dfs_filtered:
+                concat_df = pd.concat(hres_dfs_filtered + eps_dfs_filtered).drop_duplicates(keep='first')
+            elif hres_dfs_filtered:
+                concat_df = pd.concat(hres_dfs_filtered).drop_duplicates(keep='first')
+            elif eps_dfs_filtered:
+                concat_df = pd.concat(eps_dfs_filtered).drop_duplicates(keep='first')
             else:
                 continue
 
-            df_by_member_name[model_name] = concat_df
+            member_df = concat_df[concat_df['Model_ATCF_Name'] == model_name]
+
+            df_by_member_name[model_name] = member_df
 
         for model_name, df in df_by_member_name.items():
             disturbances_from_model = df_to_disturbances(ensemble_model_name, model_timestamp, model_name, df)
@@ -1710,11 +1724,15 @@ def get_all_disturbances_sorted_by_timestamp():
     for is_partial, folders_by_model_name in enumerate([
         completed_folders_by_model_name, partial_folders_by_model_name]):
         for model_name, model_folders in folders_by_model_name.items():
-            model_file_paths_by_timestamp = {}
+            if model_name in model_file_paths_by_model_name_and_timestamp:
+                # handling partial folders (second loop when is_partial is True)
+                model_file_paths_by_timestamp = model_file_paths_by_model_name_and_timestamp[model_name]
+            else:
+                model_file_paths_by_timestamp = {}
             for model_folder in model_folders:
                 model_timestamp = os.path.basename(model_folder)
                 if is_partial == 1:
-                    # EPS case: exclude genesis fiels until complete (only take HRES member)
+                    # EPS case: exclude genesis fields until complete (only take HRES member)
                     model_file_paths = get_model_file_paths(model_folder, False)
                 else:
                     model_file_paths = get_model_file_paths(model_folder, True)
@@ -1887,7 +1905,7 @@ def update_tc_completed(model_name, model_init_time):
         cursor.execute('SELECT completed_date FROM completed WHERE model_name = ? AND init_date = ?', (model_name, model_init_time))
         result = cursor.fetchone()
         if not result:
-            dt = datetime.utcnow()
+            dt = datetime_utcnow()
             completed_date = dt.isoformat()
             cursor.execute('INSERT OR REPLACE INTO completed (model_name, init_date, completed_date) VALUES (?, ?, ?)', (model_name, model_init_time, completed_date))
             conn.commit()
@@ -1932,7 +1950,14 @@ def add_tc_candidate(model_name, model_init_time, component_num, max_10m_wind_sp
         start_basin = start_disturbance['basin']
         start_lat = float(start_disturbance['lat'])
         start_lon = float(start_disturbance['lon'])
-        json_data = json.dumps(tc_disturbance_candidates)
+        try:
+            json_data = json.dumps(tc_disturbance_candidates)
+        except Exception as e:
+            # Error serializing?
+            print(f"Error: {e}")
+            traceback.print_exc(limit=None, file=None, chain=True)
+            print(tc_disturbance_candidates)
+            exit(1)
 
         cursor.execute('SELECT component_id FROM tc_candidates WHERE model_name = ? AND init_date = ? AND component_id = ?', (model_name, model_init_time, component_num))
         result = cursor.fetchone()
@@ -1963,15 +1988,9 @@ polling_interval = 5
 last_model_init_times = []
 
 if __name__ == "__main__":
-    profiler = cProfile.Profile()
-    profiler.enable()
-
     while True:
         #print("\nChecking for new disturbance data from completed model runs")
         calc_tc_candidates()
         break
 
         time.sleep(60 * polling_interval)
-
-    profiler.disable()
-    profiler.print_stats(sort='cumulative')
