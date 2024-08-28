@@ -1,3 +1,4 @@
+timestamp_test = '2024082800'
 # EXPERIMENTAL
 # Work in progress (do not use)
 
@@ -90,9 +91,6 @@ import warnings
 
 from datetime import datetime, timedelta
 import sqlite3
-
-import io
-import base64
 
 import networkx as nx
 
@@ -241,12 +239,6 @@ gfdl_column_names = [
 
 def datetime_utcnow():
     return datetime.now(pytz.utc).replace(tzinfo=None)
-
-# the full timestep string as used in the file names we are parsing from the model data
-# include any leading zeros up that make sense (only up to what the model covers)
-def convert_model_time_step_to_str(model_name, model_time_step):
-    str_format = model_time_step_str_format[model_name]
-    return f'{model_time_step:{str_format}}'
 
 # call with no params before a func call, and then must pass it a func_str on the next call once func is complete
 def debug_timing(func_str = None):
@@ -753,7 +745,7 @@ def process_and_simplify_graph(graph):
 
                     segment_first_valid_time = not_connected_segment[0]
                     segment_last_valid_time = not_connected_segment[-1]
-                    segment_first_index = node_valid_times.index(segment_first_valid_time)
+                    #segment_first_index = node_valid_times.index(segment_first_valid_time)
                     segment_last_index = node_valid_times.index(segment_last_valid_time)
                     #segment_predecessor_index = segment_first_index - 1
                     segment_successor_index = segment_last_index + 1
@@ -1013,11 +1005,11 @@ def get_completed_unprocessed_model_folders_by_model_name():
         model_dirs = []
         partial_model_dirs = []
         for root, dirs, files in os.walk(model_base_dir):
-            for dir in dirs:
-                if os.path.exists(os.path.join(root, dir, '_COMPLETE_')):
-                    model_dirs.append(os.path.join(root, dir))
+            for folder in dirs:
+                if os.path.exists(os.path.join(root, folder, '_COMPLETE_')):
+                    model_dirs.append(os.path.join(root, folder))
                 elif model_name == 'EPS-TCGEN':
-                    partial_model_dirs.append(os.path.join(root, dir))
+                    partial_model_dirs.append(os.path.join(root, folder))
             # walk only the top level
             dirs.clear()
         if model_dirs:
@@ -1147,7 +1139,6 @@ def read_gdfl_txt_file_to_df(model_file_path):
     # Iterate over rows to fill "ATCF_ID" and "Basin" columns
     for index, row in df.iterrows():
         num_cyclogenesis = row['Num_Cyclogenesis']
-        has_basin = False
         # Check if the value ends with a letter
         basin_short = num_cyclogenesis[-1]
         if basin_short.isalpha():
@@ -1163,20 +1154,15 @@ def read_gdfl_txt_file_to_df(model_file_path):
                     df.at[index, 'Invest'] = True
                 df.at[index, 'ATCF_ID'] = f"{basin_name}{atcf_number_str}{year}"
 
-            lat = df.at[index, 'Lat_Signed']
-            lon = df.at[index, 'Lon_Signed']
+        lat = df.at[index, 'Lat_Signed']
+        lon = df.at[index, 'Lon_Signed']
+        basin_name = ''
+        # Change the basin name depending on the storm center (don't keep originating basin)
+        basin_name_new = get_basin_name_from_lat_lon(lat, lon)
+        if basin_name_new is not None:
+            basin_name = basin_name_new
 
-            # Change the basin name depending on the storm center (don't keep originating basin)
-            basin_name_new = get_basin_name_from_lat_lon(lat, lon)
-            if basin_name_new is not None:
-                basin_name = basin_name
-            df.at[index, 'Basin'] = basin_name
-        else:
-            lat = df.at[index, 'Lat_Signed']
-            lon = df.at[index, 'Lon_Signed']
-            basin_name = get_basin_name_from_lat_lon(lat, lon)
-            if basin_name is not None:
-                df.at[index, 'Basin'] = basin_name
+        df.at[index, 'Basin'] = basin_name
 
     return df
 
@@ -1291,7 +1277,7 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
                 radii_speed = int(row['Threshold_Wind_Speed'])
                 # this will be wind_radii_34, fill in missing columns
                 wind_radii_col_name = f'wind_radii_{radii_speed}'
-                missing_speeds = list(set([34, 50, 64]) - set([radii_speed]))
+                missing_speeds = ({34, 50, 64}) - {radii_speed})
                 # fill in None so we have same number of wind radii as EPS
                 wind_radii_col_missing1 = missing_speeds[0]
                 wind_radii_col_missing2 = missing_speeds[1]
@@ -1379,7 +1365,6 @@ def read_tc_bufr_to_df(file_path):
 
     # 3 wind thresholds
     num_wind_radii_per_quad = len(wind_speed_threshold_map.keys())
-    analysis_time = True
 
     # loop for the messages in the file
     while 1:
@@ -1392,7 +1377,8 @@ def read_tc_bufr_to_df(file_path):
         # i.e. unpack the data values
         codes_set(bufr, 'unpack', 1)
 
-        numObs = codes_get(bufr, "numberOfSubsets")
+        # number of members
+        #numObs = codes_get(bufr, "numberOfSubsets")
         year = codes_get(bufr, "year")
         month = codes_get(bufr, "month")
         day = codes_get(bufr, "day")
@@ -1446,7 +1432,7 @@ def read_tc_bufr_to_df(file_path):
                             basin_name = gfdl_basin_to_atcf_basin[basin_short]
                             year_str = str(int(year))
                             atcf_number_str = short_storm_id[:-1]
-                            atcf_number = int(atcf_number_str)
+                            #atcf_number = int(atcf_number_str)
                             atcf_id = f"{basin_name}{atcf_number_str}{year_str}"
 
         model_names = []
@@ -1610,15 +1596,11 @@ def read_tc_bufr_to_df(file_path):
 
 
 def get_disturbances_from_gfdl_txt_files(ensemble_model_name, model_files_by_stamp):
-    '''
-    TG, 0121, 2024081518_F090_106N_1260W_FOF, 2024081518, 03, AC00, 114, 132N, 1253W,  43, 1002, XX,  34, NEQ, 0051, 0101, 0000, 0000, 1008,  130,   45,      3,    395,     27, N,  358,   43,  341,  557,  257,  558,    258.4,    258.1,    -20.6,     -9.0,     20.3,     79.0,    258.4,    258.8
-    TG, 0121, 2024081518_F090_106N_1260W_FOF, 2024081518, 03, AC00, 120, 138N, 1258W,  41, 1004, XX,  34, NEQ, 0059, 0109, 0000, 0000, 1010,  107,   50,     85,    461,    266, Y, -999, -999,  339,  531,  279,  459,    258.9,    258.3,    -23.9,    -10.7,     17.3,     77.4,    258.9,    259.3
-    SI,  90S, 2024081518_F000_053S_0734E_90S, 2024081518, 03, AC00, 000,  55S,  738E,  31, 1004, XX,  34, NEQ, 0000, 0000, 0000, 0000, 1009,  145,   70,   -999,  -9999,  -9999, Y,  182,   21,  276,  487,  247,  406,    258.6,    258.1,    -34.0,    -12.9,     82.7,     92.6,    258.6,    259.2
-    HC,  02G, 2024081518_F000_221N_1089E_02G, 2024081518, 03, AC00, 000, 219N, 1087E,  13, 1003, XX,  34, NEQ, 0000, 0000, 0000, 0000, 1004,  341,  142,   -999,  -9999,  -9999, N,  100,   18,   68,  127,   56,   89,    260.3,    259.8,     -8.6,      1.9,     41.3,     76.2,    260.3,    260.4
-    '''
     disturbances = []
 
     for model_timestamp, model_file_paths in model_files_by_stamp.items():
+        if model_timestamp != timestamp_test:
+            continue
         model_member_re = re.compile(model_member_re_str_by_model_name[ensemble_model_name])
         for model_file_path in model_file_paths:
             f = os.path.basename(model_file_path)
@@ -1638,7 +1620,6 @@ def get_disturbances_from_gfdl_txt_files(ensemble_model_name, model_files_by_sta
     return disturbances
 
 def get_disturbances_from_bufr_files(ensemble_model_name, model_files_by_stamp):
-    ensemble_model_name = "EPS-TCGEN"
     # disturbances should be a list of models' disturbances
     # each entry should be a member of the ensemble at a specific model init time
     # each such entry is a dict that contains the disturbances for that model
@@ -1648,6 +1629,8 @@ def get_disturbances_from_bufr_files(ensemble_model_name, model_files_by_stamp):
     # for EPS we have to first process all the dfs in a directory (a specific model init time)
     # then we have to merge the dfs and then split by model member to process each member's tracks
     for model_timestamp, model_file_paths in model_files_by_stamp.items():
+        if model_timestamp != timestamp_test:
+            continue
         # match whether this is the deterministic or the ensemble model
         model_type_re = re.compile(model_member_re_str_by_model_name[ensemble_model_name])
         eps_dfs = []
@@ -1744,19 +1727,25 @@ def get_all_disturbances_sorted_by_timestamp(ensemble_status_dicts):
                 else:
                     model_file_paths = get_model_file_paths(model_folder, True)
                 if model_file_paths:
-                    model_file_paths_by_timestamp[model_timestamp] = model_file_paths
+                    # check here whether we should skip (processed same exact number of files already)
+                    if ensemble_status_dicts and model_name in ensemble_status_dicts and model_timestamp in \
+                            ensemble_status_dicts[model_name]:
+                        num_files_processed = ensemble_status_dicts[model_name][model_timestamp]
+                    else:
+                        num_files_processed = 0
+
+                    if num_files_processed != len(model_file_paths):
+                        # either process a new directory, or reprocess a directory that has new files (all files reprocessed)
+                        # the number of components (tracks) in the candidates table should not decrease so it should be fine
+                        model_file_paths_by_timestamp[model_timestamp] = model_file_paths
+
+                        if is_partial == 0:
+                            if model_name not in complete_file_paths_by_model_name_and_timestamp:
+                                complete_file_paths_by_model_name_and_timestamp[model_name] = {}
+                            complete_file_paths_by_model_name_and_timestamp[model_name][model_timestamp] = model_file_paths_by_timestamp
+
             if model_file_paths_by_timestamp:
-                # check here whether we should skip (processed same exact number of files already)
-                if ensemble_status_dicts and model_name in ensemble_status_dicts and model_timestamp in ensemble_status_dicts[model_name]:
-                    num_files_processed = ensemble_status_dicts[model_name][model_timestamp]
-                else:
-                    num_files_processed = 0
-                # either process a new directory, or reprocess a directory that has new files (all files reprocessed)
-                # the number of components (tracks) in the candidates table should not decrease so it should be fine
-                if num_files_processed != len(model_file_paths_by_timestamp[model_timestamp]):
-                    model_file_paths_by_model_name_and_timestamp[model_name] = model_file_paths_by_timestamp
-                    if is_partial == 0:
-                        complete_file_paths_by_model_name_and_timestamp[model_name] = model_file_paths_by_timestamp
+                model_file_paths_by_model_name_and_timestamp[model_name] = model_file_paths_by_timestamp
 
     if not model_file_paths_by_model_name_and_timestamp:
         return [], {}, {}
@@ -2119,8 +2108,5 @@ last_model_init_times = []
 
 if __name__ == "__main__":
     while True:
-        #print("\nChecking for new disturbance data from completed model runs")
         calc_tc_candidates()
-        break
-
         time.sleep(60 * polling_interval)
