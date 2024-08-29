@@ -740,6 +740,39 @@ def ab_deck_line_to_dict(line):
         raw_data['valid_time'] = valid_datetime.isoformat()
     return raw_data
 
+# for managing tracks (loop selections on them) that cross the antimeridian
+def cut_line_string_at_antimeridian(line_string):
+    coordinates = list(line_string.coords)
+    cut_lines = []
+    current_line = [coordinates[0]]
+
+    for i in range(1, len(coordinates)):
+        prev_lon, prev_lat = current_line[-1]
+        lon, lat = coordinates[i]
+
+        # Check if the line crosses the antimeridian
+        if abs(lon - prev_lon) > 180:
+            # Calculate the intersection latitude at the antimeridian
+            intersection_lat = prev_lat + (lat - prev_lat) * (180.0 - abs(prev_lon)) / (180.0 - abs(prev_lon) + 180.0 - abs(lon))
+            if prev_lon > 0 and lon < 0:
+                # Westward crossing
+                current_line.append((180, intersection_lat))
+                cut_lines.append(LineString(current_line))
+                current_line = [(-180, intersection_lat), (lon, lat)]
+            elif prev_lon < 0 and lon > 0:
+                # Eastward crossing
+                current_line.append((-180, intersection_lat))
+                cut_lines.append(LineString(current_line))
+                current_line = [(180, intersection_lat), (lon, lat)]
+        else:
+            # No crossing, simply add the point
+            current_line.append((lon, lat))
+
+    # Add the final segment
+    cut_lines.append(LineString(current_line))
+
+    return cut_lines
+
 def decode_ab_deck_line(line):
     columns = [
         "BASIN", "CY", "YYYYMMDDHH", "TECHNUM", "TECH", "TAU",
@@ -4671,10 +4704,16 @@ class App:
                     # add the visible points for the track to the m-tree
                     if lon_lat_tuples and len(lon_lat_tuples) > 1:
                         line_string = LineString(lon_lat_tuples)
-                        record = dict()
-                        record['geometry'] = line_string
-                        record['value'] = internal_id
-                        lon_lat_tc_records.append(record)
+                        try:
+                            cut_lines = cut_line_string_at_antimeridian(line_string)
+                        except:
+                            print(line_string)
+                            print(line_string.coords)
+                        for cut_line in cut_lines:
+                            record = dict()
+                            record['geometry'] = cut_line
+                            record['value'] = internal_id
+                            lon_lat_tc_records.append(record)
 
         App.lon_lat_tc_records = lon_lat_tc_records
         App.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
@@ -4940,10 +4979,16 @@ class App:
                 # add the visible points for the track to the m-tree
                 if lon_lat_tuples and len(lon_lat_tuples) > 1:
                     line_string = LineString(lon_lat_tuples)
-                    record = dict()
-                    record['geometry'] = line_string
-                    record['value'] = internal_id
-                    lon_lat_tc_records.append(record)
+                    try:
+                        cut_lines = cut_line_string_at_antimeridian(line_string)
+                    except:
+                        print(line_string)
+                        print(line_string.coords)
+                    for cut_line in cut_lines:
+                        record = dict()
+                        record['geometry'] = cut_line
+                        record['value'] = internal_id
+                        lon_lat_tc_records.append(record)
 
         App.lon_lat_tc_records = lon_lat_tc_records
         App.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
@@ -6449,7 +6494,15 @@ class App:
             num_tracks = len(internal_ids)
         num_tracks_str = ""
         if num_tracks > 0:
-            num_tracks_str=f"# Selected Tracks: {num_tracks}"
+            num_tracks_str=f"# Selected: Tracks: {num_tracks}"
+            filtered_candidates = [(iid, tc) for iid, tc in self.plotted_tc_candidates if
+                                   iid in internal_ids]
+            selected_model_names = set()
+            for internal_id, tc in filtered_candidates:
+                if tc and tc[0] and 'model_name' in tc[0]:
+                    selected_model_names.add(tc[0]['model_name'])
+            num_selected_model_names = len(selected_model_names)
+            num_tracks_str += f", Models: {num_selected_model_names}"
         if self.mode == "GENESIS":
             self.genesis_selection_info_label.config(text=num_tracks_str)
         elif self.mode == "ADECK":
