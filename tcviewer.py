@@ -1483,7 +1483,7 @@ class AnalysisDialog(tk.Toplevel):
         self.root_height = root_height
         self.previous_selected_combo = previous_selected_combo
 
-        if self.previous_selected_combo[-5:] == 'GLOBAL-DET':
+        if self.previous_selected_combo == 'GLOBAL-DET':
             self.possible_ensemble = False
         else:
             self.possible_ensemble = True
@@ -1960,6 +1960,7 @@ class AnalysisDialog(tk.Toplevel):
             any_data = False
             num_tracks_with_data = 0
             series_data = []
+            model_names_set = set()
             for internal_storm_id in self.selected_internal_storm_ids:
                 model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'mslp_value')
                 if y is not None:
@@ -1968,18 +1969,45 @@ class AnalysisDialog(tk.Toplevel):
                     all_y.extend(y)
                     series_data.append([model_name, series_sum, x, y])
                     num_tracks_with_data += 1
+                    model_names_set.add(model_name)
             if not any_data:
                 return
 
             series_data.sort(key=lambda x: x[0])
-            distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
-            model_names_set = set()
+            num_unique_models = len(model_names_set)
+
+            # get color indices if have many models and more than one ensemble
+            # also get the number of ensembles, and number of members represented from each ensemble (not the total in the ensemble)
+            color_index_by_model_name, num_ensembles, num_represented = self.get_color_index_by_model_name(model_names_set)
+            # self.possible_ensemble is there to make sure we don't label our own tracker which only has global deterministic models
+            if num_represented and num_ensembles > 1 and self.possible_ensemble:
+                # in rough alphabetical order (AP, CP, EE, NP)
+                ensemble_model_counts = []
+                for ens_name in ['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN']:
+                    if ens_name in num_represented:
+                        ensemble_model_counts.append(str(num_represented[ens_name]))
+                ensemble_model_count_str = ", ".join(ensemble_model_counts)
+                if ensemble_model_count_str:
+                    ensemble_model_count_str = f', {num_ensembles} Ensembles ({ensemble_model_count_str})'
+            else:
+                ensemble_model_count_str = ''
+
+            ensemble_count_str = []
+            if color_index_by_model_name:
+                use_color_index = True
+                num_colors = num_ensembles
+            else:
+                use_color_index = False
+                num_colors = num_tracks_with_data
+
+            distinct_colors = self.generate_distinct_colors(num_colors)
             for i, series in enumerate(series_data):
                 model_name, series_sum, x, y = series
-                model_names_set.add(model_name)
-                self.ax_pres.plot(x, y, label=model_name, color=distinct_colors[i])
-
-            num_unique_models = len(model_names_set)
+                if use_color_index:
+                    color_index = color_index_by_model_name[model_name]
+                else:
+                    color_index = i
+                self.ax_pres.plot(x, y, label=model_name, color=distinct_colors[color_index])
 
             # Find the overall min/max of all x and y values
             x_min = min(all_x)
@@ -2002,7 +2030,7 @@ class AnalysisDialog(tk.Toplevel):
             self.ax_pres.set_ylim([y_lim_min, y_lim_max])
             # Set title and labels
             num_storm_ids = len(self.selected_internal_storm_ids)
-            self.ax_pres.set_title(f'TC MSLP, {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models\n\nMin MSLP: {int(round(y_min))} mb')
+            self.ax_pres.set_title(f'TC MSLP, {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models{ensemble_model_count_str}\n\nMin MSLP: {int(round(y_min))} mb')
             self.ax_pres.set_ylabel('MSLP (mb)')
             self.ax_pres.set_xlabel(self.tz_previous_selected)
             self.ax_pres.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
@@ -2051,6 +2079,7 @@ class AnalysisDialog(tk.Toplevel):
             any_data = False
             num_tracks_with_data = 0
             series_data = []
+            model_names_set = set()
             for internal_storm_id in self.selected_internal_storm_ids:
                 model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'rv850max')
                 if y is not None:
@@ -2059,18 +2088,46 @@ class AnalysisDialog(tk.Toplevel):
                     all_y.extend(y)
                     series_data.append([model_name, series_sum, x, y])
                     num_tracks_with_data += 1
+                    model_names_set.add(model_name)
             if not any_data:
                 return
 
             series_data.sort(key=lambda x: x[0])
-            distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
-            model_names_set = set()
+            num_unique_models = len(model_names_set)
+
+            # get color indices if have many models and more than one ensemble
+            # also get the number of ensembles, and number of members represented from each ensemble (not the total in the ensemble)
+            color_index_by_model_name, num_ensembles, num_represented = self.get_color_index_by_model_name(
+                model_names_set)
+            # self.possible_ensemble is there to make sure we don't label our own tracker which only has global deterministic models
+            if num_represented and num_ensembles > 1 and self.possible_ensemble:
+                # in rough alphabetical order (AP, CP, EE, NP)
+                ensemble_model_counts = []
+                for ens_name in ['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN']:
+                    if ens_name in num_represented:
+                        ensemble_model_counts.append(str(num_represented[ens_name]))
+                ensemble_model_count_str = ", ".join(ensemble_model_counts)
+                if ensemble_model_count_str:
+                    ensemble_model_count_str = f', {num_ensembles} Ensembles ({ensemble_model_count_str})'
+            else:
+                ensemble_model_count_str = ''
+
+            ensemble_count_str = []
+            if color_index_by_model_name:
+                use_color_index = True
+                num_colors = num_ensembles
+            else:
+                use_color_index = False
+                num_colors = num_tracks_with_data
+
+            distinct_colors = self.generate_distinct_colors(num_colors)
             for i, series in enumerate(series_data):
                 model_name, series_sum, x, y = series
-                model_names_set.add(model_name)
-                self.ax_rvor.plot(x, y, label=model_name, color=distinct_colors[i])
-
-            num_unique_models = len(model_names_set)
+                if use_color_index:
+                    color_index = color_index_by_model_name[model_name]
+                else:
+                    color_index = i
+                self.ax_rvor.plot(x, y, label=model_name, color=distinct_colors[color_index])
 
             # Find the overall min/max of all x and y values
             x_min = min(all_x)
@@ -2097,7 +2154,7 @@ class AnalysisDialog(tk.Toplevel):
             self.ax_rvor.set_ylim([y_lim_min, y_lim_max])
             # Set title and labels
             num_storm_ids = len(self.selected_internal_storm_ids)
-            self.ax_rvor.set_title(f'TC RVOR (* 10^-5 m/s), {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models\n\nMax RVOR: {round(y_max,1)} * 10^-5 m/s')
+            self.ax_rvor.set_title(f'TC RVOR (* 10^-5 m/s), {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models{ensemble_model_count_str}\n\nMax RVOR: {round(y_max,1)} * 10^-5 m/s')
             self.ax_rvor.set_ylabel('Relative Vorticity (* 10^-5 m/s)')
             self.ax_rvor.set_xlabel(self.tz_previous_selected)
             self.ax_rvor.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
@@ -2138,6 +2195,39 @@ class AnalysisDialog(tk.Toplevel):
                 self.canvas_track_spread.get_tk_widget().destroy()
                 self.canvas_track_spread = None
 
+            # The following is only used here to get counts
+            num_tracks_with_data = 0
+            series_data = []
+            model_names_set = set()
+            any_data = False
+            for internal_storm_id in self.selected_internal_storm_ids:
+                model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'lon')
+                if y is not None:
+                    any_data = True
+                    num_tracks_with_data += 1
+                    model_names_set.add(model_name)
+            if not any_data:
+                return
+
+            num_unique_models = len(model_names_set)
+            num_storm_ids = len(self.selected_internal_storm_ids)
+            # get the number of ensembles, and number of members represented from each ensemble (not the total in the ensemble)
+            color_index_by_model_name, num_ensembles, num_represented = self.get_color_index_by_model_name(
+                model_names_set)
+            # self.possible_ensemble is there to make sure we don't label our own tracker which only has global deterministic models
+            if num_represented and num_ensembles > 1 and self.possible_ensemble:
+                # in rough alphabetical order (AP, CP, EE, NP)
+                ensemble_model_counts = []
+                for ens_name in ['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN']:
+                    if ens_name in num_represented:
+                        ensemble_model_counts.append(str(num_represented[ens_name]))
+                ensemble_model_count_str = ", ".join(ensemble_model_counts)
+                if ensemble_model_count_str:
+                    ensemble_model_count_str = f', {num_ensembles} Ensembles ({ensemble_model_count_str})'
+            else:
+                ensemble_model_count_str = ''
+
+            # Calculate the spreads now
             unique_datetimes = self.get_unique_datetimes()
             if not unique_datetimes:
                 return
@@ -2180,7 +2270,7 @@ class AnalysisDialog(tk.Toplevel):
             self.ax_track_spread.set_ylim([y_lim_min, y_lim_max])
 
             # Set title and labels
-            self.ax_track_spread.set_title('Track Spread Over Time')
+            self.ax_track_spread.set_title(f'Track Spread Over Time, {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models{ensemble_model_count_str}')
             self.ax_track_spread.set_ylabel('Cross-track, Along-track spread (n. mi.)')
             self.ax_track_spread.set_xlabel('Date')
             self.ax_track_spread.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
@@ -2228,6 +2318,7 @@ class AnalysisDialog(tk.Toplevel):
             any_data = False
             num_tracks_with_data = 0
             series_data = []
+            model_names_set = set()
             for internal_storm_id in self.selected_internal_storm_ids:
                 model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'roci')
                 if y is not None:
@@ -2236,18 +2327,46 @@ class AnalysisDialog(tk.Toplevel):
                     all_y.extend(y)
                     series_data.append([model_name, series_sum, x, y])
                     num_tracks_with_data += 1
+                    model_names_set.add(model_name)
             if not any_data:
                 return
 
             series_data.sort(key=lambda x: x[0])
-            distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
-            model_names_set = set()
+            num_unique_models = len(model_names_set)
+
+            # get color indices if have many models and more than one ensemble
+            # also get the number of ensembles, and number of members represented from each ensemble (not the total in the ensemble)
+            color_index_by_model_name, num_ensembles, num_represented = self.get_color_index_by_model_name(
+                model_names_set)
+            # self.possible_ensemble is there to make sure we don't label our own tracker which only has global deterministic models
+            if num_represented and num_ensembles > 1 and self.possible_ensemble:
+                # in rough alphabetical order (AP, CP, EE, NP)
+                ensemble_model_counts = []
+                for ens_name in ['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN']:
+                    if ens_name in num_represented:
+                        ensemble_model_counts.append(str(num_represented[ens_name]))
+                ensemble_model_count_str = ", ".join(ensemble_model_counts)
+                if ensemble_model_count_str:
+                    ensemble_model_count_str = f', {num_ensembles} Ensembles ({ensemble_model_count_str})'
+            else:
+                ensemble_model_count_str = ''
+
+            ensemble_count_str = []
+            if color_index_by_model_name:
+                use_color_index = True
+                num_colors = num_ensembles
+            else:
+                use_color_index = False
+                num_colors = num_tracks_with_data
+
+            distinct_colors = self.generate_distinct_colors(num_colors)
             for i, series in enumerate(series_data):
                 model_name, series_sum, x, y = series
-                model_names_set.add(model_name)
-                self.ax_size.plot(x, y, label=model_name, color=distinct_colors[i])
-
-            num_unique_models = len(model_names_set)
+                if use_color_index:
+                    color_index = color_index_by_model_name[model_name]
+                else:
+                    color_index = i
+                self.ax_size.plot(x, y, label=model_name, color=distinct_colors[color_index])
 
             # Find the overall min/max of all x and y values
             x_min = min(all_x)
@@ -2271,7 +2390,7 @@ class AnalysisDialog(tk.Toplevel):
             self.ax_size.set_ylim([y_lim_min, y_lim_max])
             # Set title and labels
             num_storm_ids = len(self.selected_internal_storm_ids)
-            self.ax_size.set_title(f'TC ROCI (km), {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models\n\n(Min, Max) ROCI: ({int(round(y_min))}, {int(round(y_max))}) km')
+            self.ax_size.set_title(f'TC ROCI (km), {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models{ensemble_model_count_str}\n\n(Min, Max) ROCI: ({int(round(y_min))}, {int(round(y_max))}) km')
             self.ax_size.set_ylabel('ROCI (km)')
             self.ax_size.set_xlabel(self.tz_previous_selected)
             self.ax_size.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
@@ -2358,8 +2477,8 @@ class AnalysisDialog(tk.Toplevel):
             if not any_data:
                 return
 
-            num_unique_models = len(model_names_set)
             series_data.sort(key=lambda x: x[0])
+            num_unique_models = len(model_names_set)
 
             # get color indices if have many models and more than one ensemble
             # also get the number of ensembles, and number of members represented from each ensemble (not the total in the ensemble)
