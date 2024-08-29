@@ -6,7 +6,7 @@ EXPERIMENTAL
 
 A collection of programs related to tropical cyclone genesis. (See requirements.txt for the list of main programs that are not deprecated.)
 
-A viewer (tcviewer.py) is useful for viewing official tracks on a PC (fullscreen).
+A viewer (tcviewer.py) is useful for viewing official tracks on a PC (fullscreen) as well as the genesis tracks and ensembles.
 
 Find tropical cyclones (potential/TC genesis and active) from global models (auto_update_disturbances_parallel.py and auto_update_cyclones.py). See references at top of code.
 
