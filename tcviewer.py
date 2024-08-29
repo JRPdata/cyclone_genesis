@@ -256,7 +256,6 @@ import pytz
 def datetime_utcnow():
     return datetime.now(pytz.utc).replace(tzinfo=None)
 
-
 # URLs
 tcvitals_urls = [
     "https://ftp.nhc.noaa.gov/atcf/com/tcvitals",
@@ -1297,8 +1296,6 @@ def get_tc_model_init_times_relative_to(init_date):
                     init_time = row[0]
                     model_init_times['previous'] = datetime.fromisoformat(init_time)
 
-
-
     except sqlite3.Error as e:
         print(f"SQLite error (get_tc_candidates_from_valid_time): {e}")
     finally:
@@ -1500,7 +1497,6 @@ class AnalysisDialog(tk.Toplevel):
         self.canvas_size = None
         self.canvas_track_spread = None
         self.canvas_vmax = None
-
 
         super().__init__(parent)  # Set the title here
         self.title('Analysis on Selected Tracks')
@@ -1939,9 +1935,13 @@ class AnalysisDialog(tk.Toplevel):
 
             series_data.sort(key=lambda x: x[0])
             distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
+            model_names_set = set()
             for i, series in enumerate(series_data):
                 model_name, series_sum, x, y = series
+                model_names_set.add(model_name)
                 self.ax_pres.plot(x, y, label=model_name, color=distinct_colors[i])
+
+            num_unique_models = len(model_names_set)
 
             # Find the overall min/max of all x and y values
             x_min = min(all_x)
@@ -1964,18 +1964,31 @@ class AnalysisDialog(tk.Toplevel):
             self.ax_pres.set_ylim([y_lim_min, y_lim_max])
             # Set title and labels
             num_storm_ids = len(self.selected_internal_storm_ids)
-            self.ax_pres.set_title(f'TC MSLP, {num_tracks_with_data}/{num_storm_ids} tracks\n\nMin MSLP: {int(round(y_min))} mb')
+            self.ax_pres.set_title(f'TC MSLP, {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models\n\nMin MSLP: {int(round(y_min))} mb')
             self.ax_pres.set_ylabel('MSLP (mb)')
             self.ax_pres.set_xlabel(self.tz_previous_selected)
             self.ax_pres.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
             self.ax_pres.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
             self.ax_pres.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
             # TODO: add hlines for NATL/EPAC pressure medians on initial classification
-            # Add a legend
-            self.ax_pres.legend(loc='lower left', bbox_to_anchor=(1.05, 0), borderaxespad=0)
-            # Add horizontal gridlines at the Saffir-Simpson scale with labels
-            # Use tight_layout to ensure everything fits within the figure area
-            self.fig_pres.tight_layout(rect=[0, 0, 0.95, 1])
+
+            # Get the number of legend items
+            num_items = len(self.ax_pres.get_legend_handles_labels()[0])
+            # Calculate the number of columns based on the available space
+            available_height = FULL_SCREEN_HEIGHT * 0.9
+            max_items_per_column = available_height / 30
+            num_columns = min(max(1, num_items // max_items_per_column), 5)
+            # Create the legend with the calculated number of columns
+            self.ax_pres.legend(
+                loc='lower left',
+                bbox_to_anchor=(1.05, 0),
+                borderaxespad=0,
+                ncol=num_columns
+            )
+            # all fine tuned values since we haven't drawn/packed it yet
+            est_legend_width = num_columns * 80 / FULL_SCREEN_WIDTH
+            self.fig_pres.subplots_adjust(left=90/FULL_SCREEN_WIDTH, right=(0.88 - est_legend_width), bottom=60/FULL_SCREEN_HEIGHT, top=0.9)
+
             # Create a canvas to display the plot in the frame
             self.canvas_pres = FigureCanvasTkAgg(self.fig_pres, master=self.pressure_frame)
             self.canvas_pres.draw()
@@ -2013,9 +2026,13 @@ class AnalysisDialog(tk.Toplevel):
 
             series_data.sort(key=lambda x: x[0])
             distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
+            model_names_set = set()
             for i, series in enumerate(series_data):
                 model_name, series_sum, x, y = series
+                model_names_set.add(model_name)
                 self.ax_rvor.plot(x, y, label=model_name, color=distinct_colors[i])
+
+            num_unique_models = len(model_names_set)
 
             # Find the overall min/max of all x and y values
             x_min = min(all_x)
@@ -2042,17 +2059,30 @@ class AnalysisDialog(tk.Toplevel):
             self.ax_rvor.set_ylim([y_lim_min, y_lim_max])
             # Set title and labels
             num_storm_ids = len(self.selected_internal_storm_ids)
-            self.ax_rvor.set_title(f'TC RVOR (* 10^-5 m/s), {num_tracks_with_data}/{num_storm_ids} tracks\n\nMax RVOR: {round(y_max,1)} * 10^-5 m/s')
+            self.ax_rvor.set_title(f'TC RVOR (* 10^-5 m/s), {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models\n\nMax RVOR: {round(y_max,1)} * 10^-5 m/s')
             self.ax_rvor.set_ylabel('Relative Vorticity (* 10^-5 m/s)')
             self.ax_rvor.set_xlabel(self.tz_previous_selected)
             self.ax_rvor.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
             self.ax_rvor.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
             self.ax_rvor.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
-            # Add a legend
-            self.ax_rvor.legend(loc='lower left', bbox_to_anchor=(1.05, 0), borderaxespad=0)
 
-            # Use tight_layout to ensure everything fits within the figure area
-            self.fig_rvor.tight_layout(rect=[0, 0, 0.95, 1])
+            # Get the number of legend items
+            num_items = len(self.ax_rvor.get_legend_handles_labels()[0])
+            # Calculate the number of columns based on the available space
+            available_height = FULL_SCREEN_HEIGHT * 0.9
+            max_items_per_column = available_height / 30
+            num_columns = min(max(1, num_items // max_items_per_column), 5)
+            # Create the legend with the calculated number of columns
+            self.ax_rvor.legend(
+                loc='lower left',
+                bbox_to_anchor=(1.05, 0),
+                borderaxespad=0,
+                ncol=num_columns
+            )
+            # all fine tuned values since we haven't drawn/packed it yet
+            est_legend_width = num_columns * 80 / FULL_SCREEN_WIDTH
+            self.fig_rvor.subplots_adjust(left=90/FULL_SCREEN_WIDTH, right=(0.88 - est_legend_width), bottom=60/FULL_SCREEN_HEIGHT, top=0.9)
+
             # Create a canvas to display the plot in the frame
             self.canvas_rvor = FigureCanvasTkAgg(self.fig_rvor, master=self.rvor_frame)
             self.canvas_rvor.draw()
@@ -2118,11 +2148,24 @@ class AnalysisDialog(tk.Toplevel):
             self.ax_track_spread.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
             self.ax_track_spread.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
             self.ax_track_spread.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
-            # Add a legend
-            self.ax_track_spread.legend(loc='upper left', bbox_to_anchor=(1.05, 1), borderaxespad=0)
 
-            # Use tight_layout to ensure everything fits within the figure area
-            self.fig_track_spread.tight_layout(rect=[0, 0, 0.95, 1])
+            # Get the number of legend items
+            num_items = len(self.ax_track_spread.get_legend_handles_labels()[0])
+            # Calculate the number of columns based on the available space
+            available_height = FULL_SCREEN_HEIGHT * 0.9
+            max_items_per_column = available_height / 30
+            num_columns = min(max(1, num_items // max_items_per_column), 5)
+            # Create the legend with the calculated number of columns
+            self.ax_track_spread.legend(
+                loc='lower left',
+                bbox_to_anchor=(1.05, 0),
+                borderaxespad=0,
+                ncol=num_columns
+            )
+            # all fine tuned values since we haven't drawn/packed it yet
+            est_legend_width = num_columns * 80 / FULL_SCREEN_WIDTH
+            self.fig_track_spread.subplots_adjust(left=90/FULL_SCREEN_WIDTH, right=(0.88 - est_legend_width), bottom=60/FULL_SCREEN_HEIGHT, top=0.9)
+
             # Create a canvas to display the plot in the frame
             self.canvas_track_spread = FigureCanvasTkAgg(self.fig_track_spread, master=self.track_frame)
             self.canvas_track_spread.draw()
@@ -2160,16 +2203,21 @@ class AnalysisDialog(tk.Toplevel):
 
             series_data.sort(key=lambda x: x[0])
             distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
+            model_names_set = set()
             for i, series in enumerate(series_data):
                 model_name, series_sum, x, y = series
+                model_names_set.add(model_name)
                 self.ax_size.plot(x, y, label=model_name, color=distinct_colors[i])
+
+            num_unique_models = len(model_names_set)
 
             # Find the overall min/max of all x and y values
             x_min = min(all_x)
             x_max = max(all_x)
             y_min = min(all_y)
             y_max = max(all_y)
-            y_lim_min = min(0, -100 + ((y_min // 100) * 100))
+            #y_lim_min = min(0, -100 + ((y_min // 100) * 100))
+            y_lim_min = 0
             y_lim_max = 100 + ((y_max // 100) * 100)
             # Set the x-axis to display dates
             self.ax_size.xaxis.set_major_locator(mdates.DayLocator())
@@ -2185,14 +2233,12 @@ class AnalysisDialog(tk.Toplevel):
             self.ax_size.set_ylim([y_lim_min, y_lim_max])
             # Set title and labels
             num_storm_ids = len(self.selected_internal_storm_ids)
-            self.ax_size.set_title(f'TC ROCI (km), {num_tracks_with_data}/{num_storm_ids} tracks\n\n(Min, Max) ROCI: ({int(round(y_min))}, {int(round(y_max))}) km')
+            self.ax_size.set_title(f'TC ROCI (km), {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models\n\n(Min, Max) ROCI: ({int(round(y_min))}, {int(round(y_max))}) km')
             self.ax_size.set_ylabel('ROCI (km)')
             self.ax_size.set_xlabel(self.tz_previous_selected)
             self.ax_size.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
             self.ax_size.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
             self.ax_size.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
-            # Add a legend
-            self.ax_size.legend(loc='lower left', bbox_to_anchor=(1.05, 0), borderaxespad=0)
 
             # ROCI scale (degrees of latitude)
             roci_scale = np.array([0, 2, 3, 6, 8]).astype(float)
@@ -2214,8 +2260,28 @@ class AnalysisDialog(tk.Toplevel):
                     self.ax_size.text(1.02, y_pos / self.ax_size.get_ylim()[1], label, ha='left', va='center',
                                       transform=self.ax_size.transAxes)
 
+            # Get the number of legend items
+            num_items = len(self.ax_size.get_legend_handles_labels()[0])
+            # Calculate the number of columns based on the available space
+            available_height = FULL_SCREEN_HEIGHT * 0.9
+            max_items_per_column = available_height / 30
+            num_columns = min(max(1, num_items // max_items_per_column), 5)
+            # Create the legend with the calculated number of columns
+            self.ax_size.legend(
+                loc='lower left',
+                bbox_to_anchor=(1.1, 0),
+                borderaxespad=0,
+                ncol=num_columns
+            )
             # Use tight_layout to ensure everything fits within the figure area
-            self.fig_size.tight_layout(rect=[0, 0, 0.95, 1])
+            # self.fig_vmax.tight_layout(rect=[0, 0, 0.95, 1])
+            # all fine tuned values since we haven't drawn/packed it yet
+            est_legend_width = num_columns * 80 / FULL_SCREEN_WIDTH
+            self.fig_size.subplots_adjust(left=70 / FULL_SCREEN_WIDTH, right=(0.80 - est_legend_width),
+                                          bottom=60 / FULL_SCREEN_HEIGHT, top=0.9)
+
+            # Use tight_layout to ensure everything fits within the figure area
+            #self.fig_size.tight_layout(rect=[0, 0, 0.95, 1])
             # Create a canvas to display the plot in the frame
             self.canvas_size = FigureCanvasTkAgg(self.fig_size, master=self.size_frame)
             self.canvas_size.draw()
@@ -2233,6 +2299,7 @@ class AnalysisDialog(tk.Toplevel):
                 self.canvas_vmax = None
             # Create a figure and axis object
             self.fig_vmax, self.ax_vmax = plt.subplots(figsize=(6, 4), dpi=100)
+
             # Initialize lists to store all x and y values
             all_x = []
             all_y = []
@@ -2253,9 +2320,13 @@ class AnalysisDialog(tk.Toplevel):
 
             series_data.sort(key=lambda x: x[0])
             distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
+            model_names_set = set()
             for i, series in enumerate(series_data):
                 model_name, series_sum, x, y = series
+                model_names_set.add(model_name)
                 self.ax_vmax.plot(x, y, label=model_name, color=distinct_colors[i])
+
+            num_unique_models = len(model_names_set)
 
             # Find the overall min/max of all x and y values
             x_min = min(all_x)
@@ -2279,14 +2350,13 @@ class AnalysisDialog(tk.Toplevel):
             self.ax_vmax.set_ylim([y_lim_min, y_lim_max])
             # Set title and labels
             num_storm_ids = len(self.selected_internal_storm_ids)
-            self.ax_vmax.set_title(f'TC VMax @ 10m, {num_tracks_with_data}/{num_storm_ids} tracks\n\nPeak VMax: {int(round(y_max))} kt')
+            self.ax_vmax.set_title(f'TC VMax @ 10m, {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models\n\nPeak VMax: {int(round(y_max))} kt')
             self.ax_vmax.set_ylabel('VMax @ 10m (kt)')
             self.ax_vmax.set_xlabel(self.tz_previous_selected)
             self.ax_vmax.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
             self.ax_vmax.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
             self.ax_vmax.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
-            # Add a legend
-            self.ax_vmax.legend(loc='lower left', bbox_to_anchor=(1.05, 0), borderaxespad=0)
+
             # Saffir-Simpson scale (kt)
             saffir_simpson_scale = [34, 64, 83, 96, 113, 137]
             saffir_simpson_labels = ['TS', 'CAT1', 'CAT2', 'CAT3', 'CAT4', 'CAT5']
@@ -2296,8 +2366,24 @@ class AnalysisDialog(tk.Toplevel):
                 if value >= self.ax_vmax.get_ylim()[0] and value <= self.ax_vmax.get_ylim()[1]:
                     self.ax_vmax.text(1.02, value / self.ax_vmax.get_ylim()[1], label, ha='left', va='center',
                                       transform=self.ax_vmax.transAxes)
-            # Use tight_layout to ensure everything fits within the figure area
-            self.fig_vmax.tight_layout(rect=[0, 0, 0.95, 1])
+
+            # Get the number of legend items
+            num_items = len(self.ax_vmax.get_legend_handles_labels()[0])
+            # Calculate the number of columns based on the available space
+            available_height = FULL_SCREEN_HEIGHT * 0.9
+            max_items_per_column = available_height / 30
+            num_columns = min(max(1, num_items // max_items_per_column), 5)
+            # Create the legend with the calculated number of columns
+            self.ax_vmax.legend(
+                loc='lower left',
+                bbox_to_anchor=(1.052, 0),
+                borderaxespad=0,
+                ncol=num_columns
+            )
+            # all fine tuned values since we haven't drawn/packed it yet
+            est_legend_width = num_columns * 80 / FULL_SCREEN_WIDTH
+            self.fig_vmax.subplots_adjust(left=90/FULL_SCREEN_WIDTH, right=(0.88 - est_legend_width), bottom=60/FULL_SCREEN_HEIGHT, top=0.9)
+
             # Create a canvas to display the plot in the frame
             self.canvas_vmax = FigureCanvasTkAgg(self.fig_vmax, master=self.intensity_frame)
             self.canvas_vmax.draw()
@@ -4095,7 +4181,7 @@ class App:
 
                 max_dt = datetime.min
 
-                if not model_completed_items():
+                if not model_completed_times:
                     continue
 
                 for model_name, completed_times in model_completed_times.items():
@@ -4116,7 +4202,7 @@ class App:
             for genesis_source_type, model_init_times, model_completed_times, \
                 ensemble_completed_times, completed_ensembles in self.get_latest_genesis_data_times():
 
-                if not model_completed_items():
+                if not model_completed_times:
                     continue
 
                 max_dt = datetime.min
@@ -4752,6 +4838,7 @@ class App:
         self.ax.figure.canvas.draw()
         self.label_adeck_mode.config(text=f"ADECK MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime(
             '%Y-%m-%d') + f". Models: {num_models}/{num_all_models}")
+        self.update_selection_info_label()
 
     def display_genesis_data(self, model_cycle):
         # vmax_kt_threshold = [(34.0, 'v'), (64.0, '^'), (83.0, 's'), (96.0, 'p'), (113.0, 'o'), (137.0, 'D'), (float('inf'), '+')]
@@ -4878,13 +4965,26 @@ class App:
                     hours_diff_rounded = round(hours_diff)
                     candidate_info['hours_after_valid_day'] = hours_diff_rounded
 
-                    candidate_info['roci'] = candidate['roci'] / 1000
-                    candidate_info['rv850max'] = candidate['rv850max'] * 100000
+                    roci = candidate['roci']
+                    if roci > 0:
+                        candidate_info['roci'] = candidate['roci'] / 1000
+                    else:
+                        candidate_info['roci'] = None
+
+                    rv850max = candidate['rv850max']
+                    if rv850max > 0:
+                        candidate_info['rv850max'] = candidate['rv850max'] * 100000
+                    else:
+                        candidate_info['rv850max'] = None
                     vmaxkt = candidate['vmax10m_in_roci'] * 1.9438452
                     candidate_info['vmax10m_in_roci'] = vmaxkt
                     candidate_info['vmax10m'] = vmaxkt
                     candidate_info['mslp_value'] = candidate['mslp_value']
-                    candidate_info['closed_isobar_delta'] = candidate['closed_isobar_delta']
+                    isobar_delta = candidate['closed_isobar_delta']
+                    if isobar_delta > 0:
+                        candidate_info['closed_isobar_delta'] = candidate['closed_isobar_delta']
+                    else:
+                        candidate_info['closed_isobar_delta'] = None
 
                     if prev_lon:
                         prev_lon_f = float(prev_lon)
@@ -5031,6 +5131,7 @@ class App:
         self.genesis_model_cycle_time = most_recent_model_cycle
         self.genesis_models_label.config(
             text=f"Latest models: GFS [{model_dates['GFS']}], ECM[{model_dates['ECM']}], NAV[{model_dates['NAV']}], CMC[{model_dates['CMC']}]")
+        self.update_selection_info_label()
 
     def display_map(self):
         self.scatter_objects = {}
@@ -6803,6 +6904,10 @@ class App:
 # Start program GUI
 if __name__ == "__main__":
     tk_root = tk.Tk()
+
+    # For analysis plots before drawing we want to guess the width, height available full screen
+    FULL_SCREEN_WIDTH = tk_root.winfo_screenwidth()
+    FULL_SCREEN_HEIGHT = tk_root.winfo_screenheight()
 
     available_fonts = font.families()
     mono_fonts = [x.lower() for x in available_fonts if 'mono' in x]
