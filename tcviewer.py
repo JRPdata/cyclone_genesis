@@ -683,6 +683,11 @@ for list_name, lst in zip(['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN
     for model_name in lst:
         model_name_to_ensemble_name[model_name] = list_name
 
+# add these to group them under the same organization (ensemble) even though they are not part of the ensemble
+model_name_to_ensemble_name['GFS'] = 'GEFS-TCGEN'
+model_name_to_ensemble_name['ECM'] = 'EPS-TCGEN'
+model_name_to_ensemble_name['NAV'] = 'FNMOC-TCGEN'
+
 # all genesis members across both datasets: global-det + all_tcgen
 # there is some overlap with CMC ours and theirs, so add CMCO as theirs (like GFSO)
 all_genesis_names = list(set(all_tcgen_members + ['GFS', 'CMC', 'CMCO', 'ECM', 'NAV']))
@@ -1120,7 +1125,7 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
                 continue
 
             num_init_time_ens_is_complete = 0
-            for ensemble_init_time in list(ensemble_init_times):
+            for ensemble_init_time in ensemble_init_times:
                 cursor.execute(
                     f'SELECT completed FROM ens_status WHERE init_date = ? AND ensemble_name = ? ORDER BY init_date DESC LIMIT 1',
                     (ensemble_init_time, ensemble_name))
@@ -1149,7 +1154,7 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
     return model_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, all_retrieved_data
 
 # get list of completed TC candidates
-def get_tc_candidates_from_valid_time(interval_start):
+def get_tc_candidates_from_valid_time(genesis_previous_selected, interval_start):
     all_retrieved_data = []  # List to store data from all rows
     conn = None
     # either model names for own tracker, or ensemble names
@@ -1228,7 +1233,7 @@ def get_tc_candidates_from_valid_time(interval_start):
                 continue
 
             num_init_time_ens_is_complete = 0
-            for ensemble_init_time in list(ensemble_init_times):
+            for ensemble_init_time in ensemble_init_times:
                 cursor.execute(
                     f'SELECT completed FROM ens_status WHERE init_date = ? AND ensemble_name = ? ORDER BY init_date DESC LIMIT 1',
                     (ensemble_init_time, ensemble_name))
@@ -1466,7 +1471,7 @@ def tcvitals_line_to_dict(line):
 # Classes used by App class
 
 class AnalysisDialog(tk.Toplevel):
-    def __init__(self, parent, plotted_tc_candidates, root_width, root_height):
+    def __init__(self, parent, plotted_tc_candidates, root_width, root_height, previous_selected_combo):
         self.selected_internal_storm_ids = App.get_selected_internal_storm_ids()
         if not self.selected_internal_storm_ids:
             return
@@ -1476,6 +1481,12 @@ class AnalysisDialog(tk.Toplevel):
         self.notebook = None
         self.root_width = root_width
         self.root_height = root_height
+        self.previous_selected_combo = previous_selected_combo
+
+        if self.previous_selected_combo[-5:] == 'GLOBAL-DET':
+            self.possible_ensemble = False
+        else:
+            self.possible_ensemble = True
 
         self.notebook_tab_names = dict()
         self.notebook_figs = dict()
@@ -1825,6 +1836,33 @@ class AnalysisDialog(tk.Toplevel):
 
         # Return the time series data as a tuple (x, y)
         return (model_name, series_sum, datetimes, values,)
+
+    @staticmethod
+    # get color index, num_ensembles, and num represented ensemble members
+    def get_color_index_by_model_name(model_names_set):
+        ensemble_names = set()
+        num_represented = {}
+        for model_name in model_names_set:
+            ensemble_name = model_name_to_ensemble_name[model_name]
+            ensemble_names.add(ensemble_name)
+            if ensemble_name not in num_represented:
+                num_represented[ensemble_name] = 0
+            num_represented[ensemble_name] += 1
+
+        num_ensembles = len(ensemble_names)
+        if len(model_names_set) <= 10 or num_ensembles <= 1:
+            return None, num_ensembles, num_represented
+
+        ensemble_to_enum = {}
+        for i, ensemble_name in enumerate(ensemble_names):
+            ensemble_to_enum[ensemble_name] = i
+
+        model_color_indices = {}
+        # Must sort since model_names_set is not sorted and the series/legend will be in sorted order
+        for model_name in sorted(model_names_set):
+            model_color_indices[model_name] = ensemble_to_enum[model_name_to_ensemble_name[model_name]]
+
+        return model_color_indices, num_ensembles, num_represented
 
     def get_current_tab_name(self):
         current_tab_index = self.notebook.index("current")
@@ -2307,6 +2345,7 @@ class AnalysisDialog(tk.Toplevel):
             any_data = False
             num_tracks_with_data = 0
             series_data = []
+            model_names_set = set()
             for internal_storm_id in self.selected_internal_storm_ids:
                 model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'vmax10m')
                 if y is not None:
@@ -2315,18 +2354,45 @@ class AnalysisDialog(tk.Toplevel):
                     all_y.extend(y)
                     series_data.append([model_name, series_sum, x, y])
                     num_tracks_with_data += 1
+                    model_names_set.add(model_name)
             if not any_data:
                 return
 
+            num_unique_models = len(model_names_set)
             series_data.sort(key=lambda x: x[0])
-            distinct_colors = self.generate_distinct_colors(num_tracks_with_data)
-            model_names_set = set()
+
+            # get color indices if have many models and more than one ensemble
+            # also get the number of ensembles, and number of members represented from each ensemble (not the total in the ensemble)
+            color_index_by_model_name, num_ensembles, num_represented = self.get_color_index_by_model_name(model_names_set)
+            # self.possible_ensemble is there to make sure we don't label our own tracker which only has global deterministic models
+            if num_represented and num_ensembles > 1 and self.possible_ensemble:
+                # in rough alphabetical order (AP, CP, EE, NP)
+                ensemble_model_counts = []
+                for ens_name in ['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN']:
+                    if ens_name in num_represented:
+                        ensemble_model_counts.append(str(num_represented[ens_name]))
+                ensemble_model_count_str = ", ".join(ensemble_model_counts)
+                if ensemble_model_count_str:
+                    ensemble_model_count_str = f', {num_ensembles} Ensembles ({ensemble_model_count_str})'
+            else:
+                ensemble_model_count_str = ''
+
+            ensemble_count_str = []
+            if color_index_by_model_name:
+                use_color_index = True
+                num_colors = num_ensembles
+            else:
+                use_color_index = False
+                num_colors = num_tracks_with_data
+
+            distinct_colors = self.generate_distinct_colors(num_colors)
             for i, series in enumerate(series_data):
                 model_name, series_sum, x, y = series
-                model_names_set.add(model_name)
-                self.ax_vmax.plot(x, y, label=model_name, color=distinct_colors[i])
-
-            num_unique_models = len(model_names_set)
+                if use_color_index:
+                    color_index = color_index_by_model_name[model_name]
+                else:
+                    color_index = i
+                self.ax_vmax.plot(x, y, label=model_name, color=distinct_colors[color_index])
 
             # Find the overall min/max of all x and y values
             x_min = min(all_x)
@@ -2350,7 +2416,7 @@ class AnalysisDialog(tk.Toplevel):
             self.ax_vmax.set_ylim([y_lim_min, y_lim_max])
             # Set title and labels
             num_storm_ids = len(self.selected_internal_storm_ids)
-            self.ax_vmax.set_title(f'TC VMax @ 10m, {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models\n\nPeak VMax: {int(round(y_max))} kt')
+            self.ax_vmax.set_title(f'TC VMax @ 10m, {num_tracks_with_data}/{num_storm_ids} tracks, {num_unique_models} models{ensemble_model_count_str}\n\nPeak VMax: {int(round(y_max))} kt')
             self.ax_vmax.set_ylabel('VMax @ 10m (kt)')
             self.ax_vmax.set_xlabel(self.tz_previous_selected)
             self.ax_vmax.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
@@ -5304,7 +5370,7 @@ class App:
                         continue
 
                     num_init_time_ens_is_complete = 0
-                    for ensemble_init_time in list(ensemble_init_times):
+                    for ensemble_init_time in ensemble_init_times:
                         cursor.execute(
                             f'SELECT completed FROM ens_status WHERE init_date = ? AND ensemble_name = ? ORDER BY init_date DESC LIMIT 1',
                             (ensemble_init_time, ensemble_name))
@@ -6022,7 +6088,11 @@ class App:
 
         root_width = self.root.winfo_screenwidth()
         root_height = self.root.winfo_screenheight()
-        dialog = AnalysisDialog(self.root, self.plotted_tc_candidates, root_width, root_height)
+        if self.mode == "ADECK":
+            previous_selected_combo = self.adeck_previous_selected
+        else:
+            previous_selected_combo = self.genesis_previous_selected
+        dialog = AnalysisDialog(self.root, self.plotted_tc_candidates, root_width, root_height, previous_selected_combo)
 
         # fix focus back to map
         self.set_focus_on_map()
