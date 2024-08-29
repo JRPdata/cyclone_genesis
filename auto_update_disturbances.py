@@ -1,3 +1,8 @@
+# Deprecated! Use auto_update_disturbances_parallel.py
+
+# Generates (TC type) disturbances from global model data (GFS, CMC, ECM, NAV):
+# Uses data gathered from download.py
+
 # EXPERIMENTAL
 # Work in progress (do not use)
 

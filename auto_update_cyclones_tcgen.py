@@ -1,3 +1,7 @@
+# Generates TC candidates from:
+# 1) NCEP ensemble tracker for genesis tracker (GEFS, GEPS, FNMOC ensembles)
+# 2) ECMWF genesis tracker (WMO-essential)
+
 # EXPERIMENTAL
 # Work in progress (do not use)
 
@@ -85,8 +89,6 @@ import re
 from functools import lru_cache
 
 import pytz
-
-import warnings
 
 from datetime import datetime, timedelta
 import sqlite3
@@ -181,9 +183,6 @@ nx_split_color = 'red'
 
 # must set to [] anywhere there is an exception and the stack doesn't get popped properly
 debug_time_start_stack = []
-
-# Reset the warnings to its original state here
-warnings.resetwarnings()
 
 # close old maps generated
 old_maps = []

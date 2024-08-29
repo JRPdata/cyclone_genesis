@@ -1,3 +1,7 @@
+# Deprecated! Use auto_update_cyclones_tcgen.py instead with tcviewer.py
+# Uses data gathered from download.py
+
+# Generates TC candidates from products of auto_update_disturbances_parallel.py
 # EXPERIMENTAL
 # Work in progress (do not use)
 
@@ -57,15 +61,6 @@ tc_maps_folder = '/home/db/Documents/JRPdata/cyclone_genesis_charts'
 # path to font for charts
 font_path = '/usr/share/fonts/truetype/freefont/FreeSerif.ttf'
 
-# for debugging MSLP isobars (depth first search)
-debug_isobar_images = False
-
-# save vorticity calculations
-debug_save_vorticity = False
-
-# output calculation timing for debugging & optimization
-debug_calc_exec_time = False
-
 # write networkx graphs (original and reduced) of TC tracks (in graphs/ folder)
 write_graphs = False
 
@@ -78,7 +73,6 @@ save_disturbance_maps = False
 save_tc_maps = False
 
 import json
-import pygrib
 import numpy as np
 import geopandas as gpd
 from shapely.geometry import Point
@@ -88,14 +82,10 @@ import copy
 import time
 import os
 
-import warnings
-
 #%matplotlib inline
 
 from datetime import datetime, timedelta
 import sqlite3
-
-from matplotlib.patches import Circle
 
 # for generating charts of disturbances
 from IPython.display import display, clear_output
@@ -108,7 +98,6 @@ import io
 import base64
 
 import networkx as nx
-import matplotlib.pyplot as plt
 from pyproj import Geod
 
 gdf = gpd.read_file(shape_file)
@@ -230,51 +219,12 @@ next_colocated_edge_type = f'next_colocated_{largest_next_colocated_radius}'
 nx_default_color = 'skyblue'
 nx_split_color = 'red'
 
-# must set to [] anywhere there is an exception and the stack doesn't get popped properly
-debug_time_start_stack = []
-
-# Reset the warnings to its original state here
-warnings.resetwarnings()
-
 # close old maps generated
 old_maps = []
 
 old_tc_maps = []
 
 meters_to_knots = 1.943844
-
-# get list of completed TC candidates (tracks)
-def get_tc_candidates_by_basin(basin_name, limit=10):
-    all_retrieved_data = []  # List to store data from all rows
-    conn = None
-    try:
-        # Connect to the SQLite database
-        conn = sqlite3.connect(tc_candidates_db_file_path)
-        cursor = conn.cursor()
-
-        # Query all rows from the 'disturbances' table and order by 'model_timestamp'
-        cursor.execute('SELECT model_name, init_date, start_valid_date, ws_max_10m, data FROM tc_candidates WHERE start_basin = ? ORDER BY init_date DESC LIMIT ?', (basin_name, limit))
-        results = cursor.fetchall()
-        if results:
-            # Process data for each row
-            for row in results:
-                model_name, init_date, start_valid_date, ws_max_10m, json_data = row
-                retrieved_data = {
-                    "model_name": model_name,
-                    "model_timestamp": init_date,
-                    "start_valid_time": start_valid_date,
-                    "ws_max_10m": ws_max_10m,
-                    "disturbance_candidates": json.loads(json_data)
-                }
-                all_retrieved_data.append(retrieved_data)
-
-    except sqlite3.Error as e:
-        print(f"SQLite error (get_tc_candidates_by_basin): {e}")
-    finally:
-        if conn:
-            conn.close()
-
-    return all_retrieved_data
 
 def max_model_time_steps_from_timestamp_str(model_name, timestamp_str):
     dt = datetime.fromisoformat(timestamp_str)
@@ -689,177 +639,8 @@ def generate_tc_chart(tc_candidates, saveonly=False):
 ########       CALCULATE DISTURBANCES            ########
 #########################################################
 
-# Define a context manager to temporarily ignore the warning
-class SuppressRuntimeWarningVortCalcs:
-    def __enter__(self):
-        self.original_filters = warnings.filters[:]
-        # first two warning are from metpy
-        warning_filter_vort_divide = (
-            "ignore",
-            ".*invalid value encountered in divide.*"
-        )
-        warnings.filterwarnings(*warning_filter_vort_divide)
-
-        #/tmp/ipykernel_701280/3056967088.py:670: UnitStrippedWarning: The unit of the quantity is stripped when downcasting to ndarray.
-        warning_filter_vort_units = (
-            "ignore",
-            ".*unit of the quantity is stripped.*"
-        )
-        warnings.filterwarnings(*warning_filter_vort_units)
-
-        # warning from metview
-        warnings_filter_vort_grib = (
-            "ignore",
-            ".*GRIB write support is experimental.*"
-        )
-        warnings.filterwarnings(*warnings_filter_vort_grib)
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        warnings.filters = self.original_filters
-
-def get_calculated_and_missing_time_steps(model_name, model_timestamp):
-    model_hour = f'{model_timestamp.hour:02}'
-    # remove from this the calculated timesteps
-    model_time_steps_missing = set(all_time_steps_by_model[model_name][model_hour])
-
-    disturbance_candidates = get_disturbances_from_db(model_name, model_timestamp)
-    time_steps_calculated = set()
-    if disturbance_candidates:
-        for time_step_str, candidates in disturbance_candidates.items():
-            time_step_int = int(time_step_str)
-            time_steps_calculated.add(time_step_int)
-            # discard will not throw an error even if it is not there
-            model_time_steps_missing.discard(time_step_int)
-    return sorted(list(time_steps_calculated)), sorted(list(model_time_steps_missing))
-
-# the full timestep string as used in the file names we are parsing from the model data
-# include any leading zeros up that make sense (only up to what the model covers)
-def convert_model_time_step_to_str(model_name, model_time_step):
-    str_format = model_time_step_str_format[model_name]
-    return f'{model_time_step:{str_format}}'
-
-def get_disturbances_from_db(model_name, model_timestamp):
-    conn = None
-    retrieved_data = {}
-    try:
-        # store disturbance candidates in database
-        conn = sqlite3.connect(disturbances_db_file_path)
-        cursor = conn.cursor()
-
-        ds = model_timestamp.isoformat()
-
-        cursor.execute('SELECT data FROM disturbances WHERE model_name = ? AND date = ?', (model_name, ds))
-        result = cursor.fetchone()
-        if result:
-            retrieved_data = json.loads(result[0])
-
-    except sqlite3.Error as e:
-        print(f"SQLite error (get_disturbances_from_db): {e}")
-    finally:
-        if conn:
-            conn.close()
-
-    return retrieved_data
-
-# call with no params before a func call, and then must pass it a func_str on the next call once func is complete
-def debug_timing(func_str = None):
-    if not debug_calc_exec_time:
-        return
-    if func_str is None:
-        debug_time_start_stack.append(time.time())
-        return
-
-    debug_time_start = debug_time_start_stack.pop()
-    debug_time_end = time.time()
-    print(f'{func_str} execution time (seconds): {debug_time_end - debug_time_start:.1f}')
-
-# rv_to_sign just maps to positive and negative, without it, it does an (arbitrary) color mapping
-def create_image(array, title, rv_to_sign=True, radius=None):
-    plt.figure(figsize=(8, 8))
-    cmap = plt.cm.RdBu
-
-    if array.dtype == bool:
-        # Convert boolean values to 1.0 (True) and -1.0 (False)
-        image = np.where(array, -1.0, 1.0)
-    else:
-        if rv_to_sign:
-            # Map float values to 1.0 (>=0) and -1.0 (<0)
-            image = np.where(array >= 0, 1.0, -1.0)
-        else:
-            image = array
-
-    plt.imshow(image, cmap=cmap, interpolation='none')
-    plt.title(title)
-
-    for i in range(array.shape[0] + 1):
-        plt.axhline(i - 0.5, color='black', lw=0.5)
-        plt.axvline(i - 0.5, color='black', lw=0.5)
-
-    plt.gca().invert_yaxis()
-    plt.axis('off')
-
-    if radius is not None:
-        circle = Circle((array.shape[1] / 2 - 0.5, array.shape[0] / 2 - 0.5), radius, fill=False, color='yellow')
-        plt.gca().add_patch(circle)
-
-    plt.show()
-
-def list_available_parameters(grib_file):
-    try:
-        # Open the GRIB file
-        grbs = pygrib.open(grib_file)
-
-        # Initialize a list to store parameter information
-        parameter_info = []
-
-        # Iterate through the GRIB messages and extract parameter information
-        for grb in grbs:
-            parameter_name = grb.name
-            parameter_shortName = grb.shortName
-            parameter_unit = grb.units
-            level_type = grb.levelType
-            level = grb.level
-            print(grb)
-            parameter_info.append({
-                "Parameter Name": parameter_name,
-                "Parameter shortName": parameter_shortName,
-                "Unit": parameter_unit,
-                "Level Type": level_type,
-                "Level": level
-            })
-
-        # Close the GRIB file
-        grbs.close()
-
-        # Print the information for parameters
-        for info in parameter_info:
-            print("Parameter Name:", info["Parameter Name"])
-            print("Parameter shortName:", info["Parameter shortName"])
-            print("Unit:", info["Unit"])
-            print("Level Type:", info["Level Type"])
-            print("Level:", info["Level"])
-            print("\n")
-
-    except Exception as e:
-        print(f"Error: {e}")
-        traceback.print_exc(limit=None, file=None, chain=True)
-
-def convert_to_signed_lon(lon):
-    # Convert longitudes from 0-360 range to -180 to +180 range
-    return (lon + 180) % 360 - 180
-
-def array_indices_to_lat_lon(x, y, lats, lons):
-    if len(lats.shape) == 2:
-        lat = lats[x, y]
-        lon = lons[x, y]
-    else:
-        lat = lats[x]
-        lon = lons[y]
-    signed_lon = convert_to_signed_lon(lon)
-    return lat, signed_lon
-
 # print candidates
-def print_candidates(mslp_minima_list, lats = None, lons = None, meet_all_disturbance_thresholds = False, no_numbering=False):
+def print_candidates(mslp_minima_list, meet_all_disturbance_thresholds = False, no_numbering=False):
     n = 0
     for candidate in mslp_minima_list:
         if meet_all_disturbance_thresholds:
@@ -874,13 +655,8 @@ def print_candidates(mslp_minima_list, lats = None, lons = None, meet_all_distur
         n += 1
         mslp_value = candidate["mslp_value"]
 
-        if lats is not None and lons is not None:
-            x = candidate["x_value"]
-            y = candidate["y_value"]
-            lat, lon = array_indices_to_lat_lon(x, y, lats, lons)
-        else:
-            lat = candidate['lat']
-            lon = candidate['lon']
+        lat = candidate['lat']
+        lon = candidate['lon']
 
         formatted_mslp = f"{mslp_value:.1f}".rjust(6, ' ')
         rv_str = ""
@@ -932,10 +708,6 @@ def print_candidates(mslp_minima_list, lats = None, lons = None, meet_all_distur
         else:
             numbering_str = f"#{n: >2}, "
         print(f"{numbering_str}{basin_str}Latitude (deg:): {lat: >6.1f}, Longitude (deg): {lon: >6.1f}, MSLP (hPa): {formatted_mslp}{roci_str}\n        {rv_str}{thickness_str}{vmax_str}\n        {vmax10m_in_roci_str}{closed_isobar_delta_str}")
-
-        if debug_isobar_images:
-            create_image(candidate['neighborhood'], 'Neighborhood')
-            create_image(candidate['visited'], 'Visited')
 
 # returns the basin name from lat, lon if in a basin that is covered by the thresholds, otherwise returns None
 def get_basin_name_from_lat_lon(lat, lon):
@@ -1287,7 +1059,7 @@ def process_and_simplify_graph(graph):
                     for node in segment_nodes:
                         color_by_nodes[node] = nx_split_color
 
-                    segment_first_valid_time = not_connected_segment[0]
+                    #segment_first_valid_time = not_connected_segment[0]
                     segment_last_valid_time = not_connected_segment[-1]
                     #segment_first_index = node_valid_times.index(segment_first_valid_time)
                     segment_last_index = node_valid_times.index(segment_last_valid_time)
@@ -1819,6 +1591,48 @@ def add_tc_candidate(model_name, model_init_time, component_num, max_10m_wind_sp
 
     return has_error
 
+# prune old data in tables
+def remove_old_data(db_path, date_column_str, days_to_keep):
+    global last_run_dates
+    global cutoff_date_str
+    today = datetime.today().date()
+
+    # Check if the function has already run today for this db
+    if db_path in last_run_dates and last_run_dates[db_path] == today:
+        return
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Get the most recent date from the first table
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        if tables:
+            table_name = tables[0][0]
+            cursor.execute(f"SELECT {date_column_str} FROM {table_name} ORDER BY {date_column_str} DESC LIMIT 1;")
+            most_recent_date_str = cursor.fetchone()[0]
+            most_recent_date = datetime.fromisoformat(most_recent_date_str)
+            cutoff_date = most_recent_date - timedelta(days=days_to_keep)
+            cutoff_date_str = cutoff_date.isoformat()
+
+            # Remove old data from all tables
+            for table_name, in tables:
+                cursor.execute(f"DELETE FROM {table_name} WHERE {date_column_str} < ?", (cutoff_date_str,))
+            conn.commit()
+            cursor.execute("VACUUM")
+    except:
+        traceback.print_exc(limit=None, file=None, chain=True)
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+    last_run_dates[db_path] = today
+    if cutoff_date_str is None:
+        # first run case
+        cutoff_date = today - timedelta(days=days_to_keep)
+        cutoff_date_str = cutoff_date.isoformat()
+
 #######################################
 ### CALCULATE TCs FROM DISTURBANCES ###
 #######################################
@@ -1908,48 +1722,6 @@ def commit_changes(target_directory, commit_message, *files):
     os.system(f'git commit -m "{commit_message}"')
 
     os.system('git push')
-
-# prune old data in tables
-def remove_old_data(db_path, date_column_str, days_to_keep):
-    global last_run_dates
-    global cutoff_date_str
-    today = datetime.today().date()
-
-    # Check if the function has already run today for this db
-    if db_path in last_run_dates and last_run_dates[db_path] == today:
-        return
-
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        # Get the most recent date from the first table
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = cursor.fetchall()
-        if tables:
-            table_name = tables[0][0]
-            cursor.execute(f"SELECT {date_column_str} FROM {table_name} ORDER BY {date_column_str} DESC LIMIT 1;")
-            most_recent_date_str = cursor.fetchone()[0]
-            most_recent_date = datetime.fromisoformat(most_recent_date_str)
-            cutoff_date = most_recent_date - timedelta(days=days_to_keep)
-            cutoff_date_str = cutoff_date.isoformat()
-
-            # Remove old data from all tables
-            for table_name, in tables:
-                cursor.execute(f"DELETE FROM {table_name} WHERE {date_column_str} < ?", (cutoff_date_str,))
-            conn.commit()
-            cursor.execute("VACUUM")
-    except:
-        traceback.print_exc(limit=None, file=None, chain=True)
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-    last_run_dates[db_path] = today
-    if cutoff_date_str is None:
-        # first run case
-        cutoff_date = today - timedelta(days=days_to_keep)
-        cutoff_date_str = cutoff_date.isoformat()
 
 last_model_init_times = []
 while True:

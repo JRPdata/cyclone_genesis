@@ -1,4 +1,9 @@
-# requires curl, and grib_copy for navgem (ECC grib_tools)
+# Auto Downloads Global Model Data and TC Genesis Data
+# See url_folder_by_model for sources
+# Genesis data is from NCEP (GEFS, GEPS, FNMOC), ECMWF genesis trackers
+# Downloads are threaded PER server source (see model_names_to_download_thread_groupings)
+
+# Non-python dependencies: requires curl, and grib_copy for navgem (ECC grib_tools)
 import traceback
 
 import re
@@ -18,6 +23,11 @@ import shutil
 import threading
 import sys
 import signal
+import pytz
+# avoid deprecation
+def datetime_utcnow():
+    return datetime.now(pytz.utc).replace(tzinfo=None)
+
 
 # print based on level (lower is more important):
 #  0 is None (for no messages printed)
@@ -352,7 +362,7 @@ def get_disturbances_from_db(model_name, model_timestamp):
 # for interval_hours = 6, find 6 hour model timestamp prior to 00,06,12,18Z
 def get_latest_possible_model_time(model_name):
     interval_hours = model_interval_hours[model_name]
-    utc_now = datetime.utcnow()
+    utc_now = datetime_utcnow()
     model_hour = utc_now.hour
     latest_hour = (model_hour // interval_hours) * interval_hours
     latest_time = datetime.replace(utc_now, hour = latest_hour, minute = 0, second = 0, microsecond = 0)
@@ -362,7 +372,7 @@ def get_latest_possible_model_time(model_name):
 def get_latest_n_model_times(model_name, n=num_latest_runs):
     model_times = []
     interval_hours = model_interval_hours[model_name]
-    utc_now = datetime.utcnow()
+    utc_now = datetime_utcnow()
     model_hour = utc_now.hour
     latest_hour = (model_hour // interval_hours) * interval_hours
     latest_time = datetime.replace(utc_now, hour = latest_hour, minute = 0, second = 0, microsecond = 0)
