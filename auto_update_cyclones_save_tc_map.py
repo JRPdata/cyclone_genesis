@@ -25,6 +25,12 @@ tc_disturbances_db_file_path = 'tc_disturbances.db'
 # this is for accessing by model and storm (internal component id)
 tc_candidates_db_file_path = 'tc_candidates.db'
 
+# delete data num days older than most recent entry
+num_db_retention_days = 10
+last_run_dates = {}
+# don't process data older than this date (calculated from retention days as YYYYMMDD00)
+cutoff_date_str = None
+
 # cylindrical (no spherical corrections), same as GEMPAK (used by FSU apparently)
 default_vorticity_method = 'metpy'
 # metview's vorticity method (differs from metpy/GEPAK):
@@ -104,13 +110,6 @@ import base64
 import networkx as nx
 import matplotlib.pyplot as plt
 from pyproj import Geod
-
-# may need to modify lzma.py in python folder to get this to work (pip install backports-lzma)
-# this is for metpy
-try:
-    import lzma
-except ImportError:
-    import backports.lzma as lzma
 
 gdf = gpd.read_file(shape_file)
 
@@ -1290,7 +1289,7 @@ def process_and_simplify_graph(graph):
 
                     segment_first_valid_time = not_connected_segment[0]
                     segment_last_valid_time = not_connected_segment[-1]
-                    segment_first_index = node_valid_times.index(segment_first_valid_time)
+                    #segment_first_index = node_valid_times.index(segment_first_valid_time)
                     segment_last_index = node_valid_times.index(segment_last_valid_time)
                     #segment_predecessor_index = segment_first_index - 1
                     segment_successor_index = segment_last_index + 1
@@ -1641,8 +1640,9 @@ def get_model_timestamp_of_completed_tc_by_model_name():
             completed_tc_by_model_name[model_name].append(model_timestamp)
     return completed_tc_by_model_name
 
-# get list of completed TC candidates (tracks)
+# get list of completed TC candidates (tracks) from the cutoff_date
 def get_tc_completed():
+    global cutoff_date_str
     all_retrieved_data = []  # List to store data from all rows
     conn = None
     try:
@@ -1660,7 +1660,7 @@ def get_tc_completed():
         ''')
 
         # Query all rows from the 'disturbances' table and order by 'model_timestamp'
-        cursor.execute('SELECT model_name, init_date, completed_date FROM completed ORDER BY init_date')
+        cursor.execute('SELECT model_name, init_date, completed_date FROM completed WHERE init_date >= ? ORDER BY init_date', (cutoff_date_str,))
         results = cursor.fetchall()
         if results:
             # Process data for each row
@@ -1909,9 +1909,56 @@ def commit_changes(target_directory, commit_message, *files):
 
     os.system('git push')
 
+# prune old data in tables
+def remove_old_data(db_path, date_column_str, days_to_keep):
+    global last_run_dates
+    global cutoff_date_str
+    today = datetime.today().date()
+
+    # Check if the function has already run today for this db
+    if db_path in last_run_dates and last_run_dates[db_path] == today:
+        return
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Get the most recent date from the first table
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        if tables:
+            table_name = tables[0][0]
+            cursor.execute(f"SELECT {date_column_str} FROM {table_name} ORDER BY {date_column_str} DESC LIMIT 1;")
+            most_recent_date_str = cursor.fetchone()[0]
+            most_recent_date = datetime.fromisoformat(most_recent_date_str)
+            cutoff_date = most_recent_date - timedelta(days=days_to_keep)
+            cutoff_date_str = cutoff_date.isoformat()
+
+            # Remove old data from all tables
+            for table_name, in tables:
+                cursor.execute(f"DELETE FROM {table_name} WHERE {date_column_str} < ?", (cutoff_date_str,))
+            conn.commit()
+            cursor.execute("VACUUM")
+    except:
+        traceback.print_exc(limit=None, file=None, chain=True)
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+    last_run_dates[db_path] = today
+    if cutoff_date_str is None:
+        # first run case
+        cutoff_date = today - timedelta(days=days_to_keep)
+        cutoff_date_str = cutoff_date.isoformat()
+
 last_model_init_times = []
 while True:
     #print("\nChecking for new disturbance data from completed model runs")
+    # do it in this order so the cutoff date for processing is set by the disturbances
+    remove_old_data(tc_candidates_db_file_path, 'init_date', num_db_retention_days)
+    remove_old_data(tc_disturbances_db_file_path, 'date', num_db_retention_days)
+    remove_old_data(disturbances_db_file_path, 'date', num_db_retention_days)
+
     calc_tc_candidates()
     if save_tc_maps:
         # most recent N model runs
