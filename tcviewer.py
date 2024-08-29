@@ -53,6 +53,8 @@
 #   checks modification date in any class of the three, and refreshes the entire class
 #      timer resets after manual reloads
 TIMER_INTERVAL_MINUTES = 30
+# similar but only for genesis data: global-det (own tracker), and tcgen (NCEP/NOAA,ECMWF data from auto_update_cyclones_tc_gen.py)
+LOCAL_TIMER_INTERVAL_MINUTES = 10
 
 # Plot relative vorticity contours (cyclonic/anti-cyclonic) and labels
 RVOR_CYCLONIC_CONTOURS = True
@@ -426,14 +428,22 @@ def print_line_number():
 matplotlib.use('Agg')
 matplotlib.rcParams['figure.dpi'] = CHART_DPI
 
-# this is for accessing by model and storm (internal component id)
+# own tracker for genesis data - this accesses data by model and storm (internal component id)
 tc_candidates_db_file_path = 'tc_candidates.db'
 
+# tcgen data (processed from NCEP/NOAA, ECMWF) by model and storm
+tc_candidates_tcgen_db_file_path = 'tc_candidates_tcgen.db'
+
+# global_det models (keys are models in own tracker), and tcgen models
 model_data_folders_by_model_name = {
     'GFS': '/home/db/metview/JRPdata/globalmodeldata/gfs',
     'ECM': '/home/db/metview/JRPdata/globalmodeldata/ecm',
     'CMC': '/home/db/metview/JRPdata/globalmodeldata/cmc',
-    'NAV': '/home/db/metview/JRPdata/globalmodeldata/nav'
+    'NAV': '/home/db/metview/JRPdata/globalmodeldata/nav',
+    'EPS-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/eps-tcgen',
+    'GEFS-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/gefs-tcgen',
+    'GEPS-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/geps-tcgen',
+    'FNMOC-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/fnmoc-tcgen'
 }
 
 intensity_models = {
@@ -653,6 +663,30 @@ regional_models = ['HFSA', 'HFSB', 'HFAI', 'HFA2', 'HFBI', 'HFB2',
                    'HWRF', 'HWF2', 'HWFI', 'HWFI', 'BEST', 'TCVITALS']
 official_models = ['OFCI', 'OFCL', 'BEST', 'TCVITALS']
 consensus_models = ['ICON', 'IVCN', 'RVCN', 'NNIC', 'NNIB', 'BEST', 'TCVITALS']
+
+# tcgen models
+# Deterministic, control and perturbation members of the ensembles
+gefs_members = ['GFSO', 'AC00', 'AP01', 'AP02', 'AP03', 'AP04', 'AP05', 'AP06', 'AP07', 'AP08', 'AP09', 'AP10', 'AP11', 'AP12', 'AP13', 'AP14', 'AP15', 'AP16', 'AP17', 'AP18', 'AP19', 'AP20', 'AP21', 'AP22', 'AP23', 'AP24', 'AP25', 'AP26', 'AP27', 'AP28', 'AP29', 'AP30']
+geps_members = ['CMC', 'CC00', 'CP01', 'CP02', 'CP03', 'CP04', 'CP05', 'CP06', 'CP07', 'CP08', 'CP09', 'CP10', 'CP11', 'CP12', 'CP13', 'CP14', 'CP15', 'CP16', 'CP17', 'CP18', 'CP19', 'CP20']
+eps_members = ['ECHR', 'ECME', 'EE01', 'EE02', 'EE03', 'EE04', 'EE05', 'EE06', 'EE07', 'EE08', 'EE09', 'EE10', 'EE11', 'EE12', 'EE13', 'EE14', 'EE15', 'EE16', 'EE17', 'EE18', 'EE19', 'EE20', 'EE21', 'EE22', 'EE23', 'EE24', 'EE25', 'EE26', 'EE27', 'EE28', 'EE29', 'EE30', 'EE31', 'EE32', 'EE33', 'EE34', 'EE35', 'EE36', 'EE37', 'EE38', 'EE39', 'EE40', 'EE41', 'EE42', 'EE43', 'EE44', 'EE45', 'EE46', 'EE47', 'EE48', 'EE49', 'EE50']
+fnmoc_members = ['NGX', 'NC00', 'NP01', 'NP02', 'NP03', 'NP04', 'NP05', 'NP06', 'NP07', 'NP08', 'NP09', 'NP10', 'NP11', 'NP12', 'NP13', 'NP14', 'NP15', 'NP16', 'NP17', 'NP18', 'NP19', 'NP20']
+all_tcgen_members = gefs_members + geps_members + eps_members + fnmoc_members
+tcgen_models_by_ensemble = {
+    'GEFS-TCGEN': gefs_members,
+    'GEPS-TCGEN': geps_members,
+    'EPS-TCGEN': eps_members,
+    'FNMOC-TCGEN': fnmoc_members,
+    'ALL-TCGEN': all_tcgen_members
+}
+# Create a dictionary to map model names to ensemble names
+model_name_to_ensemble_name = {}
+for list_name, lst in zip(['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN'], [gefs_members, geps_members, eps_members, fnmoc_members]):
+    for model_name in lst:
+        model_name_to_ensemble_name[model_name] = list_name
+
+# all genesis members across both datasets: global-det + all_tcgen
+# there is some overlap with CMC ours and theirs, so add CMCO as theirs (like GFSO)
+all_genesis_names = list(set(all_tcgen_members + ['GFS', 'CMC', 'CMCO', 'ECM', 'NAV']))
 
 # Helper functions for input data
 
@@ -972,7 +1006,8 @@ def get_recent_storms(urls):
     return dt_mods_tcvitals, recent_storms
 
 # get list of completed TC candidates
-def get_tc_candidates_at_or_before_init_time(interval_end):
+# handle own genesis tracker data and tcgen data processed from NCEP, ECMWF
+def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval_end):
     if type(interval_end) == str:
         interval_end = datetime.fromisoformat(interval_end)
 
@@ -980,26 +1015,48 @@ def get_tc_candidates_at_or_before_init_time(interval_end):
     conn = None
     model_names = list(model_data_folders_by_model_name.keys())
     model_init_times = {}
+
+    model_completed_times = {}
+    # list of completed times per ensemble for member completion for a recent cycle (may spread across more than one cycle)
+    ensemble_completed_times = {}
+    # get whether the ensemble is complete at a single cycle (only one init_time and ens_status is complete)
+    completed_ensembles = {}
+
+    ensemble_names = []
+    if genesis_previous_selected == 'GLOBAL-DET':
+        db_file_path = tc_candidates_db_file_path
+        # filter out all model_names from tcgen and keep all models from own tracker
+        model_names = [model_name for model_name in model_names if model_name[-5:] != 'TCGEN']
+    else:
+        db_file_path = tc_candidates_tcgen_db_file_path
+        if genesis_previous_selected == 'ALL-TCGEN':
+            # filter out all model_names from own tracker and keep all tcgen models
+            ensemble_names = [ensemble_name for ensemble_name in tcgen_models_by_ensemble.keys() if ensemble_name != 'ALL-TCGEN']
+            model_names = tcgen_models_by_ensemble['ALL-TCGEN']
+        else:
+            # pick the selected ensemble
+            ensemble_names = [genesis_previous_selected]
+            model_names = tcgen_models_by_ensemble[genesis_previous_selected]
+
     try:
         # Connect to the SQLite database
-        conn = sqlite3.connect(tc_candidates_db_file_path)
+        conn = sqlite3.connect(db_file_path)
         cursor = conn.cursor()
 
         for model_name in model_names:
             cursor.execute(
-                'SELECT DISTINCT init_date FROM completed WHERE model_name = ? AND init_date <= ? ORDER BY init_date DESC LIMIT 1',
+                'SELECT DISTINCT init_date, completed_date FROM completed WHERE model_name = ? AND init_date <= ? ORDER BY init_date DESC LIMIT 1',
                 (model_name, datetime.isoformat(interval_end)))
             results = cursor.fetchall()
-            recent_model_init_times = []
             if results:
                 for row in results:
                     init_time = row[0]
-                    recent_model_init_times.append(init_time)
-                    if model_name not in model_init_times:
-                        model_init_times[model_name] = []
+                    completed_time = datetime.fromisoformat(row[1])
+                    model_init_times[model_name] = init_time
+                    model_completed_times[model_name] = completed_time
+                    init_date = init_time
 
-                for init_date in recent_model_init_times:
-                    model_init_times[model_name].append(init_date)
+                    # retrieve the candidates at init_time and sort by valid date (descending)
                     cursor.execute(
                         'SELECT model_name, init_date, start_valid_date, ws_max_10m, data FROM tc_candidates WHERE model_name = ? AND init_date = ? ORDER BY start_valid_date DESC',
                         (model_name, init_date))
@@ -1018,40 +1075,96 @@ def get_tc_candidates_at_or_before_init_time(interval_end):
                             }
                             all_retrieved_data.append(retrieved_data)
 
+        for ensemble_name in ensemble_names:
+            ensemble_init_times = set()
+            ensemble_completed_times_by_init_date = {}
+            for model_name, model_init_time in model_init_times.items():
+                if ensemble_name == model_name_to_ensemble_name[model_name]:
+                    ensemble_init_times.add(model_init_time)
+                    if model_init_time not in ensemble_completed_times_by_init_date:
+                        ensemble_completed_times_by_init_date[model_init_time] = []
+                    ensemble_completed_times_by_init_date[model_init_time].append(model_completed_times[model_name])
+            if not ensemble_init_times:
+                continue
+
+            num_init_time_ens_is_complete = 0
+            for ensemble_init_time in list(ensemble_init_times):
+                cursor.execute(
+                    f'SELECT completed FROM ens_status WHERE init_date = ? AND ensemble_name = ? ORDER BY init_date DESC LIMIT 1',
+                    (ensemble_init_time, ensemble_name))
+                results = cursor.fetchall()
+                ens_is_completed = 0
+                if results:
+                    for row in results:
+                        ens_is_completed = row[0]
+
+                ensemble_completed_time = max(ensemble_completed_times_by_init_date[ensemble_init_time])
+                if ensemble_name not in ensemble_completed_times:
+                    ensemble_completed_times[ensemble_name] = []
+                ensemble_completed_times[ensemble_name].append(ensemble_completed_time)
+                num_init_time_ens_is_complete += int(ens_is_completed)
+
+            if num_init_time_ens_is_complete == 1 and len(ensemble_init_times) == 1:
+                completed_ensembles[ensemble_name] = ensemble_completed_times[ensemble_name][0]
+
     except sqlite3.Error as e:
         print(f"SQLite error (get_tc_candidates_from_valid_time): {e}")
     finally:
         if conn:
             conn.close()
 
-    return model_init_times, all_retrieved_data
+    # completed times are datetimes while init times are strings
+    return model_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, all_retrieved_data
 
 # get list of completed TC candidates
 def get_tc_candidates_from_valid_time(interval_start):
     all_retrieved_data = []  # List to store data from all rows
     conn = None
+    # either model names for own tracker, or ensemble names
     model_names = list(model_data_folders_by_model_name.keys())
     model_init_times = {}
+
+    model_completed_times = {}
+    # list of completed times per ensemble for member completion for a recent cycle (may spread across more than one cycle)
+    ensemble_completed_times = {}
+    # get whether the ensemble is complete at a single cycle (only one init_time and ens_status is complete)
+    completed_ensembles = {}
+
+    ensemble_names = []
+    if genesis_previous_selected == 'GLOBAL-DET':
+        db_file_path = tc_candidates_db_file_path
+        # filter out all model_names from tcgen and keep all models from own tracker
+        model_names = [model_name for model_name in model_names if model_name[-5:] != 'TCGEN']
+    else:
+        db_file_path = tc_candidates_tcgen_db_file_path
+        if genesis_previous_selected == 'ALL-TCGEN':
+            # filter out all model_names from own tracker and keep all tcgen models
+            ensemble_names = [ensemble_name for ensemble_name in tcgen_models_by_ensemble.keys() if ensemble_name != 'ALL-TCGEN']
+            model_names = tcgen_models_by_ensemble['ALL-TCGEN']
+        else:
+            # pick the selected ensemble
+            ensemble_names = [genesis_previous_selected]
+            model_names = tcgen_models_by_ensemble[genesis_previous_selected]
+
     try:
         # Connect to the SQLite database
-        conn = sqlite3.connect(tc_candidates_db_file_path)
+        conn = sqlite3.connect(db_file_path)
         cursor = conn.cursor()
 
         for model_name in model_names:
             cursor.execute(
-                'SELECT DISTINCT init_date FROM completed WHERE model_name = ? ORDER BY init_date DESC LIMIT 1',
+                f'SELECT DISTINCT init_date, completed_date FROM completed WHERE model_name = ? ORDER BY init_date DESC LIMIT 1',
                 (model_name,))
             results = cursor.fetchall()
-            recent_model_init_times = []
             if results:
                 for row in results:
                     init_time = row[0]
-                    recent_model_init_times.append(init_time)
-                    if model_name not in model_init_times:
-                        model_init_times[model_name] = []
+                    completed_time = datetime.fromisoformat(row[1])
+                    model_init_times[model_name] = init_time
+                    model_completed_times[model_name] = completed_time
 
-                for init_date in recent_model_init_times:
-                    model_init_times[model_name].append(init_date)
+                    init_date = init_time
+                    model_init_times[model_name] = init_date
                     cursor.execute(
                         'SELECT model_name, init_date, start_valid_date, ws_max_10m, data FROM tc_candidates WHERE model_name = ? AND init_date = ? AND start_valid_date >= ? ORDER BY start_valid_date DESC',
                         (model_name, init_date, interval_start))
@@ -1070,13 +1183,46 @@ def get_tc_candidates_from_valid_time(interval_start):
                             }
                             all_retrieved_data.append(retrieved_data)
 
+        for ensemble_name in ensemble_names:
+            ensemble_init_times = set()
+            ensemble_completed_times_by_init_date = {}
+            for model_name, model_init_time in model_init_times.items():
+                if ensemble_name == model_name_to_ensemble_name[model_name]:
+                    ensemble_init_times.add(model_init_time)
+                    if model_init_time not in ensemble_completed_times_by_init_date:
+                        ensemble_completed_times_by_init_date[model_init_time] = []
+                    ensemble_completed_times_by_init_date[model_init_time].append(model_completed_times[model_name])
+            if not ensemble_init_times:
+                continue
+
+            num_init_time_ens_is_complete = 0
+            for ensemble_init_time in list(ensemble_init_times):
+                cursor.execute(
+                    f'SELECT completed FROM ens_status WHERE init_date = ? AND ensemble_name = ? ORDER BY init_date DESC LIMIT 1',
+                    (ensemble_init_time, ensemble_name))
+                results = cursor.fetchall()
+                ens_is_completed = 0
+                if results:
+                    for row in results:
+                        ens_is_completed = row[0]
+
+                ensemble_completed_time = max(ensemble_completed_times_by_init_date[ensemble_init_time])
+                if ensemble_name not in ensemble_completed_times:
+                    ensemble_completed_times[ensemble_name] = []
+                ensemble_completed_times[ensemble_name].append(ensemble_completed_time)
+                num_init_time_ens_is_complete += int(ens_is_completed)
+
+            if num_init_time_ens_is_complete == 1 and len(ensemble_init_times) == 1:
+                completed_ensembles[ensemble_name] = ensemble_completed_times[ensemble_name][0]
+
     except sqlite3.Error as e:
         print(f"SQLite error (get_tc_candidates_from_valid_time): {e}")
     finally:
         if conn:
             conn.close()
 
-    return model_init_times, all_retrieved_data
+    # completed times are datetimes while init times are strings
+    return model_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, all_retrieved_data
 
 # get model cycles relative to init_date timestamp
 def get_tc_model_init_times_relative_to(init_date):
@@ -3524,6 +3670,7 @@ class App:
         self.prev_genesis_cycle_button = None
         self.latest_genesis_cycle_button = None
         self.genesis_models_label = None
+        self.genesis_selected_combobox = None
         self.adeck_selection_info_label = None
         self.genesis_selection_info_label = None
         self.switch_to_adeck_button = None
@@ -3565,22 +3712,32 @@ class App:
         self.bdeck = None
         self.adeck_selected = tk.StringVar()
         self.adeck_previous_selected = None
+        self.genesis_selected = tk.StringVar()
+        self.genesis_previous_selected = None
         self.adeck_storm = None
         self.genesis_model_cycle_time = None
         self.zoom_selection_box = None
         self.last_cursor_lon_lat = (0.0, 0.0)
         self.lastgl = None
+        # track first fetch (don't update staleness until a reload, combobox selection, or model cycle change)
         self.have_deck_data = False
+        self.have_genesis_data = False
         # track whether there is new tcvitals,adecks,bdecks data
-        self.timer_id = None
+        self.deck_timer_id = None
+        self.genesis_timer_id = None
         self.stale_urls = dict()
         self.stale_urls['tcvitals'] = set()
         self.stale_urls['adeck'] = set()
         self.stale_urls['bdeck'] = set()
+        self.stale_genesis_data = dict()
+        self.stale_genesis_data['global-det'] = []
+        self.stale_genesis_data['tcgen'] = []
         # keys are the urls we will check for if it is stale, values are datetime objects
         self.dt_mods_tcvitals = {}
         self.dt_mods_adeck = {}
         self.dt_mods_bdeck = {}
+        # keys are the type of genesis data we will check for if data is stale ('global-det' or 'tcgen'), values are datetime objects
+        self.dt_mods_genesis = {}
         # measure tool
         self.measure_mode = False
         self.start_point = None
@@ -3867,10 +4024,10 @@ class App:
 
         return radius_degrees
 
-    def check_for_stale_data(self):
-        if self.timer_id is not None:
-            self.root.after_cancel(self.timer_id)
-        self.timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_data)
+    def check_for_stale_deck_data(self):
+        if self.deck_timer_id is not None:
+            self.root.after_cancel(deck_timer_id)
+        self.deck_timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_deck_data)
         if self.dt_mods_tcvitals:
             for url, old_dt_mod in self.dt_mods_tcvitals.items():
                 new_dt_mod = http_get_modification_date(url)
@@ -3890,7 +4047,55 @@ class App:
                     if new_dt_mod > old_dt_mod:
                         self.stale_urls['bdeck'] = self.stale_urls['bdeck'] | {url}
 
-        self.update_reload_button_color()
+        self.update_reload_button_color_for_deck()
+
+    def check_for_stale_genesis_data(self):
+        if self.genesis_timer_id is not None:
+            self.root.after_cancel(self.genesis_timer_id)
+
+        self.genesis_timer_id = self.root.after(LOCAL_TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_genesis_data)
+
+        if self.dt_mods_genesis:
+            # genesis_source_type is either 'global-det' or 'tcgen'
+            for genesis_source_type, model_init_times, model_completed_times, \
+                ensemble_completed_times, completed_ensembles in self.get_latest_genesis_data_times():
+
+                max_dt = datetime.min
+
+                if not model_completed_items():
+                    continue
+
+                for model_name, completed_times in model_completed_times.items():
+                    new_max_dt = max(completed_times)
+                    max_dt = max(max_dt, new_max_dt)
+
+                new_dt_mod = max_dt
+
+                if genesis_source_type in self.dt_mods_genesis:
+                    old_dt_mod = self.dt_mods_genesis[genesis_source_type]
+                else:
+                    old_dt_mod = datetime.min
+
+                if new_dt_mod != datetime.min and new_dt_mod > old_dt_mod:
+                    self.stale_genesis_data[genesis_source_type] = new_dt_mod
+
+        else:
+            for genesis_source_type, model_init_times, model_completed_times, \
+                ensemble_completed_times, completed_ensembles in self.get_latest_genesis_data_times():
+
+                if not model_completed_items():
+                    continue
+
+                max_dt = datetime.min
+                for model_name, completed_times in model_completed_times.items():
+                    new_max_dt = max(completed_times)
+                    max_dt = max(max_dt, new_max_dt)
+
+                new_dt_mod = max_dt
+                if new_dt_mod != datetime.min:
+                    self.stale_genesis_data[genesis_source_type] == max_dt
+
+        self.update_reload_button_color_for_genesis()
 
     def clear_circle_patch(self):
         if self.circle_handle:
@@ -3917,7 +4122,7 @@ class App:
     def clear_storm_extrema_annotations():
         AnnotatedCircles.clear()
 
-    def combo_selected_models_event(self, event):
+    def adeck_combo_selected_models_event(self, event):
         current_value = self.adeck_selected_combobox.get()
         if current_value == self.adeck_previous_selected:
             # user did not change selection
@@ -3931,6 +4136,29 @@ class App:
             App.hidden_tc_candidates = set()
             self.display_deck_data()
             self.set_focus_on_map()
+
+    def genesis_combo_selected_models_event(self, event):
+        current_value = self.genesis_selected_combobox.get()
+        if current_value == self.genesis_previous_selected:
+            # user did not change selection
+            self.set_focus_on_map()
+            return
+        else:
+            self.genesis_previous_selected = current_value
+            if not self.have_genesis_data:
+                # track first fetch
+                self.update_genesis_data_staleness()
+            model_cycle = self.genesis_model_cycle_time
+            if model_cycle is None:
+                model_cycles = get_tc_model_init_times_relative_to(datetime.now())
+                if model_cycles['next'] is None:
+                    model_cycle = model_cycles['at']
+                else:
+                    model_cycle = model_cycles['next']
+            if model_cycle:
+                # clear map
+                self.redraw_map_with_data(model_cycle=model_cycle)
+                self.set_focus_on_map()
 
     def create_adeck_mode_widgets(self):
         self.adeck_mode_frame = ttk.Frame(self.top_frame, style="TopFrame.TFrame")
@@ -3954,7 +4182,7 @@ class App:
         self.adeck_selected_combobox.current(6)
         self.adeck_previous_selected = self.adeck_selected.get()
 
-        self.adeck_selected_combobox.bind("<<ComboboxSelected>>", self.combo_selected_models_event)
+        self.adeck_selected_combobox.bind("<<ComboboxSelected>>", self.adeck_combo_selected_models_event)
 
         self.adeck_selection_info_label = ttk.Label(self.adeck_mode_frame,
                                                     text="",
@@ -3981,8 +4209,8 @@ class App:
                                               style="TButton")
         self.exit_button_genesis.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.reload_button_genesis = ttk.Button(self.genesis_mode_frame, text="(RE)LOAD", command=self.reload,
-                                                style="TButton")
+        self.reload_button_genesis = ttk.Button(self.genesis_mode_frame, text="(RE)LOAD", command=self.reload_genesis,
+                                                style="White.TButton")
         self.reload_button_genesis.pack(side=tk.LEFT, padx=5, pady=5)
 
         self.label_genesis_mode = ttk.Label(self.genesis_mode_frame, text="GENESIS MODE: Start valid day: YYYY-MM-DD",
@@ -4005,6 +4233,16 @@ class App:
                                               text="Models: GFS [--/--Z], ECM[--/--Z], NAV[--/--Z], CMC[--/--Z]",
                                               style="TLabel")
         self.genesis_models_label.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.genesis_selected_combobox = ttk.Combobox(self.genesis_mode_frame, width=14, textvariable=self.genesis_selected,
+                                                    state='readonly', style='Black.TCombobox')
+        self.genesis_selected_combobox.pack(side=tk.LEFT, padx=5, pady=5)
+        self.genesis_selected_combobox['state'] = 'readonly'  # Set the state according to configure colors
+        self.genesis_selected_combobox['values'] = (
+            'GLOBAL-DET', 'ALL-TCGEN', 'GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN')
+        self.genesis_selected_combobox.current(0)
+        self.genesis_previous_selected = self.genesis_selected.get()
+        self.genesis_selected_combobox.bind("<<ComboboxSelected>>", self.genesis_combo_selected_models_event)
 
         self.genesis_selection_info_label = ttk.Label(self.genesis_mode_frame,
                                                       text="",
@@ -4476,6 +4714,279 @@ class App:
         self.label_adeck_mode.config(text=f"ADECK MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime(
             '%Y-%m-%d') + f". Models: {num_models}/{num_all_models}")
 
+    def display_genesis_data(self, model_cycle):
+        # vmax_kt_threshold = [(34.0, 'v'), (64.0, '^'), (83.0, 's'), (96.0, 'p'), (113.0, 'o'), (137.0, 'D'), (float('inf'), '+')]
+        vmax_kt_threshold = [(34.0, 'v'), (64.0, '^'), (83.0, 's'), (96.0, '<'), (113.0, '>'), (137.0, 'D'),
+                             (float('inf'), '*')]
+        vmax_labels = ['\u25BD TD', '\u25B3 TS', '\u25A1 1', '\u25C1 2', '\u25B7 3', '\u25C7 4', '\u2605 5']
+        marker_sizes = {'v': 6, '^': 6, 's': 8, '<': 10, '>': 12, 'D': 12, '*': 14}
+        # disturbance_candidates = get_disturbances_from_db(model_name, model_timestamp)
+        # now = datetime_utcnow()
+        # start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # valid_day = start_of_day.isoformat()
+        # model_init_times, tc_candidates = get_tc_candidates_from_valid_time(now.isoformat())
+        # model_init_times, tc_candidates = get_tc_candidates_at_or_before_init_time(model_cycle)
+        model_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, tc_candidates = \
+            get_tc_candidates_at_or_before_init_time(self.genesis_previous_selected, model_cycle)
+        # if model_init_times != last_model_init_times:
+
+        """
+        model_dates = {
+            'GFS': None,
+            'ECM': None,
+            'NAV': None,
+            'CMC': None
+        }
+        most_recent_model_timestamps = {
+            'GFS': None,
+            'ECM': None,
+            'NAV': None,
+            'CMC': None
+        }
+        """
+        model_dates = {}
+        most_recent_model_timestamps = {}
+        for model_name in all_genesis_names:
+            model_dates[model_name] = None
+            most_recent_model_timestamps[model_name] = datetime.min
+
+        for genesis_source_type, model_init_times, model_completed_times, \
+            ensemble_completed_times, completed_ensembles in self.get_latest_genesis_data_times():
+
+            if not model_init_times:
+                continue
+            for model_name, model_init_time in model_init_times.items():
+                model_timestamp = datetime.fromisoformat(model_init_time)
+                if genesis_source_type != 'GLOBAL-DET' and model_name == 'CMC':
+                    # CMC from TCGEN is renamed internally at this step
+                    model_name = 'CMCO'
+
+                if most_recent_model_timestamps[model_name] == datetime.min:
+                    most_recent_model_timestamps[model_name] = model_timestamp
+                    model_dates[model_name] = model_timestamp.strftime('%d/%HZ')
+
+                if most_recent_model_timestamps[model_name] < model_timestamp:
+                    most_recent_model_timestamps[model_name] = model_timestamp
+                    model_dates[model_name] = model_timestamp.strftime('%d/%HZ')
+
+        # should match model cycle
+        most_recent_model_cycle = max(most_recent_model_timestamps.values())
+        oldest_model_cycle = min(most_recent_model_timestamps.values())
+        start_of_day = oldest_model_cycle.replace(hour=0, minute=0, second=0, microsecond=0)
+        valid_day = start_of_day.isoformat()
+        # model_init_times, tc_candidates = get_tc_candidates_from_valid_time(now.isoformat())
+        #model_init_times, tc_candidates = get_tc_candidates_at_or_before_init_time(most_recent_model_cycle)
+        model_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, tc_candidates = \
+            get_tc_candidates_at_or_before_init_time(self.genesis_previous_selected, model_cycle)
+
+        most_recent_timestamp = None
+
+        self.clear_plotted_list()
+        lon_lat_tc_records = []
+        numc = 0
+        for tc in tc_candidates:
+            numc += 1
+
+            model_name = tc['model_name']
+            model_timestamp = tc['model_timestamp']
+            disturbance_candidates = tc['disturbance_candidates']
+            if not most_recent_timestamp:
+                most_recent_timestamp = model_timestamp
+                model_dates[model_name] = datetime.fromisoformat(most_recent_timestamp).strftime('%d/%HZ')
+
+            if datetime.fromisoformat(most_recent_timestamp) < datetime.fromisoformat(model_timestamp):
+                most_recent_timestamp = model_timestamp
+                model_dates[model_name] = datetime.fromisoformat(most_recent_timestamp).strftime('%d/%HZ')
+
+            numdisturb = 0
+            prev_lat = None
+            prev_lon = None
+            if disturbance_candidates:
+                numdisturb = len(disturbance_candidates)
+
+            # check if it should be hidden
+            if numdisturb > 0:
+                # TODO conditionally hidden by interface (first forecast valid time > user selected horizon (latest first valid time))
+                # valid_time_str = disturbance_candidates[0][1]['valid_time']
+                # valid_time_datetime.fromisoformat(valid_time_str)
+
+                # check for manually hidden
+                internal_id = numc
+                if len(App.hidden_tc_candidates) != 0 and internal_id in App.hidden_tc_candidates:
+                    continue
+
+                lat_lon_with_time_step_list = []
+                lon_lat_tuples = []
+                # handle when we are hiding certain time steps or whether the storm itself should be hidden based on time step
+                have_displayed_points = False
+                for time_step_str, valid_time_str, candidate in disturbance_candidates:
+                    time_step_int = int(time_step_str)
+                    lon = candidate['lon']
+                    candidate_info = dict()
+                    candidate_info['model_name'] = model_name
+                    candidate_info['init_time'] = datetime.fromisoformat(model_timestamp)
+                    candidate_info['lat'] = candidate['lat']
+                    candidate_info['lon'] = lon
+                    candidate_info['lon_repeat'] = candidate_info['lon']
+                    candidate_info['valid_time'] = datetime.fromisoformat(valid_time_str)
+                    candidate_info['time_step'] = time_step_int
+                    candidate_info['basin'] = candidate['basin']
+
+                    # calculate the difference in hours
+                    hours_diff = (candidate_info['valid_time'] - datetime.fromisoformat(
+                        valid_day)).total_seconds() / 3600
+                    # round to the nearest hour
+                    hours_diff_rounded = round(hours_diff)
+                    candidate_info['hours_after_valid_day'] = hours_diff_rounded
+
+                    candidate_info['roci'] = candidate['roci'] / 1000
+                    candidate_info['rv850max'] = candidate['rv850max'] * 100000
+                    vmaxkt = candidate['vmax10m_in_roci'] * 1.9438452
+                    candidate_info['vmax10m_in_roci'] = vmaxkt
+                    candidate_info['vmax10m'] = vmaxkt
+                    candidate_info['mslp_value'] = candidate['mslp_value']
+                    candidate_info['closed_isobar_delta'] = candidate['closed_isobar_delta']
+
+                    if prev_lon:
+                        prev_lon_f = float(prev_lon)
+                        if abs(prev_lon_f - lon) > 270:
+                            if prev_lon_f < lon:
+                                prev_lon = prev_lon_f + 360
+                            else:
+                                prev_lon = prev_lon_f - 360
+
+                    candidate_info['prev_lat'] = prev_lat
+                    candidate_info['prev_lon'] = prev_lon
+                    candidate_info['prev_lon_repeat'] = prev_lon
+
+                    prev_lat = candidate_info['lat']
+                    prev_lon = lon
+
+                    # check whether we want to display it (first valid time limit)
+                    for i, (start, end) in list(enumerate(self.time_step_ranges)):
+                        hours_after = candidate_info['hours_after_valid_day']
+                        if start <= hours_after <= end:
+                            if self.time_step_opacity[i] == 1.0:
+                                lat_lon_with_time_step_list.append(candidate_info)
+                                have_displayed_points = True
+                            elif have_displayed_points and self.time_step_opacity[i] == 0.6:
+                                lat_lon_with_time_step_list.append(candidate_info)
+                            else:
+                                # opacity == 0.3 case (hide all points beyond legend valid time)
+                                break
+
+                if lat_lon_with_time_step_list:
+                    self.update_plotted_list(internal_id, lat_lon_with_time_step_list)
+
+                # do in reversed order so most recent items get rendered on top
+                for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
+                    opacity = 1.0
+                    lons = {}
+                    lats = {}
+                    for point in reversed(lat_lon_with_time_step_list):
+                        hours_after = point['hours_after_valid_day']
+                        # if start <= time_step <= end:
+                        # use hours after valid_day instead
+                        if start <= hours_after <= end:
+                            marker = "*"
+                            for upper_bound, vmaxmarker in vmax_kt_threshold:
+                                marker = vmaxmarker
+                                if point['vmax10m_in_roci'] < upper_bound:
+                                    break
+                            if marker not in lons:
+                                lons[marker] = []
+                                lats[marker] = []
+                            lons[marker].append(point['lon_repeat'])
+                            lats[marker].append(point['lat'])
+                            lon_lat_tuples.append([point['lon_repeat'], point['lat']])
+
+                            # self.ax.plot([point['lon_repeat']], [point['lat']], marker=marker, color=colors[i], markersize=radius, alpha=opacity)
+
+                    for vmaxmarker in lons.keys():
+                        scatter = self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
+                                                  facecolors='none', edgecolors=self.time_step_marker_colors[i],
+                                                  s=marker_sizes[vmaxmarker] ** 2, alpha=opacity, antialiased=False)
+                        if internal_id not in self.scatter_objects:
+                            self.scatter_objects[internal_id] = []
+                        self.scatter_objects[internal_id].append(scatter)
+
+                # do in reversed order so most recent items get rendered on top
+                for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
+                    line_color = self.time_step_marker_colors[i]
+                    opacity = 1.0
+                    strokewidth = 0.5
+
+                    line_segments = []
+                    for point in reversed(lat_lon_with_time_step_list):
+                        hours_after = point['hours_after_valid_day']
+                        if start <= hours_after <= end:
+                            if point['prev_lon_repeat']:
+                                # Create a list of line segments
+                                line_segments.append([(point['prev_lon_repeat'], point['prev_lat']),
+                                                      (point['lon_repeat'], point['lat'])])
+                                """
+                                plt.plot([point['prev_lon_repeat'], point['lon_repeat']], [point['prev_lat'], point['lat']],
+                                         color=color, linewidth=strokewidth, marker='', markersize = 0, alpha=opacity)
+                                """
+
+                    # Create a LineCollection
+                    lc = LineCollection(line_segments, color=line_color, linewidth=strokewidth, alpha=opacity)
+                    # Add the LineCollection to the axes
+                    line_collection = self.ax.add_collection(lc)
+                    if internal_id not in self.line_collection_objects:
+                        self.line_collection_objects[internal_id] = []
+                    self.line_collection_objects[internal_id].append(line_collection)
+
+                # add the visible points for the track to the m-tree
+                if lon_lat_tuples and len(lon_lat_tuples) > 1:
+                    line_string = LineString(lon_lat_tuples)
+                    record = dict()
+                    record['geometry'] = line_string
+                    record['value'] = internal_id
+                    lon_lat_tc_records.append(record)
+
+        App.lon_lat_tc_records = lon_lat_tc_records
+        App.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
+
+        labels_positive = [f' D+{str(i): >2} ' for i in
+                           range(len(self.time_step_marker_colors) - 1)]  # Labels corresponding to colors
+        labels = [' D-   ']
+        labels.extend(labels_positive)
+
+        self.time_step_legend_objects = []
+
+        for i, (color, label) in enumerate(zip(reversed(self.time_step_marker_colors), reversed(labels))):
+            x_pos, y_pos = 100, 150 + i * 20
+
+            time_step_opacity = list(reversed(self.time_step_opacity))[i]
+            if time_step_opacity == 1.0:
+                edgecolor = "#FFFFFF"
+            elif time_step_opacity == 0.6:
+                edgecolor = "#FF77B0"
+            else:
+                edgecolor = "#A63579"
+            legend_object = self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels',
+                                             color=list(reversed(self.time_step_legend_fg_colors))[i],
+                                             fontsize=8, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
+                                                                                           edgecolor=edgecolor,
+                                                                                           facecolor=color, alpha=1.0))
+            self.time_step_legend_objects.append(legend_object)
+
+        # Draw the second legend items inline using display coordinates
+        for i, label in enumerate(reversed(vmax_labels)):
+            x_pos, y_pos = 160, 155 + i * 35
+            self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color='white',
+                             fontsize=12, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
+                                                                            edgecolor='#FFFFFF', facecolor='#000000',
+                                                                            alpha=1.0))
+
+        self.ax.figure.canvas.draw()
+        self.label_genesis_mode.config(
+            text="GENESIS MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime('%Y-%m-%d'))
+        self.genesis_model_cycle_time = most_recent_model_cycle
+        self.genesis_models_label.config(
+            text=f"Latest models: GFS [{model_dates['GFS']}], ECM[{model_dates['ECM']}], NAV[{model_dates['NAV']}], CMC[{model_dates['CMC']}]")
+
     def display_map(self):
         self.scatter_objects = {}
         self.line_collection_objects = {}
@@ -4591,6 +5102,90 @@ class App:
         min_span_lat_deg = minimum_contour_extent[1] * lat_pixel_ratio
         return extent, min_span_lat_deg, min_span_lon_deg
 
+    # generator to return data on latest model/ensemble times (yields once per genesis source type)
+    def get_latest_genesis_data_times(self):
+        for genesis_source_type in ['GLOBAL-DET', 'ALL-TCGEN']:
+            conn = None
+            model_names = list(model_data_folders_by_model_name.keys())
+            model_init_times = {}
+
+            model_completed_times = {}
+            # list of completed times per ensemble for member completion for a recent cycle (may spread across more than one cycle)
+            ensemble_completed_times = {}
+            # get whether the ensemble is complete at a single cycle (only one init_time and ens_status is complete)
+            completed_ensembles = {}
+
+            ensemble_names = []
+            if genesis_source_type == 'GLOBAL-DET':
+                db_file_path = tc_candidates_db_file_path
+                # filter out all model_names from tcgen and keep all models from own tracker
+                model_names = [model_name for model_name in model_names if model_name[-5:] != 'TCGEN']
+            else:
+                # 'ALL-TCGEN' case
+                db_file_path = tc_candidates_tcgen_db_file_path
+                # filter out all model_names from own tracker and keep all tcgen models
+                ensemble_names = [ensemble_name for ensemble_name in tcgen_models_by_ensemble.keys() if
+                                  ensemble_name != 'ALL-TCGEN']
+                model_names = tcgen_models_by_ensemble['ALL-TCGEN']
+
+            try:
+                # Connect to the SQLite database
+                conn = sqlite3.connect(db_file_path)
+                cursor = conn.cursor()
+
+                for model_name in model_names:
+                    cursor.execute(
+                        'SELECT DISTINCT init_date, completed_date FROM completed WHERE model_name = ? ORDER BY init_date DESC LIMIT 1',
+                        (model_name, ))
+                    results = cursor.fetchall()
+                    if results:
+                        for row in results:
+                            init_time = row[0]
+                            completed_time = datetime.fromisoformat(row[1])
+                            model_init_times[model_name] = init_time
+                            model_completed_times[model_name] = completed_time
+
+                for ensemble_name in ensemble_names:
+                    ensemble_init_times = set()
+                    ensemble_completed_times_by_init_date = {}
+                    for model_name, model_init_time in model_init_times.items():
+                        if ensemble_name == model_name_to_ensemble_name[model_name]:
+                            ensemble_init_times.add(model_init_time)
+                            if model_init_time not in ensemble_completed_times_by_init_date:
+                                ensemble_completed_times_by_init_date[model_init_time] = []
+                            ensemble_completed_times_by_init_date[model_init_time].append(model_completed_times[model_name])
+                    if not ensemble_init_times:
+                        continue
+
+                    num_init_time_ens_is_complete = 0
+                    for ensemble_init_time in list(ensemble_init_times):
+                        cursor.execute(
+                            f'SELECT completed FROM ens_status WHERE init_date = ? AND ensemble_name = ? ORDER BY init_date DESC LIMIT 1',
+                            (ensemble_init_time, ensemble_name))
+                        results = cursor.fetchall()
+                        ens_is_completed = 0
+                        if results:
+                            for row in results:
+                                ens_is_completed = row[0]
+
+                        ensemble_completed_time = max(ensemble_completed_times_by_init_date[ensemble_init_time])
+                        if ensemble_name not in ensemble_completed_times:
+                            ensemble_completed_times[ensemble_name] = []
+                        ensemble_completed_times[ensemble_name].append(ensemble_completed_time)
+                        num_init_time_ens_is_complete += int(ens_is_completed)
+
+                    if num_init_time_ens_is_complete == 1 and len(ensemble_init_times) == 1:
+                        completed_ensembles[ensemble_name] = ensemble_completed_times[ensemble_name][0]
+
+            except sqlite3.Error as e:
+                print(f"SQLite error (get_latest_genesis_data_times): {e}")
+            finally:
+                if conn:
+                    conn.close()
+
+            # completed times are datetimes while init times are strings
+            yield genesis_source_type, model_init_times, model_completed_times, ensemble_completed_times, completed_ensembles
+
     # uses str_tree and the SelectionLoops to get a list of storm internal ids that are in the lassod boundary
     #   this will only cover storms that have been rendered through display_*
     #   as those are the only ones we make internal ids for
@@ -4620,7 +5215,7 @@ class App:
 
     # get model data from adeck, plus bdeck and tcvitals
     def get_selected_model_candidates_from_decks(self):
-        selected_models = self.get_selected_model_list()
+        selected_models = self.get_selected_deck_model_list()
         # reference current datetime since we are checking for old invests
         valid_datetime = datetime_utcnow()
         earliest_model_valid_datetime = valid_datetime
@@ -4684,7 +5279,27 @@ class App:
 
         return earliest_model_valid_datetime, len(all_models), len(actual_models), selected_model_data
 
-    def get_selected_model_list(self):
+    def get_selected_deck_model_list(self):
+        selected_text = self.adeck_selected.get()
+        if selected_text == 'ALL':
+            return included_intensity_models
+        elif selected_text == 'GLOBAL':
+            return global_models
+        elif selected_text == 'GEFS-MEMBERS':
+            return gefs_members_models
+        elif selected_text == 'STATISTICAL':
+            return statistical_models
+        elif selected_text == 'REGIONAL':
+            return regional_models
+        elif selected_text == 'CONSENSUS':
+            return consensus_models
+        elif selected_text == 'OFFICIAL':
+            return official_models
+        else:
+            # sanity check
+            return official_models
+
+    def get_selected_genesis_model_list(self):
         selected_text = self.adeck_selected.get()
         if selected_text == 'ALL':
             return included_intensity_models
@@ -4826,6 +5441,7 @@ class App:
         self.overlay_rvor_contour_dict['label_objs'] = defaultdict(dict)
 
     def latest_genesis_cycle(self):
+        self.update_genesis_data_staleness()
         model_cycles = get_tc_model_init_times_relative_to(datetime.now())
         if model_cycles['next'] is None:
             model_cycle = model_cycles['at']
@@ -4887,6 +5503,7 @@ class App:
         self.set_focus_on_map()
 
     def next_genesis_cycle(self):
+        self.update_genesis_data_staleness()
         if self.genesis_model_cycle_time is None:
             self.genesis_model_cycle_time = datetime.now()
             model_cycles = get_tc_model_init_times_relative_to(self.genesis_model_cycle_time)
@@ -5145,6 +5762,7 @@ class App:
                 self.zoom_in()
 
     def prev_genesis_cycle(self):
+        self.update_genesis_data_staleness()
         if self.genesis_model_cycle_time is None:
             self.genesis_model_cycle_time = datetime.now()
             model_cycles = get_tc_model_init_times_relative_to(self.genesis_model_cycle_time)
@@ -5167,7 +5785,7 @@ class App:
         App.hidden_tc_candidates = set()
         self.display_map()
         if self.mode == "GENESIS" and model_cycle:
-            self.update_genesis(model_cycle)
+            self.display_genesis_data(model_cycle)
         elif self.mode == "ADECK":
             self.display_deck_data()
 
@@ -5177,6 +5795,7 @@ class App:
             self.redraw_map_with_data()
         elif self.mode == "GENESIS":
             self.display_map()
+            self.update_genesis_data_staleness()
             model_cycle = self.genesis_model_cycle_time
             if model_cycle is None:
                 model_cycles = get_tc_model_init_times_relative_to(datetime.now())
@@ -5189,9 +5808,17 @@ class App:
                 self.redraw_map_with_data(model_cycle=model_cycle)
 
     def reload_adeck(self):
-        if self.timer_id is not None:
-            self.root.after_cancel(self.timer_id)
-        self.timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_data)
+        if self.deck_timer_id is not None:
+            self.root.after_cancel(self.deck_timer_id)
+        self.deck_timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_deck_data)
+
+        self.reload()
+        self.set_focus_on_map()
+
+    def reload_genesis(self):
+        if self.genesis_timer_id is not None:
+            self.root.after_cancel(self.genesis_timer_id)
+        self.genesis_timer_id = self.root.after(LOCAL_TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_genesis_data)
 
         self.reload()
         self.set_focus_on_map()
@@ -5599,12 +6226,12 @@ class App:
         if not self.have_deck_data:
             # first fetch of data
             do_update_tcvitals = do_update_adeck = do_update_bdeck = True
-            if self.timer_id is not None:
-                self.root.after_cancel(self.timer_id)
-            self.timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_data)
+            if self.deck_timer_id is not None:
+                self.root.after_cancel(self.deck_timer_id)
+            self.deck_timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_deck_data)
         else:
             # refresh status of stale data one more time since the user has requested a reload
-            self.check_for_stale_data()
+            self.check_for_stale_deck_data()
             if self.dt_mods_tcvitals and self.stale_urls['tcvitals']:
                 do_update_tcvitals = True
             if self.dt_mods_adeck and self.stale_urls['adeck']:
@@ -5646,260 +6273,24 @@ class App:
         self.stale_urls['tcvitals'] = self.stale_urls['tcvitals'] - set(updated_urls_tcvitals)
         self.stale_urls['adeck'] = self.stale_urls['adeck'] - set(updated_urls_adeck)
         self.stale_urls['bdeck'] = self.stale_urls['bdeck'] - set(updated_urls_bdeck)
-        self.update_reload_button_color()
+        self.update_reload_button_color_for_deck()
 
-    def update_genesis(self, model_cycle):
-        # vmax_kt_threshold = [(34.0, 'v'), (64.0, '^'), (83.0, 's'), (96.0, 'p'), (113.0, 'o'), (137.0, 'D'), (float('inf'), '+')]
-        vmax_kt_threshold = [(34.0, 'v'), (64.0, '^'), (83.0, 's'), (96.0, '<'), (113.0, '>'), (137.0, 'D'),
-                             (float('inf'), '*')]
-        vmax_labels = ['\u25BD TD', '\u25B3 TS', '\u25A1 1', '\u25C1 2', '\u25B7 3', '\u25C7 4', '\u2605 5']
-        marker_sizes = {'v': 6, '^': 6, 's': 8, '<': 10, '>': 12, 'D': 12, '*': 14}
-        # disturbance_candidates = get_disturbances_from_db(model_name, model_timestamp)
-        # now = datetime_utcnow()
-        # start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        # valid_day = start_of_day.isoformat()
-        # model_init_times, tc_candidates = get_tc_candidates_from_valid_time(now.isoformat())
-        model_init_times, tc_candidates = get_tc_candidates_at_or_before_init_time(model_cycle)
-        # if model_init_times != last_model_init_times:
+    def update_genesis_data_staleness(self):
+        # track which data is stale (global-det or all-tcgen)
+        # this is mainly a simple clearing of staleness (doesn't keep track of which set the user views)
+        if self.genesis_timer_id is not None:
+            self.root.after_cancel(self.genesis_timer_id)
+        self.genesis_timer_id = self.root.after(LOCAL_TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_genesis_data)
 
-        model_dates = {
-            'GFS': None,
-            'ECM': None,
-            'NAV': None,
-            'CMC': None
-        }
-        most_recent_model_timestamps = {
-            'GFS': None,
-            'ECM': None,
-            'NAV': None,
-            'CMC': None
-        }
-        for model_name, model_init_times in model_init_times.items():
-            for model_timestamp_str in model_init_times:
-                model_timestamp = datetime.fromisoformat(model_timestamp_str)
-                if not most_recent_model_timestamps[model_name]:
-                    most_recent_model_timestamps[model_name] = model_timestamp
-                    model_dates[model_name] = model_timestamp.strftime('%d/%HZ')
+        self.stale_genesis_data['global-det'] = []
+        self.stale_genesis_data['tcgen'] = []
 
-                if most_recent_model_timestamps[model_name] < model_timestamp:
-                    most_recent_model_timestamps[model_name] = model_timestamp
-                    model_dates[model_name] = model_timestamp.strftime('%d/%HZ')
+        if ('global-det' in self.dt_mods_genesis and self.dt_mods_genesis['global-det']) or \
+                ('tcgen' in self.dt_mods_genesis and self.dt_mods_genesis['tcgen']):
+            # at least we have some data
+            self.have_genesis_data = True
 
-        # should match model cycle
-        most_recent_model_cycle = max(most_recent_model_timestamps.values())
-        oldest_model_cycle = min(most_recent_model_timestamps.values())
-        start_of_day = oldest_model_cycle.replace(hour=0, minute=0, second=0, microsecond=0)
-        valid_day = start_of_day.isoformat()
-        # model_init_times, tc_candidates = get_tc_candidates_from_valid_time(now.isoformat())
-        model_init_times, tc_candidates = get_tc_candidates_at_or_before_init_time(most_recent_model_cycle)
-
-        most_recent_timestamp = None
-
-        self.clear_plotted_list()
-        lon_lat_tc_records = []
-        numc = 0
-        for tc in tc_candidates:
-            numc += 1
-
-            model_name = tc['model_name']
-            model_timestamp = tc['model_timestamp']
-            disturbance_candidates = tc['disturbance_candidates']
-            if not most_recent_timestamp:
-                most_recent_timestamp = model_timestamp
-                model_dates[model_name] = datetime.fromisoformat(most_recent_timestamp).strftime('%d/%HZ')
-
-            if datetime.fromisoformat(most_recent_timestamp) < datetime.fromisoformat(model_timestamp):
-                most_recent_timestamp = model_timestamp
-                model_dates[model_name] = datetime.fromisoformat(most_recent_timestamp).strftime('%d/%HZ')
-
-            numdisturb = 0
-            prev_lat = None
-            prev_lon = None
-            if disturbance_candidates:
-                numdisturb = len(disturbance_candidates)
-
-            # check if it should be hidden
-            if numdisturb > 0:
-                # TODO conditionally hidden by interface (first forecast valid time > user selected horizon (latest first valid time))
-                # valid_time_str = disturbance_candidates[0][1]['valid_time']
-                # valid_time_datetime.fromisoformat(valid_time_str)
-
-                # check for manually hidden
-                internal_id = numc
-                if len(App.hidden_tc_candidates) != 0 and internal_id in App.hidden_tc_candidates:
-                    continue
-
-                lat_lon_with_time_step_list = []
-                lon_lat_tuples = []
-                # handle when we are hiding certain time steps or whether the storm itself should be hidden based on time step
-                have_displayed_points = False
-                for time_step_str, valid_time_str, candidate in disturbance_candidates:
-                    time_step_int = int(time_step_str)
-                    lon = candidate['lon']
-                    candidate_info = dict()
-                    candidate_info['model_name'] = model_name
-                    candidate_info['init_time'] = datetime.fromisoformat(model_timestamp)
-                    candidate_info['lat'] = candidate['lat']
-                    candidate_info['lon'] = lon
-                    candidate_info['lon_repeat'] = candidate_info['lon']
-                    candidate_info['valid_time'] = datetime.fromisoformat(valid_time_str)
-                    candidate_info['time_step'] = time_step_int
-                    candidate_info['basin'] = candidate['basin']
-
-                    # calculate the difference in hours
-                    hours_diff = (candidate_info['valid_time'] - datetime.fromisoformat(
-                        valid_day)).total_seconds() / 3600
-                    # round to the nearest hour
-                    hours_diff_rounded = round(hours_diff)
-                    candidate_info['hours_after_valid_day'] = hours_diff_rounded
-
-                    candidate_info['roci'] = candidate['roci'] / 1000
-                    candidate_info['rv850max'] = candidate['rv850max'] * 100000
-                    vmaxkt = candidate['vmax10m_in_roci'] * 1.9438452
-                    candidate_info['vmax10m_in_roci'] = vmaxkt
-                    candidate_info['vmax10m'] = vmaxkt
-                    candidate_info['mslp_value'] = candidate['mslp_value']
-                    candidate_info['closed_isobar_delta'] = candidate['closed_isobar_delta']
-
-                    if prev_lon:
-                        prev_lon_f = float(prev_lon)
-                        if abs(prev_lon_f - lon) > 270:
-                            if prev_lon_f < lon:
-                                prev_lon = prev_lon_f + 360
-                            else:
-                                prev_lon = prev_lon_f - 360
-
-                    candidate_info['prev_lat'] = prev_lat
-                    candidate_info['prev_lon'] = prev_lon
-                    candidate_info['prev_lon_repeat'] = prev_lon
-
-                    prev_lat = candidate_info['lat']
-                    prev_lon = lon
-
-                    # check whether we want to display it (first valid time limit)
-                    for i, (start, end) in list(enumerate(self.time_step_ranges)):
-                        hours_after = candidate_info['hours_after_valid_day']
-                        if start <= hours_after <= end:
-                            if self.time_step_opacity[i] == 1.0:
-                                lat_lon_with_time_step_list.append(candidate_info)
-                                have_displayed_points = True
-                            elif have_displayed_points and self.time_step_opacity[i] == 0.6:
-                                lat_lon_with_time_step_list.append(candidate_info)
-                            else:
-                                # opacity == 0.3 case (hide all points beyond legend valid time)
-                                break
-
-                if lat_lon_with_time_step_list:
-                    self.update_plotted_list(internal_id, lat_lon_with_time_step_list)
-
-                # do in reversed order so most recent items get rendered on top
-                for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
-                    opacity = 1.0
-                    lons = {}
-                    lats = {}
-                    for point in reversed(lat_lon_with_time_step_list):
-                        hours_after = point['hours_after_valid_day']
-                        # if start <= time_step <= end:
-                        # use hours after valid_day instead
-                        if start <= hours_after <= end:
-                            marker = "*"
-                            for upper_bound, vmaxmarker in vmax_kt_threshold:
-                                marker = vmaxmarker
-                                if point['vmax10m_in_roci'] < upper_bound:
-                                    break
-                            if marker not in lons:
-                                lons[marker] = []
-                                lats[marker] = []
-                            lons[marker].append(point['lon_repeat'])
-                            lats[marker].append(point['lat'])
-                            lon_lat_tuples.append([point['lon_repeat'], point['lat']])
-
-                            # self.ax.plot([point['lon_repeat']], [point['lat']], marker=marker, color=colors[i], markersize=radius, alpha=opacity)
-
-                    for vmaxmarker in lons.keys():
-                        scatter = self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
-                                                  facecolors='none', edgecolors=self.time_step_marker_colors[i],
-                                                  s=marker_sizes[vmaxmarker] ** 2, alpha=opacity, antialiased=False)
-                        if internal_id not in self.scatter_objects:
-                            self.scatter_objects[internal_id] = []
-                        self.scatter_objects[internal_id].append(scatter)
-
-                # do in reversed order so most recent items get rendered on top
-                for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
-                    line_color = self.time_step_marker_colors[i]
-                    opacity = 1.0
-                    strokewidth = 0.5
-
-                    line_segments = []
-                    for point in reversed(lat_lon_with_time_step_list):
-                        hours_after = point['hours_after_valid_day']
-                        if start <= hours_after <= end:
-                            if point['prev_lon_repeat']:
-                                # Create a list of line segments
-                                line_segments.append([(point['prev_lon_repeat'], point['prev_lat']),
-                                                      (point['lon_repeat'], point['lat'])])
-                                """
-                                plt.plot([point['prev_lon_repeat'], point['lon_repeat']], [point['prev_lat'], point['lat']],
-                                         color=color, linewidth=strokewidth, marker='', markersize = 0, alpha=opacity)
-                                """
-
-                    # Create a LineCollection
-                    lc = LineCollection(line_segments, color=line_color, linewidth=strokewidth, alpha=opacity)
-                    # Add the LineCollection to the axes
-                    line_collection = self.ax.add_collection(lc)
-                    if internal_id not in self.line_collection_objects:
-                        self.line_collection_objects[internal_id] = []
-                    self.line_collection_objects[internal_id].append(line_collection)
-
-                # add the visible points for the track to the m-tree
-                if lon_lat_tuples and len(lon_lat_tuples) > 1:
-                    line_string = LineString(lon_lat_tuples)
-                    record = dict()
-                    record['geometry'] = line_string
-                    record['value'] = internal_id
-                    lon_lat_tc_records.append(record)
-
-        App.lon_lat_tc_records = lon_lat_tc_records
-        App.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
-
-        labels_positive = [f' D+{str(i): >2} ' for i in
-                           range(len(self.time_step_marker_colors) - 1)]  # Labels corresponding to colors
-        labels = [' D-   ']
-        labels.extend(labels_positive)
-
-        self.time_step_legend_objects = []
-
-        for i, (color, label) in enumerate(zip(reversed(self.time_step_marker_colors), reversed(labels))):
-            x_pos, y_pos = 100, 150 + i * 20
-
-            time_step_opacity = list(reversed(self.time_step_opacity))[i]
-            if time_step_opacity == 1.0:
-                edgecolor = "#FFFFFF"
-            elif time_step_opacity == 0.6:
-                edgecolor = "#FF77B0"
-            else:
-                edgecolor = "#A63579"
-            legend_object = self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels',
-                                             color=list(reversed(self.time_step_legend_fg_colors))[i],
-                                             fontsize=8, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
-                                                                                           edgecolor=edgecolor,
-                                                                                           facecolor=color, alpha=1.0))
-            self.time_step_legend_objects.append(legend_object)
-
-        # Draw the second legend items inline using display coordinates
-        for i, label in enumerate(reversed(vmax_labels)):
-            x_pos, y_pos = 160, 155 + i * 35
-            self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color='white',
-                             fontsize=12, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
-                                                                            edgecolor='#FFFFFF', facecolor='#000000',
-                                                                            alpha=1.0))
-
-        self.ax.figure.canvas.draw()
-        self.label_genesis_mode.config(
-            text="GENESIS MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime('%Y-%m-%d'))
-        self.genesis_model_cycle_time = most_recent_model_cycle
-        self.genesis_models_label.config(
-            text=f"Latest models: GFS [{model_dates['GFS']}], ECM[{model_dates['ECM']}], NAV[{model_dates['NAV']}], CMC[{model_dates['CMC']}]")
+        self.update_reload_button_color_for_genesis()
 
     def update_labels_for_mouse_hover(self, lat=None, lon=None):
         if not (lat) or not (lon):
@@ -5993,7 +6384,7 @@ class App:
 
         self.plotted_tc_candidates.append((internal_id, tc_candidate))
 
-    def update_reload_button_color(self):
+    def update_reload_button_color_for_deck(self):
         if self.stale_urls['adeck']:
             self.reload_button_adeck.configure(style='Red.TButton')
         elif self.stale_urls['bdeck']:
@@ -6002,6 +6393,14 @@ class App:
             self.reload_button_adeck.configure(style='Yellow.TButton')
         else:
             self.reload_button_adeck.configure(style='White.TButton')
+
+    def update_reload_button_color_for_genesis(self):
+        if self.stale_genesis_data['global-det']:
+            self.reload_button_genesis.configure(style='Red.TButton')
+        elif self.stale_genesis_data['tcgen']:
+            self.reload_button_genesis.configure(style='Orange.TButton')
+        else:
+            self.reload_button_genesis.configure(style='White.TButton')
 
     def update_rvor_contour_renderable_after_zoom(self):
         if self.overlay_rvor_contour_dict and 'ids' in self.overlay_rvor_contour_dict:
