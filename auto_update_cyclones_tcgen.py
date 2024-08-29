@@ -9,6 +9,12 @@
 # this is for accessing by model and storm (internal component id)
 tc_candidates_tcgen_db_file_path = 'tc_candidates_tcgen.db'
 
+# delete data num days older than most recent entry
+num_db_retention_days = 10
+last_run_dates = {}
+# don't process data older than this date (calculated from retention days as YYYYMMDD00)
+cutoff_date_folder_str = None
+
 # shape file for placing lat,lon in basins which we are classifying
 # each has an attr`ibute called 'basin_name', with CPAC & EPAC combined as EPAC
 # basins are NATL, EPAC, WPAC, IO, SH
@@ -1001,6 +1007,9 @@ def get_completed_unprocessed_model_folders_by_model_name():
         partial_model_dirs = []
         for root, dirs, files in os.walk(model_base_dir):
             for folder in dirs:
+                # don't process old data that has been pruned already
+                if folder < cutoff_date_folder_str:
+                    continue
                 if os.path.exists(os.path.join(root, folder, '_COMPLETE_')):
                     model_dirs.append(os.path.join(root, folder))
                 elif model_name == 'EPS-TCGEN':
@@ -2087,6 +2096,49 @@ def add_tc_candidate(model_name, model_init_time, component_num, max_10m_wind_sp
 
     return has_error
 
+# prune old data in tables
+def remove_old_data(db_path, date_column_str, days_to_keep):
+    global last_run_dates
+    global cutoff_date_folder_str
+    today = datetime.today().date()
+
+    # Check if the function has already run today for this db
+    if db_path in last_run_dates and last_run_dates[db_path] == today:
+        return
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Get the most recent date from the first table
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = cursor.fetchall()
+        if tables:
+            table_name = tables[0][0]
+            cursor.execute(f"SELECT {date_column_str} FROM {table_name} ORDER BY {date_column_str} DESC LIMIT 1;")
+            most_recent_date_str = cursor.fetchone()[0]
+            most_recent_date = datetime.fromisoformat(most_recent_date_str)
+            cutoff_date = most_recent_date - timedelta(days=days_to_keep)
+            cutoff_date_str = cutoff_date.isoformat()
+            cutoff_date_folder_str = datetime.strftime(cutoff_date, '%Y%m%d%H')
+
+            # Remove old data from all tables
+            for table_name, in tables:
+                cursor.execute(f"DELETE FROM {table_name} WHERE {date_column_str} < ?", (cutoff_date_str,))
+            conn.commit()
+            cursor.execute("VACUUM")
+    except:
+        traceback.print_exc(limit=None, file=None, chain=True)
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+    last_run_dates[db_path] = today
+    if cutoff_date_folder_str is None:
+        # first run case
+        cutoff_date = today - timedelta(days=days_to_keep)
+        cutoff_date_folder_str = datetime.strftime(cutoff_date, '%Y%m%d%H')
+
 #######################################
 ### CALCULATE TCs FROM DISTURBANCES ###
 #######################################
@@ -2102,5 +2154,6 @@ last_model_init_times = []
 
 if __name__ == "__main__":
     while True:
+        remove_old_data(tc_candidates_tcgen_db_file_path, 'init_date', num_db_retention_days)
         calc_tc_candidates()
         time.sleep(60 * polling_interval)
