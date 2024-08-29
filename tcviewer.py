@@ -677,6 +677,15 @@ tcgen_models_by_ensemble = {
     'FNMOC-TCGEN': fnmoc_members,
     'ALL-TCGEN': all_tcgen_members
 }
+'''
+# Member counts of above
+GEFS-TCGEN : 32
+GEPS-TCGEN : 22
+EPS-TCGEN : 52
+FNMOC-TCGEN : 22
+ALL-TCGEN : 128
+'''
+
 # Create a dictionary to map model names to ensemble names
 model_name_to_ensemble_name = {}
 for list_name, lst in zip(['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN'], [gefs_members, geps_members, eps_members, fnmoc_members]):
@@ -4386,7 +4395,10 @@ class App:
                     continue
 
                 for model_name, completed_times in model_completed_times.items():
-                    new_max_dt = max(completed_times)
+                    if type(completed_times) == datetime:
+                        new_max_dt = completed_times
+                    else:
+                        new_max_dt = max(completed_times)
                     max_dt = max(max_dt, new_max_dt)
 
                 new_dt_mod = max_dt
@@ -4408,7 +4420,10 @@ class App:
 
                 max_dt = datetime.min
                 for model_name, completed_times in model_completed_times.items():
-                    new_max_dt = max(completed_times)
+                    if type(completed_times) == datetime:
+                        new_max_dt = completed_times
+                    else:
+                        new_max_dt = max(completed_times)
                     max_dt = max(max_dt, new_max_dt)
 
                 new_dt_mod = max_dt
