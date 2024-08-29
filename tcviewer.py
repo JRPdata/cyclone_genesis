@@ -392,7 +392,7 @@ shapefile_paths = {
 
 # disable rvor
 # noinspection PyRedeclaration
-shapefile_paths = {}
+#shapefile_paths = {}
 
 overlay_gdfs = {}
 try:
@@ -4428,7 +4428,7 @@ class App:
 
                 new_dt_mod = max_dt
                 if new_dt_mod != datetime.min:
-                    self.stale_genesis_data[genesis_source_type] == max_dt
+                    self.stale_genesis_data[genesis_source_type] = max_dt
 
         self.update_reload_button_color_for_genesis()
 
