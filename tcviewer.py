@@ -1116,6 +1116,9 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
             ensemble_init_times = set()
             ensemble_completed_times_by_init_date = {}
             for model_name, model_init_time in model_init_times.items():
+                if model_name not in model_name_to_ensemble_name:
+                    print("Warning could not find ensemble name for model name (skipping):", model_name)
+                    continue
                 if ensemble_name == model_name_to_ensemble_name[model_name]:
                     ensemble_init_times.add(model_init_time)
                     if model_init_time not in ensemble_completed_times_by_init_date:
@@ -1224,6 +1227,9 @@ def get_tc_candidates_from_valid_time(genesis_previous_selected, interval_start)
             ensemble_init_times = set()
             ensemble_completed_times_by_init_date = {}
             for model_name, model_init_time in model_init_times.items():
+                if model_name not in model_name_to_ensemble_name:
+                    print("Warning could not find ensemble name for model name (skipping):", model_name)
+                    continue
                 if ensemble_name == model_name_to_ensemble_name[model_name]:
                     ensemble_init_times.add(model_init_time)
                     if model_init_time not in ensemble_completed_times_by_init_date:
@@ -1485,8 +1491,11 @@ class AnalysisDialog(tk.Toplevel):
 
         if self.previous_selected_combo == 'GLOBAL-DET':
             self.possible_ensemble = False
-        else:
+        elif self.previous_selected_combo[-5:] == 'TCGEN':
             self.possible_ensemble = True
+        else:
+            # TODO: for now don't count ensembles for adeck data as we don't have a complete list of member names
+            self.possible_ensemble = False
 
         self.notebook_tab_names = dict()
         self.notebook_figs = dict()
@@ -1843,6 +1852,9 @@ class AnalysisDialog(tk.Toplevel):
         ensemble_names = set()
         num_represented = {}
         for model_name in model_names_set:
+            if model_name not in model_name_to_ensemble_name:
+                # TODO: for now don't count ensembles for adeck data as we don't have a complete list of member names
+                continue
             ensemble_name = model_name_to_ensemble_name[model_name]
             ensemble_names.add(ensemble_name)
             if ensemble_name not in num_represented:
@@ -1860,7 +1872,11 @@ class AnalysisDialog(tk.Toplevel):
         model_color_indices = {}
         # Must sort since model_names_set is not sorted and the series/legend will be in sorted order
         for model_name in sorted(model_names_set):
-            model_color_indices[model_name] = ensemble_to_enum[model_name_to_ensemble_name[model_name]]
+            if model_name not in model_name_to_ensemble_name:
+                # TODO: for now don't count ensembles for adeck data as we don't have a complete list of member names
+                model_color_indices[model_name] = 0
+            else:
+                model_color_indices[model_name] = ensemble_to_enum[model_name_to_ensemble_name[model_name]]
 
         return model_color_indices, num_ensembles, num_represented
 
@@ -4836,7 +4852,6 @@ class App:
                             candidate_info['init_time'] = datetime.fromisoformat(candidate['init_time'])
                         candidate_info['lat'] = lat
                         candidate_info['lon'] = lon
-                        candidate_info['lon_repeat'] = candidate_info['lon']
                         candidate_info['valid_time'] = datetime.fromisoformat(valid_time)
                         candidate_info['time_step'] = time_step_int
                         if 'basin' in candidate.keys():
@@ -4880,7 +4895,6 @@ class App:
 
                         candidate_info['prev_lat'] = prev_lat
                         candidate_info['prev_lon'] = prev_lon
-                        candidate_info['prev_lon_repeat'] = prev_lon
 
                         prev_lat = candidate_info['lat']
                         prev_lon = lon
@@ -4931,11 +4945,10 @@ class App:
                                     if marker not in lons:
                                         lons[marker] = []
                                         lats[marker] = []
-                                    lons[marker].append(point['lon_repeat'])
+                                    lons[marker].append(point['lon'])
                                     lats[marker].append(point['lat'])
-                                    lon_lat_tuples.append([point['lon_repeat'], point['lat']])
+                                    lon_lat_tuples.append([point['lon'], point['lat']])
 
-                                # self.ax.plot([point['lon_repeat']], [point['lat']], marker=marker, color=colors[i], markersize=radius, alpha=opacity)
 
                         for vmaxmarker in lons.keys():
                             scatter = self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
@@ -4955,12 +4968,12 @@ class App:
                         for point in reversed(lat_lon_with_time_step_list):
                             hours_after = point['hours_after_valid_day']
                             if start <= hours_after <= end:
-                                if point['prev_lon_repeat']:
+                                if point['prev_lon']:
                                     # Create a list of line segments
-                                    line_segments.append([(point['prev_lon_repeat'], point['prev_lat']),
-                                                          (point['lon_repeat'], point['lat'])])
+                                    line_segments.append([(point['prev_lon'], point['prev_lat']),
+                                                          (point['lon'], point['lat'])])
                                     """
-                                    plt.plot([point['prev_lon_repeat'], point['lon_repeat']], [point['prev_lat'], point['lat']],
+                                    plt.plot([point['prev_lon'], point['lon']], [point['prev_lat'], point['lat']],
                                              color=color, linewidth=strokewidth, marker='', markersize = 0, alpha=opacity)
                                     """
 
@@ -5138,7 +5151,6 @@ class App:
                     candidate_info['init_time'] = datetime.fromisoformat(model_timestamp)
                     candidate_info['lat'] = candidate['lat']
                     candidate_info['lon'] = lon
-                    candidate_info['lon_repeat'] = candidate_info['lon']
                     candidate_info['valid_time'] = datetime.fromisoformat(valid_time_str)
                     candidate_info['time_step'] = time_step_int
                     candidate_info['basin'] = candidate['basin']
@@ -5181,7 +5193,6 @@ class App:
 
                     candidate_info['prev_lat'] = prev_lat
                     candidate_info['prev_lon'] = prev_lon
-                    candidate_info['prev_lon_repeat'] = prev_lon
 
                     prev_lat = candidate_info['lat']
                     prev_lon = lon
@@ -5220,11 +5231,9 @@ class App:
                             if marker not in lons:
                                 lons[marker] = []
                                 lats[marker] = []
-                            lons[marker].append(point['lon_repeat'])
+                            lons[marker].append(point['lon'])
                             lats[marker].append(point['lat'])
-                            lon_lat_tuples.append([point['lon_repeat'], point['lat']])
-
-                            # self.ax.plot([point['lon_repeat']], [point['lat']], marker=marker, color=colors[i], markersize=radius, alpha=opacity)
+                            lon_lat_tuples.append([point['lon'], point['lat']])
 
                     for vmaxmarker in lons.keys():
                         scatter = self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
@@ -5244,12 +5253,12 @@ class App:
                     for point in reversed(lat_lon_with_time_step_list):
                         hours_after = point['hours_after_valid_day']
                         if start <= hours_after <= end:
-                            if point['prev_lon_repeat']:
+                            if point['prev_lon']:
                                 # Create a list of line segments
-                                line_segments.append([(point['prev_lon_repeat'], point['prev_lat']),
-                                                      (point['lon_repeat'], point['lat'])])
+                                line_segments.append([(point['prev_lon'], point['prev_lat']),
+                                                      (point['lon'], point['lat'])])
                                 """
-                                plt.plot([point['prev_lon_repeat'], point['lon_repeat']], [point['prev_lat'], point['lat']],
+                                plt.plot([point['prev_lon'], point['lon']], [point['prev_lat'], point['lat']],
                                          color=color, linewidth=strokewidth, marker='', markersize = 0, alpha=opacity)
                                 """
 
@@ -5480,6 +5489,9 @@ class App:
                     ensemble_init_times = set()
                     ensemble_completed_times_by_init_date = {}
                     for model_name, model_init_time in model_init_times.items():
+                        if model_name not in model_name_to_ensemble_name:
+                            print("Warning could not find ensemble name for model name (skipping):", model_name)
+                            continue
                         if ensemble_name == model_name_to_ensemble_name[model_name]:
                             ensemble_init_times.add(model_init_time)
                             if model_init_time not in ensemble_completed_times_by_init_date:
