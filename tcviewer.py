@@ -5096,15 +5096,26 @@ class App:
                 continue
             for model_name, model_init_time in model_init_times.items():
                 model_timestamp = datetime.fromisoformat(model_init_time)
+                ensemble_name = None
+                if model_name in model_name_to_ensemble_name:
+                    ensemble_name = model_name_to_ensemble_name[model_name]
                 if genesis_source_type != 'GLOBAL-DET' and model_name == 'CMC':
                     # CMC from TCGEN is renamed internally at this step
                     model_name = 'CMCO'
 
-                if most_recent_model_timestamps[model_name] == datetime.min:
+                if (ensemble_completed_times and ensemble_name in ensemble_completed_times and
+                        len(ensemble_completed_times[ensemble_name]) == 1):
+                    completed_time = ensemble_completed_times[ensemble_name][0]
+                else:
+                    completed_time = None
+                if completed_time and ensemble_name and model_timestamp < completed_time:
+                    # this is the edge case where there was 0 predictions (empty file) but the ensemble was completed
+                    most_recent_model_timestamps[model_name] = completed_time
+                    model_dates[model_name] = completed_time.strftime('%d/%HZ')
+                elif most_recent_model_timestamps[model_name] == datetime.min:
                     most_recent_model_timestamps[model_name] = model_timestamp
                     model_dates[model_name] = model_timestamp.strftime('%d/%HZ')
-
-                if most_recent_model_timestamps[model_name] < model_timestamp:
+                elif most_recent_model_timestamps[model_name] < model_timestamp:
                     most_recent_model_timestamps[model_name] = model_timestamp
                     model_dates[model_name] = model_timestamp.strftime('%d/%HZ')
 
@@ -5516,6 +5527,7 @@ class App:
                         continue
 
                     num_init_time_ens_is_complete = 0
+                    max_ensemble_init_time = '0001-01-01T00:00:00'
                     for ensemble_init_time in ensemble_init_times:
                         cursor.execute(
                             f'SELECT completed FROM ens_status WHERE init_date = ? AND ensemble_name = ? ORDER BY init_date DESC LIMIT 1',
@@ -5526,13 +5538,22 @@ class App:
                             for row in results:
                                 ens_is_completed = row[0]
 
-                        ensemble_completed_time = max(ensemble_completed_times_by_init_date[ensemble_init_time])
                         if ensemble_name not in ensemble_completed_times:
                             ensemble_completed_times[ensemble_name] = []
-                        ensemble_completed_times[ensemble_name].append(ensemble_completed_time)
-                        num_init_time_ens_is_complete += int(ens_is_completed)
+                        if ens_is_completed:
+                            ensemble_completed_time = max(ensemble_completed_times_by_init_date[ensemble_init_time])
+                            if len(ensemble_completed_times[ensemble_name]) > 0:
+                                # skip over old models that have members with 0 predictions yet the ensemble is complete
+                                if ensemble_init_time > max_ensemble_init_time:
+                                    ensemble_completed_times[ensemble_name] = [ensemble_completed_time]
+                                    max_ensemble_init_time = ensemble_init_time
+                                    num_init_time_ens_is_complete = 1
+                            else:
+                                ensemble_completed_times[ensemble_name].append(ensemble_completed_time)
+                                max_ensemble_init_time = max(max_ensemble_init_time, ensemble_init_time)
+                                num_init_time_ens_is_complete += int(ens_is_completed)
 
-                    if num_init_time_ens_is_complete == 1 and len(ensemble_init_times) == 1:
+                    if num_init_time_ens_is_complete == 1:
                         completed_ensembles[ensemble_name] = ensemble_completed_times[ensemble_name][0]
 
             except sqlite3.Error as e:
