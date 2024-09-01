@@ -392,7 +392,7 @@ shapefile_paths = {
 
 # disable rvor
 # noinspection PyRedeclaration
-#shapefile_paths = {}
+shapefile_paths = {}
 
 overlay_gdfs = {}
 try:
@@ -766,7 +766,11 @@ def cut_line_string_at_antimeridian(line_string):
         # Check if the line crosses the antimeridian
         if abs(lon - prev_lon) > 180:
             # Calculate the intersection latitude at the antimeridian
-            intersection_lat = prev_lat + (lat - prev_lat) * (180.0 - abs(prev_lon)) / (180.0 - abs(prev_lon) + 180.0 - abs(lon))
+            denom = (180.0 - abs(prev_lon) + 180.0 - abs(lon))
+            if denom != 0:
+                intersection_lat = prev_lat + (lat - prev_lat) * (180.0 - abs(prev_lon)) / (180.0 - abs(prev_lon) + 180.0 - abs(lon))
+            else:
+                intersection_lat = 0.0
             if prev_lon > 0 and lon < 0:
                 # Westward crossing
                 current_line.append((180, intersection_lat))
@@ -5006,6 +5010,7 @@ class App:
                         try:
                             cut_lines = cut_line_string_at_antimeridian(line_string)
                         except:
+                            print(lon_lat_tuples)
                             print(line_string)
                             print(line_string.coords)
                         for cut_line in cut_lines:
@@ -5302,6 +5307,7 @@ class App:
                     try:
                         cut_lines = cut_line_string_at_antimeridian(line_string)
                     except:
+                        print(lon_lat_tuples)
                         print(line_string)
                         print(line_string.coords)
                     for cut_line in cut_lines:
