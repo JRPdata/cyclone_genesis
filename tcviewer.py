@@ -1576,7 +1576,7 @@ class AnalysisDialog(tk.Toplevel):
 
         # extra 0 at beginning for loop
         sss = [0, 0, 34, 64, 83, 96, 113, 137]
-        # construct preset vals for vmax for TC, TD, CAT1, CAT2, CAT3, CAT4, CAT5
+        # construct preset vals for vmax for TC, TD, TS, CAT1, CAT2, CAT3, CAT4, CAT5
         vmax_presets = {}
         for i, preset_name in enumerate(self.intensity_preset_names):
             if i == 0:
@@ -1600,7 +1600,7 @@ class AnalysisDialog(tk.Toplevel):
                     elif analysis_name == 'min <= Earliest VMax @ 10m <= max':
                         basin_dict[analysis_name] = vmax_presets[intensity_range_name]
                     elif analysis_name == 'Earliest MSLP <= max':
-                        basin_dict[analysis_name] = (0, pres_presets[basin_name][intensity_range_name][0])
+                        basin_dict[analysis_name] = (0, pres_presets[basin_name][intensity_range_name][1])
                     elif analysis_name == 'min <= Earliest MSLP <= max':
                         basin_dict[analysis_name] = pres_presets[basin_name][intensity_range_name]
 
@@ -2036,7 +2036,7 @@ class AnalysisDialog(tk.Toplevel):
             self.update_all_charts()
 
     def combo_selected_basin_event(self, event):
-        curent_value = self.basin_combobox.get()
+        current_value = self.basin_combobox.get()
         if current_value != self.basin_previous_selected:
             self.basin_previous_selected = self.basin_combobox.get()
             self.update_opt_preset_min_max(pdf=True)
