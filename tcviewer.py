@@ -13,6 +13,7 @@
 # ZOOM IN STEP ON CURSOR = = key (equal key)
 # ZOOM OUT STEP ON CURSOR = - key (minus key)
 # ABORT ZOOM = Escape key  (if started dragging hit escape to abort a zoom)
+# ZOOM TO BASIN = z key (popup dialog to select which basin to zoom in)
 # MEASURE (GEODESIC) = shift + mouse left click and drag
 # ERASE MEASURE = right click
 # VIEW NEXT OVERLAPPED HOVER POINT STATUS = n key  (this will not redraw points of overlapped storms, only update hover text)
@@ -26,6 +27,7 @@
 # TOGGLE SELECTION LOOPS MODE = s key (also use button); used for selecting storm tracks (to group as a storm) for analysis
 #   CLEAR SELECTION LOOPS = c key (only in selection loop mode)
 #   HIDE SELECTION LOOPS = h key (only in selection loop mode)
+# SELECTION LOOP ON BASIN = b key (popup dialog to create a selection loop on a basin) (uses shapes/basin) (alternatively, draw by clicking 'Select')
 # TOGGLE ANALYSIS MODE = a key (must have selection loop on tracks)
 #   SAVE FIGURE = s key (or p key) (saves current figure in analysis mode)
 
@@ -367,11 +369,51 @@ tcvitals_basin_to_atcf_basin = {
     'W': 'WP'
 }
 
+# Get basin extents and polygons
+basins_gdf = gpd.read_file('shapes/basins.shp')
+basin_extents = {}
+basin_polys = {}
+
+shape_basin_names_to_threshold_names_map = {
+    'NATL': 'NA',
+    'WPAC': 'WP',
+    'IO': 'IO',
+    'SH': 'SH',
+    'EPAC': 'EP'
+}
+for basin_name in basins_gdf['basin_name'].unique():
+    # Get the extent of the current basin
+    geom = basins_gdf.loc[basins_gdf['basin_name'] == basin_name, 'geometry']
+    # Store the extent in the dictionary
+    basin_short_name = shape_basin_names_to_threshold_names_map[basin_name]
+    geom_u_bounds = geom.unary_union.bounds
+    min_lon, min_lat, max_lon, max_lat = geom_u_bounds
+    if len(geom) > 1:
+        for row in list(geom):
+            min_lon, min_lat, max_lon, max_lat = row.bounds
+            if min_lon <= -180:
+                suffix = '-W'
+            elif max_lon >= 180:
+                suffix = '-E'
+
+            basin_short_name = shape_basin_names_to_threshold_names_map[basin_name] + suffix
+            if basin_short_name in basin_extents:
+                basin_extents[basin_short_name] = basin_extents[basin_short_name].union(row.bounds)
+                basin_polys[basin_short_name] = basin_polys[basin_short_name].union(row.bounds)
+            else:
+                basin_extents[basin_short_name] = row.bounds
+                basin_polys[basin_short_name] = gpd.GeoSeries([row])
+    else:
+        basin_short_name = shape_basin_names_to_threshold_names_map[basin_name]
+        basin_extents[basin_short_name] = geom_u_bounds
+        basin_polys[basin_short_name] = geom
+
 ### plot greater houston boundary
 # Load the shapefile using Geopandas
 # from census shapefiles
 # shapefile_path = "tl_2023_us_cbsa/tl_2023_us_cbsa.shp"
 shapefile_path = None
+
 try:
     tmp_gdf = gpd.read_file(shapefile_path)
     # Filter the GeoDataFrame to only include the Houston-The Woodlands-Sugar Land, TX Metro Area
@@ -4904,7 +4946,7 @@ class SelectionLoops:
 
    # using shapely polygon as Polygon, and matplotlib polygon as MPLPolygon
     class SelectionLoop:
-        def __init__(self, ax, event):
+        def __init__(self, ax, event, polys=None):
             self.ax = ax
             self.verts = []
             self.polygons = []
@@ -4913,9 +4955,15 @@ class SelectionLoops:
             self.closed_artists = []
             self.background = None
             self.closed = False
-            self.verts.append((event.xdata, event.ydata))
             self.alpha = 0.35
             self.bg = None
+            if event is not None:
+                self.verts.append((event.xdata, event.ydata))
+            elif polys is not None:
+                for poly in polys:
+                    self.verts.extend(poly.exterior.coords)
+
+                self.set_polygons(polys)
 
         def changed_extent(self, ax):
             # preserve the polygons on the map across all map & data changes
@@ -4963,8 +5011,10 @@ class SelectionLoops:
             self.update_preview()
             return True
 
-        def on_release(self):
-            polys = self.close_loop()
+        def on_release(self, polys=None):
+            if polys is None:
+                polys = self.close_loop()
+
             self.set_polygons(polys)
             self.update_closed_artists()
             self.closed = True
@@ -5022,6 +5072,12 @@ class SelectionLoops:
             else:
                 self.ax.figure.canvas.restore_region(self.background)
                 return
+
+    @classmethod
+    def add_poly(cls, geos):
+        cls.last_loop = cls.SelectionLoop(cls.ax, None, polys=list(geos))
+        cls.selection_loop_objects.append(cls.last_loop)
+        cls.last_loop.on_release(polys=list(geos))
 
     @classmethod
     def block(cls):
@@ -5386,6 +5442,9 @@ class App:
 
         self.analysis_dialog_open = False
         self.root.bind("a", self.show_analysis_dialog)
+
+        self.root.bind('z', self.zoom_to_basin_dialog)
+        self.root.bind('b', self.select_basin_dialog)
 
         # setup widges
         self.create_widgets()
@@ -7481,6 +7540,36 @@ class App:
                 with open('settings_tcviewer.json', 'w') as f:
                     json.dump(settings, f, indent=4)
 
+    def select_basin_dialog(self, event=None):
+        dialog = tk.Toplevel(self.root)
+        dialog.title('Select Basin')
+        dialog.geometry(f"300x200+{int(self.root.winfo_width()/2-150)}+{int(self.root.winfo_height()/2-100)}")
+
+        listbox = tk.Listbox(dialog, bg=default_bg, fg=default_fg)
+        for basin_name in sorted(basin_extents.keys(), key=lambda x: ['N', 'E', 'W', 'I', 'S'].index(x[0])):
+            listbox.insert(tk.END, basin_name)
+
+        listbox.pack(fill=tk.BOTH, expand=1)
+        listbox.selection_set(0)
+        listbox.focus_set()
+        listbox.see(0)
+
+        def cancel():
+            dialog.destroy()
+
+        def select_basin(event):
+            selected_basin = listbox.get(listbox.curselection())
+            SelectionLoops.add_poly(basin_polys[selected_basin])
+            self.update_selection_info_label()
+            cancel()
+
+        listbox.bind('<Return>', select_basin)
+        listbox.bind('<Up>', lambda event: listbox.select_set(0))
+        listbox.bind('<Down>', lambda event: listbox.select_set(0))
+        listbox.bind("<Escape>", lambda event: cancel())
+        ttk.Button(dialog, text='OK', command=select_basin, style='TButton').pack(side=tk.LEFT, padx=5, pady=5)
+        ttk.Button(dialog, text='Cancel', command=cancel, style='TButton').pack(side=tk.LEFT, padx=5, pady=5)
+
     def set_focus_on_map(self):
         self.canvas.get_tk_widget().focus_set()
 
@@ -8165,8 +8254,70 @@ class App:
         else:
             self.toggle_selection_loop_button.configure(style='WhiteAndBorder.TButton')
 
-    def zoom_in(self, step_zoom=False):
-        if step_zoom:
+    def zoom_in(self, step_zoom=False, extents=None):
+        if extents:
+            self.ax.set_extent([extents[0], extents[1], extents[2], extents[3]], crs=ccrs.PlateCarree())
+            x0 = extents[0]
+            y0 = extents[1]
+            x1 = extents[2]
+            y1 = extents[3]
+
+            extent = [min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)]
+
+            # Calculate the aspect ratio of the zoom rectangle
+            zoom_aspect_ratio = (extent[3] - extent[2]) / (extent[1] - extent[0])
+
+            # Calculate the aspect ratio of the canvas frame
+            frame_width_pixels = self.canvas_frame.winfo_width()
+            frame_height_pixels = self.canvas_frame.winfo_height()
+            frame_aspect_ratio = frame_height_pixels / frame_width_pixels
+
+            # Determine the dimension to set the extent and the dimension to expand
+            if zoom_aspect_ratio < frame_aspect_ratio:
+                # Set the longitude extent and expand the latitude extent
+                lon_extent = extent[0], extent[1]
+                lat_center = (extent[2] + extent[3]) / 2
+                lat_height = (lon_extent[1] - lon_extent[0]) * frame_aspect_ratio
+                if lat_center + (lat_height / 2) > 90.0:
+                    lat_max = 90.0
+                    lat_min = lat_max - lat_height
+                elif lat_center - (lat_height / 2) < -90.0:
+                    lat_min = -90.0
+                    lat_max = lat_min + lat_height
+                else:
+                    lat_min = lat_center - (lat_height / 2)
+                    lat_max = lat_center + (lat_height / 2)
+                lat_extent = [lat_min, lat_max]
+            else:
+                # Set the latitude extent and expand the longitude extent
+                lat_extent = extent[2], extent[3]
+                lon_center = (extent[0] + extent[1]) / 2
+                lon_width = (lat_extent[1] - lat_extent[0]) / frame_aspect_ratio
+                if lon_center + (lon_width / 2) > 180.0:
+                    lon_max = 180.0
+                    lon_min = lon_max - lon_width
+                elif lon_center - (lon_width / 2) < -180.0:
+                    lon_min = -180.0
+                    lon_max = lon_min + lon_width
+                else:
+                    lon_min = lon_center - (lon_width / 2)
+                    lon_max = lon_center + (lon_width / 2)
+                lon_extent = [lon_min, lon_max]
+
+            self.ax.set_extent([lon_extent[0], lon_extent[1], lat_extent[0], lat_extent[1]], crs=ccrs.PlateCarree())
+
+            self.clear_storm_extrema_annotations()
+            self.update_axes()
+            AnnotatedCircles.changed_extent(self.ax)
+            SelectionLoops.changed_extent(self.ax)
+            self.update_selection_info_label()
+            self.measure_tool.changed_extent(self.ax)
+            self.ax.figure.canvas.draw()
+            self.rvor_labels_new_extent()
+            self.ax.figure.canvas.draw()
+
+
+        elif step_zoom:
             extent = self.ax.get_extent()
             lon_diff = extent[1] - extent[0]
             lat_diff = extent[3] - extent[2]
@@ -8375,6 +8526,36 @@ class App:
                 self.rvor_labels_new_extent()
                 self.ax.figure.canvas.draw()
 
+    def zoom_to_basin_dialog(self, event=None):
+        dialog = tk.Toplevel(self.root)
+        dialog.title('Zoom to Basin')
+        dialog.geometry(f"300x200+{int(self.root.winfo_width()/2-150)}+{int(self.root.winfo_height()/2-100)}")
+
+        listbox = tk.Listbox(dialog, bg=default_bg, fg=default_fg)
+        # show in order (first letter)
+        for basin_name in sorted(basin_extents.keys(), key=lambda x: ['N', 'E', 'W', 'I', 'S'].index(x[0])):
+            listbox.insert(tk.END, basin_name)
+
+        listbox.pack(fill=tk.BOTH, expand=1)
+        listbox.selection_set(0)
+        listbox.focus_set()
+        listbox.see(0)
+
+        def cancel():
+            dialog.destroy()
+
+        def select_basin(event):
+            selected_basin = listbox.get(listbox.curselection())
+            cancel()
+            self.zoom_in(extents=basin_extents[selected_basin])
+
+        listbox.bind('<Return>', select_basin)
+        listbox.bind('<Up>', lambda event: listbox.select_set(0))
+        listbox.bind('<Down>', lambda event: listbox.select_set(0))
+        listbox.bind("<Escape>", lambda event: cancel())
+        ttk.Button(dialog, text='OK', command=select_basin).pack(side=tk.LEFT, padx=5, pady=5)
+        ttk.Button(dialog, text='Cancel', command=cancel).pack(side=tk.LEFT, padx=5, pady=5)
+
 # Start program GUI
 if __name__ == "__main__":
     tk_root = tk.Tk()
@@ -8394,6 +8575,7 @@ if __name__ == "__main__":
     tk_style.theme_use('clam')  # Ensure using a theme that supports customization
     default_bg = "#000000"
     default_fg = "#FFFFFF"
+    tk_style.configure("TListbox", background=default_bg, foreground=default_fg)
     tk_style.configure("TButton", background=default_bg, foreground=default_fg)
 
     tk_style.configure("White.TButton", background=default_bg, foreground="white")
