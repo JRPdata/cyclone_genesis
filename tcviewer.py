@@ -687,6 +687,7 @@ tcgen_num_models_by_ensemble = {
     'FNMOC-TCGEN': len(fnmoc_members),
     'ALL-TCGEN': len(all_tcgen_members)
 }
+tcgen_names_in_all = ['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN']
 '''
 # Member counts of above
 GEFS-TCGEN : 32
@@ -1083,6 +1084,8 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
     ensemble_completed_times = {}
     # get whether the ensemble is complete at a single cycle (only one init_time and ens_status is complete)
     completed_ensembles = {}
+    # earliest init time in most recent ensemble
+    earliest_recent_ensemble_init_times = {}
 
     ensemble_names = []
     if genesis_previous_selected == 'GLOBAL-DET':
@@ -1153,6 +1156,7 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
                 continue
 
             num_init_time_ens_is_complete = 0
+            init_complete_times = set()
             for ensemble_init_time in ensemble_init_times:
                 cursor.execute(
                     f'SELECT completed FROM ens_status WHERE init_date = ? AND ensemble_name = ? ORDER BY init_date DESC LIMIT 1',
@@ -1163,14 +1167,21 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
                     for row in results:
                         ens_is_completed = row[0]
 
+                if ens_is_completed:
+                    init_complete_times.add(ensemble_init_time)
+
                 ensemble_completed_time = max(ensemble_completed_times_by_init_date[ensemble_init_time])
                 if ensemble_name not in ensemble_completed_times:
                     ensemble_completed_times[ensemble_name] = []
+
                 ensemble_completed_times[ensemble_name].append(ensemble_completed_time)
                 num_init_time_ens_is_complete += int(ens_is_completed)
 
             if num_init_time_ens_is_complete == 1 and len(ensemble_init_times) == 1:
                 completed_ensembles[ensemble_name] = ensemble_completed_times[ensemble_name][0]
+                earliest_recent_ensemble_init_times[ensemble_name] = ensemble_init_time
+            else:
+                earliest_recent_ensemble_init_times[ensemble_name] = max(init_complete_times)
 
     except sqlite3.Error as e:
         print(f"SQLite error (get_tc_candidates_from_valid_time): {e}")
@@ -1179,7 +1190,8 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
             conn.close()
 
     # completed times are datetimes while init times are strings
-    return model_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, all_retrieved_data
+    # earliest_recent_ensemble_init_times denotes the earliest member init time among all most recent members' init times
+    return model_init_times, earliest_recent_ensemble_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, all_retrieved_data
 
 # get list of completed TC candidates
 def get_tc_candidates_from_valid_time(genesis_previous_selected, interval_start):
@@ -2047,6 +2059,7 @@ class AnalysisDialog(tk.Toplevel):
             self.cdf_previous_selected = current_value
             # Update the chart on tab switch only
             self.do_update_cdf_chart = True
+            self.update_opt_preset_min_max(cdf=True)
 
     def combo_selected_cdf_preset_event(self, event):
         current_value = self.cdf_preset_combobox.get()
@@ -2060,6 +2073,7 @@ class AnalysisDialog(tk.Toplevel):
             self.pdf_previous_selected = current_value
             # Update the chart on tab switch only
             self.do_update_pdf_chart = True
+            self.update_opt_preset_min_max(pdf=True)
 
     def combo_selected_pdf_preset_event(self, event):
         current_value = self.pdf_preset_combobox.get()
@@ -6246,14 +6260,20 @@ class App:
                              (float('inf'), '*')]
         vmax_labels = ['\u25BD TD', '\u25B3 TS', '\u25A1 1', '\u25C1 2', '\u25B7 3', '\u25C7 4', '\u2605 5']
         marker_sizes = {'v': 6, '^': 6, 's': 8, '<': 10, '>': 12, 'D': 12, '*': 14}
+
+        if self.genesis_previous_selected != 'GLOBAL-DET':
+            is_ensemble = True
+        else:
+            is_ensemble = False
+
         # disturbance_candidates = get_disturbances_from_db(model_name, model_timestamp)
         # now = datetime_utcnow()
         # start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         # valid_day = start_of_day.isoformat()
         # model_init_times, tc_candidates = get_tc_candidates_from_valid_time(now.isoformat())
         # model_init_times, tc_candidates = get_tc_candidates_at_or_before_init_time(model_cycle)
-        model_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, tc_candidates = \
-            get_tc_candidates_at_or_before_init_time(self.genesis_previous_selected, model_cycle)
+        (model_init_times, earliest_recent_ensemble_init_times, model_completed_times, ensemble_completed_times, \
+         completed_ensembles, tc_candidates) = get_tc_candidates_at_or_before_init_time(self.genesis_previous_selected, model_cycle)
         # if model_init_times != last_model_init_times:
 
         """
@@ -6315,8 +6335,8 @@ class App:
         valid_day = start_of_day.isoformat()
         # model_init_times, tc_candidates = get_tc_candidates_from_valid_time(now.isoformat())
         #model_init_times, tc_candidates = get_tc_candidates_at_or_before_init_time(most_recent_model_cycle)
-        model_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, tc_candidates = \
-            get_tc_candidates_at_or_before_init_time(self.genesis_previous_selected, model_cycle)
+        model_init_times, earliest_recent_ensemble_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, \
+            tc_candidates = get_tc_candidates_at_or_before_init_time(self.genesis_previous_selected, model_cycle)
 
         most_recent_timestamp = None
 
@@ -6538,12 +6558,30 @@ class App:
                                                                             alpha=1.0))
 
         self.ax.figure.canvas.draw()
+
         self.label_genesis_mode.config(
             text="GENESIS MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime('%Y-%m-%d'))
         self.genesis_model_cycle_time = most_recent_model_cycle
-        # Update model times label
-        self.genesis_models_label.config(
-            text=f"Latest models: GFS [{model_dates['GFS']}], ECM[{model_dates['ECM']}], NAV[{model_dates['NAV']}], CMC[{model_dates['CMC']}]")
+        if not is_ensemble:
+            # Update model times label
+            self.genesis_models_label.config(
+                text=f"Models: GFS [{model_dates['GFS']}], ECM[{model_dates['ECM']}], NAV[{model_dates['NAV']}], CMC[{model_dates['CMC']}]")
+        elif self.genesis_previous_selected != 'GLOBAL-DET':
+            ens_dates = []
+            for ens_name, init_time in earliest_recent_ensemble_init_times.items():
+                ens_dates.append((ens_name, datetime.fromisoformat(init_time).strftime('%d/%HZ')))
+
+            model_labels_str = ''
+            model_labels = []
+            for ens_name, ens_min_date in ens_dates:
+                model_labels.append(f'{ens_name} [{ens_min_date}]')
+
+            join_model_labels = ", ".join(model_labels)
+            if join_model_labels:
+                model_labels_str = f'Models: {join_model_labels}'
+
+            self.genesis_models_label.config(text=model_labels_str)
+
         self.update_selection_info_label()
 
     def display_map(self):
