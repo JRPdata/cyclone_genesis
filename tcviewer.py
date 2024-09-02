@@ -46,6 +46,9 @@
 #   RELEASE SHIFT WHEN END POINT POSITION SET. FREE TO ZOOM IN/OUT AFTERWARD
 
 ####### CONFIG
+# pressure statistics for NA, EP basins by likelihood of being categorized at that pressure (from cyclone-climatology notebook)
+# used by presets for Analysis
+output_cat_file_name = 'output_cat_values.json'
 
 # how often (in minutes) to check for stale data in three classes: tcvitals, adeck, bdeck
 #   for notification purposes only.
@@ -677,6 +680,13 @@ tcgen_models_by_ensemble = {
     'FNMOC-TCGEN': fnmoc_members,
     'ALL-TCGEN': all_tcgen_members
 }
+tcgen_num_models_by_ensemble = {
+    'GEFS-TCGEN': len(gefs_members),
+    'GEPS-TCGEN': len(geps_members),
+    'EPS-TCGEN': len(eps_members),
+    'FNMOC-TCGEN': len(fnmoc_members),
+    'ALL-TCGEN': len(all_tcgen_members)
+}
 '''
 # Member counts of above
 GEFS-TCGEN : 32
@@ -685,6 +695,8 @@ EPS-TCGEN : 52
 FNMOC-TCGEN : 22
 ALL-TCGEN : 128
 '''
+global_det_members = ['GFS', 'CMC', 'ECM', 'NAV']
+num_global_det_members = len(global_det_members)
 
 # Create a dictionary to map model names to ensemble names
 model_name_to_ensemble_name = {}
@@ -699,7 +711,7 @@ model_name_to_ensemble_name['NAV'] = 'FNMOC-TCGEN'
 
 # all genesis members across both datasets: global-det + all_tcgen
 # there is some overlap with CMC ours and theirs, so add CMCO as theirs (like GFSO)
-all_genesis_names = list(set(all_tcgen_members + ['GFS', 'CMC', 'CMCO', 'ECM', 'NAV']))
+all_genesis_names = list(set(all_tcgen_members + global_det_members + ['CMCO']))
 
 # Helper functions for input data
 
@@ -1491,6 +1503,10 @@ def tcvitals_line_to_dict(line):
 
 class AnalysisDialog(tk.Toplevel):
     def __init__(self, parent, plotted_tc_candidates, root_width, root_height, previous_selected_combo):
+        # Load the existing JSON data for pressure presets
+        with open(output_cat_file_name, 'r') as f:
+            pres_stats_by_basin_by_intensity_cat = json.load(f)
+
         self.selected_internal_storm_ids = App.get_selected_internal_storm_ids()
         if not self.selected_internal_storm_ids:
             return
@@ -1504,27 +1520,139 @@ class AnalysisDialog(tk.Toplevel):
 
         if self.previous_selected_combo == 'GLOBAL-DET':
             self.possible_ensemble = False
+            self.total_ensembles = 0
+            model_names = model_data_folders_by_model_name.keys()
+            model_names = [model_name for model_name in model_names if model_name[-5:] != 'TCGEN']
+            self.total_models = len(model_names)
         elif self.previous_selected_combo[-5:] == 'TCGEN':
             self.possible_ensemble = True
+            self.total_models = len(tcgen_models_by_ensemble[self.previous_selected_combo])
+            if self.previous_selected_combo == 'ALL-TCGEN':
+                # Should be 4 (EPS, FNMOC, GEFS, GEPS; don't count ALL)
+                self.total_ensembles = len(tcgen_models_by_ensemble.keys()) - 1
+            else:
+                self.total_ensembles = 1
         else:
             # TODO: for now don't count ensembles for adeck data as we don't have a complete list of member names
+            self.total_ensembles = 0
             self.possible_ensemble = False
+
+        self.basin_presets = ['EP', 'NA']
+        self.basin_selected_preset = tk.StringVar()
+        self.basin_previous_selected = None
+
+        # TODO: Point probabilities, not by 'Earliest'
+        self.cdf_analyses = ['Earliest VMax @ 10m >= min',
+                             'min <= Earliest VMax @ 10m <= max',
+                             'Earliest MSLP <= max',
+                             'min <= Earliest MSLP <= max'
+                             ]
+        self.pdf_analyses = ['Earliest VMax @ 10m >= min',
+                             'min <= Earliest VMax @ 10m <= max',
+                             'Earliest MSLP <= max',
+                             'min <= Earliest MSLP <= max'
+                             ]
+
+        # Construct presets
+        self.intensity_preset_names = ['TC', 'TD', 'TS', 'CAT1', 'CAT2', 'CAT3', 'CAT4', 'CAT5']
+
+        pres_presets = {}
+        for basin, basin_dict in pres_stats_by_basin_by_intensity_cat.items():
+            min_value = 9999
+            max_value = 0
+            basin_presets = {}
+            for preset_name, mslp_pct_tuples in basin_dict.items():
+                mslp_min = int(round(min(mslp_pct_tuples)[0]))
+                mslp_max = int(round(max(mslp_pct_tuples)[0]))
+                # the min_value corresponds to the strongest MSLP while not being likely to be classified in the next higher category
+                min_value = min(mslp_min, min_value)
+                # this is the >= 50% value (>= 50% storms initially classified at this category had a MSLP of this value)
+                max_value = max(mslp_max, max_value)
+                basin_presets[preset_name] = (mslp_min, mslp_max)
+
+            # don't use the actual max_value as there is no upper bound for TC category
+            basin_presets['TC'] = (min_value, 9999)
+            pres_presets[basin] = basin_presets
+
+        # extra 0 at beginning for loop
+        sss = [0, 0, 34, 64, 83, 96, 113, 137]
+        # construct preset vals for vmax for TC, TD, CAT1, CAT2, CAT3, CAT4, CAT5
+        vmax_presets = {}
+        for i, preset_name in enumerate(self.intensity_preset_names):
+            if i == 0:
+                vmax_presets[preset_name] = (0, 9999)
+                continue
+            elif i+1 == len(sss):
+                range_max = 9999
+            else:
+                range_max = sss[i+1] - 1
+            range_min = sss[i]
+            vmax_presets[preset_name] = (range_min, range_max)
+
+        self.min_max_presets_by_preset_and_basin_and_analysis = {}
+        for intensity_range_name in self.intensity_preset_names:
+            basin_dicts = {}
+            for basin_name in self.basin_presets:
+                basin_dict = {}
+                for analysis_name in self.cdf_analyses:
+                    if analysis_name == 'Earliest VMax @ 10m >= min':
+                        basin_dict[analysis_name] = (vmax_presets[intensity_range_name][0], 9999)
+                    elif analysis_name == 'min <= Earliest VMax @ 10m <= max':
+                        basin_dict[analysis_name] = vmax_presets[intensity_range_name]
+                    elif analysis_name == 'Earliest MSLP <= max':
+                        basin_dict[analysis_name] = (0, pres_presets[basin_name][intensity_range_name][0])
+                    elif analysis_name == 'min <= Earliest MSLP <= max':
+                        basin_dict[analysis_name] = pres_presets[basin_name][intensity_range_name]
+
+                basin_dicts[basin_name] = basin_dict
+
+            self.min_max_presets_by_preset_and_basin_and_analysis[intensity_range_name] = basin_dicts
+
+
+        self.cdf_selected_analysis = tk.StringVar()
+        self.cdf_previous_selected = None
+        self.cdf_preset_selected = tk.StringVar()
+        self.cdf_preset_previous_selected = None
+
+        self.pdf_selected_analysis = tk.StringVar()
+        self.pdf_previous_selected = None
+        self.pdf_preset_selected = tk.StringVar()
+        self.pdf_preset_previous_selected = None
+
+        self.cdf_min = tk.IntVar(value=0)
+        self.cdf_max = tk.IntVar(value=9999)
+
+        self.pdf_min = tk.IntVar(value=0)
+        self.pdf_max = tk.IntVar(value=9999)
+
+        self.cdf_min.trace("w", self.on_cdf_range_changed)
+        self.cdf_max.trace("w", self.on_cdf_range_changed)
+
+        self.pdf_min.trace("w", self.on_pdf_range_changed)
+        self.pdf_max.trace("w", self.on_pdf_range_changed)
+
+        self.do_update_cdf_chart = False
+        self.do_update_pdf_chart = False
+
+        self.tz_selected_timezone = tk.StringVar(value="UTC")
+        self.tz_previous_selected = None
 
         self.notebook_tab_names = dict()
         self.notebook_figs = dict()
-
-        self.tz_selected_timezone = tk.StringVar()
-        self.tz_previous_selected = None
 
         self.ax_pres = None
         self.ax_rvor = None
         self.ax_size = None
         self.ax_vmax = None
+        self.fig_cdf = None
+        self.fig_pdf = None
         self.fig_pres = None
         self.fig_rvor = None
         self.fig_size = None
         self.fig_track_spread = None
         self.fig_vmax = None
+        self.canvas_cdf = None
+        self.canvas_pdf = None
         self.canvas_pres = None
         self.canvas_rvor = None
         self.canvas_size = None
@@ -1537,9 +1665,6 @@ class AnalysisDialog(tk.Toplevel):
         # this is required to center the dialog on the window
         self.transient(parent)
         self.parent = parent
-
-        # Create a StringVar to store the selected timezone
-        self.selected_timezone = tk.StringVar(value="UTC")
 
         self.body_frame = ttk.Frame(self, style='CanvasFrame.TFrame')
         self.body_frame.pack(padx=5, pady=5, fill="both", expand=True)
@@ -1559,11 +1684,57 @@ class AnalysisDialog(tk.Toplevel):
         self.center_window()
         self.wait_window(self)
 
+    @staticmethod
+    def aggregate_tracks_to_model_series(track_series_data, first=True):
+        model_series_data = []
+        tracks_series_by_model_name = {}
+        for model_name, x_vals, y_vals in track_series_data:
+            if model_name not in tracks_series_by_model_name:
+                tracks_series_by_model_name[model_name] = []
+
+            tracks_series_by_model_name[model_name].append((x_vals, y_vals))
+
+        model_tracks_agg_by_name_and_x = {}
+        for model_name, tracks_xy_tuples in tracks_series_by_model_name.items():
+            min_x = None
+
+            model_track_agg_by_x = {}
+            y_val_max = 0
+            x_val_min = None
+            for (x_vals, y_vals) in tracks_xy_tuples:
+                for i, y_val in enumerate(y_vals):
+                    if y_val > 0:
+                        x_val = x_vals[i]
+                        if x_val_min == None:
+                            x_val_min = x_val
+
+                        model_track_agg_by_x[x_val] = max(y_val, y_val_max)
+
+            model_tracks_agg_by_name_and_x[model_name] = model_track_agg_by_x
+
+        if first:
+            # As this is an 'EARLIEST' analysis, prune data after the earliest
+            for model_name, xy_dict in model_tracks_agg_by_name_and_x.items():
+                first_x_val = sorted(xy_dict.keys())[0]
+                first_y_val = xy_dict[first_x_val]
+                model_series_data.append((model_name, [first_x_val], [first_y_val]))
+        else:
+            for model_name, xy_dict in model_tracks_agg_by_name_and_x.items():
+                x_vals = sorted(xy_dict.keys())
+                y_vals = []
+                for x_val in x_vals:
+                    y_vals.append(xy_dict[x_val])
+
+                model_series_data.append((model_name, x_vals, y_vals))
+
+        return model_series_data
+
     def body(self, master):
         global ANALYSIS_TZ
         frame = ttk.Frame(master, style='CanvasFrame.TFrame')
         frame.pack(fill="both", expand=True)
         self.notebook = ttk.Notebook(frame, style='TNotebook')
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
         self.notebook.pack(fill="both", expand=True)
 
         tab_index = 0
@@ -1608,20 +1779,21 @@ class AnalysisDialog(tk.Toplevel):
         self.notebook_tab_names[tab_index] = 'models'
         tab_index += 1
 
-        self.tz_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
-        self.notebook.add(self.tz_frame, text="TZ")
-        self.notebook_tab_names[tab_index] = 'tz'
+        self.opt_frame = ttk.Frame(self.notebook, style='CanvasFrame.TFrame')
+        self.notebook.add(self.opt_frame, text="Options")
+        self.notebook_tab_names[tab_index] = 'opt'
         tab_index += 1
 
         # Get the list of all timezones with offsets
         self.timezones = self.get_timezones_with_offsets()
 
-        self.label_tz = ttk.Label(self.tz_frame, text="Timezone:", style='TLabel')
-        self.label_tz.pack()
+        r = 0
+        self.label_tz = ttk.Label(self.opt_frame, text="Timezone:", style='TLabel')
+        self.label_tz.grid(row=r, column=0, sticky='w')
         # Create the timezone dropdown menu
         # Create a combobox widget with the new style
 
-        self.tz_combobox = ttk.Combobox(self.tz_frame, textvariable=self.selected_timezone, values=self.timezones,
+        self.tz_combobox = ttk.Combobox(self.opt_frame, textvariable=self.tz_selected_timezone, values=self.timezones,
                                         width=50, state='readonly', style="Black.TCombobox")
         tz_names = self.get_timezones()
         if ANALYSIS_TZ in tz_names:
@@ -1632,15 +1804,100 @@ class AnalysisDialog(tk.Toplevel):
             if 'UTC' in tz_names:
                 tzindex = tz_names.index('UTC')
                 self.tz_combobox.current(tzindex)
-        self.tz_previous_selected = self.selected_timezone.get()
-        self.tz_combobox.pack()
+        self.tz_previous_selected = self.tz_selected_timezone.get()
+
         self.tz_combobox.bind("<<ComboboxSelected>>", self.combo_selected_tz_event)
+        self.tz_combobox.grid(row=r, column=1)
 
-        save_tz_session_btn = ttk.Button(self.tz_frame, text="Save TZ (this session)", command=self.save_tz_session, style='TButton')
-        save_tz_session_btn.pack(padx=10, pady=10)
+        # Preset that controls PDF/CDF Min/Min Combobox Preset values
+        r += 1
+        c = 0
+        ttk.Label(self.opt_frame, text="Basin Preset:", style='TLabel').grid(row=r, column=c, sticky='w')
+        self.basin_combobox = ttk.Combobox(self.opt_frame, textvariable=self.basin_selected_preset,
+                                         values=self.basin_presets,
+                                         width=5, state='readonly', style="Black.TCombobox")
+        # DEFAULT: NA BASIN
+        self.basin_combobox.current(1)
+        self.basin_previous_selected = self.basin_selected_preset.get()
+        self.basin_combobox.bind("<<ComboboxSelected>>", self.combo_selected_basin_event)
+        self.basin_combobox.grid(row=r, column=1, sticky='w')
 
-        save_tz_setting = ttk.Button(self.tz_frame, text="Save TZ (as setting)", command=self.save_tz_setting, style='TButton')
-        save_tz_setting.pack(padx=10, pady=10)
+        # PDF Options
+        r += 1
+        c = 0
+        ttk.Label(self.opt_frame, text="PDF Analysis:", style='TLabel').grid(row=r, column=c, sticky='w')
+        self.pdf_combobox = ttk.Combobox(self.opt_frame, textvariable=self.pdf_selected_analysis, values=self.pdf_analyses,
+                                        width=50, state='readonly', style="Black.TCombobox")
+        c += 1
+        self.pdf_combobox.current(0)
+        self.pdf_combobox.grid(row=r, column=c, sticky='w')
+        self.pdf_combobox.bind("<<ComboboxSelected>>", self.combo_selected_pdf_event)
+        self.pdf_previous_selected = self.pdf_selected_analysis.get()
+
+        r += 1
+        c = 0
+        ttk.Label(self.opt_frame, text="PDF Min/Max Preset:", style='TLabel').grid(row=r, column=c, sticky='w')
+        self.pdf_preset_combobox = ttk.Combobox(self.opt_frame, textvariable=self.pdf_preset_selected,
+                                         values=self.intensity_preset_names,
+                                         width=10, state='readonly', style="Black.TCombobox")
+        c += 1
+        self.pdf_preset_combobox.current(0)
+        self.pdf_preset_combobox.grid(row=r, column=c, sticky='w')
+        self.pdf_preset_combobox.bind("<<ComboboxSelected>>", self.combo_selected_pdf_preset_event)
+        self.pdf_preset_previous_selected = self.pdf_preset_selected.get()
+        c += 1
+        ttk.Label(self.opt_frame, text="Min:", style='TLabel').grid(row=r, column=c)
+        c += 1
+        ttk.Entry(self.opt_frame, textvariable=self.pdf_min, style='TEntry', width=5).grid(row=r, column=c)
+        c += 1
+        ttk.Label(self.opt_frame, text="Max:", style='TLabel').grid(row=r, column=c)
+        c += 1
+        ttk.Entry(self.opt_frame, textvariable=self.pdf_max, style='TEntry', width=5).grid(row=r, column=c)
+
+        # CDF Options
+        r += 1
+        c = 0
+        ttk.Label(self.opt_frame, text="CDF Analysis:", style='TLabel').grid(row=r, column=c, sticky='w')
+        self.cdf_combobox = ttk.Combobox(self.opt_frame, textvariable=self.cdf_selected_analysis,
+                                         values=self.cdf_analyses,
+                                         width=50, state='readonly', style="Black.TCombobox")
+        c += 1
+        self.cdf_combobox.current(0)
+        self.cdf_combobox.grid(row=r, column=c, sticky='w')
+        self.cdf_combobox.bind("<<ComboboxSelected>>", self.combo_selected_cdf_event)
+        self.cdf_previous_selected = self.cdf_selected_analysis.get()
+
+        r += 1
+        c = 0
+        ttk.Label(self.opt_frame, text="CDF Min/Max Preset:", style='TLabel').grid(row=r, column=c, sticky='w')
+        self.cdf_preset_combobox = ttk.Combobox(self.opt_frame, textvariable=self.cdf_preset_selected,
+                                                values=self.intensity_preset_names,
+                                                width=10, state='readonly', style="Black.TCombobox")
+        c += 1
+        self.cdf_preset_combobox.current(0)
+        self.cdf_preset_combobox.grid(row=r, column=c, sticky='w')
+        self.cdf_preset_combobox.bind("<<ComboboxSelected>>", self.combo_selected_cdf_preset_event)
+        self.cdf_preset_previous_selected = self.cdf_preset_selected.get()
+        c += 1
+        ttk.Label(self.opt_frame, text="Min:", style='TLabel').grid(row=r, column=c, sticky='w')
+        c += 1
+        ttk.Entry(self.opt_frame, textvariable=self.cdf_min, style='TEntry', width=5).grid(row=r, column=c)
+        c += 1
+        ttk.Label(self.opt_frame, text="Max:", style='TLabel').grid(row=r, column=c, sticky='w')
+        c += 1
+        ttk.Entry(self.opt_frame, textvariable=self.cdf_max, style='TEntry', width=5).grid(row=r, column=c)
+
+        r += 1
+        save_tz_session_btn = ttk.Button(self.opt_frame, text="Save TZ (this session)", command=self.save_tz_session, style='TButton')
+        save_tz_session_btn.grid(row=r, column=0, sticky='w')
+
+        save_tz_setting = ttk.Button(self.opt_frame, text="Save TZ (as setting)", command=self.save_tz_setting, style='TButton')
+        save_tz_setting.grid(row=r, column=1, sticky='w')
+
+        for i in range(2):
+            self.opt_frame.grid_columnconfigure(i, pad=10)
+        for i in range(r):
+            self.opt_frame.grid_rowconfigure(i, pad=10)
 
         self.update_all_charts()
 
@@ -1720,6 +1977,14 @@ class AnalysisDialog(tk.Toplevel):
 
     def cancel(self, event=None):
         # close figures to free up memory
+        if self.fig_cdf:
+            plt.close(self.fig_cdf)
+            self.fig_cdf = None
+            self.notebook_figs['cdf'] = None
+        if self.fig_pdf:
+            plt.close(self.fig_pdf)
+            self.fig_pdf = None
+            self.notebook_figs['pdf'] = None
         if self.fig_pres:
             plt.close(self.fig_pres)
             self.fig_pres = None
@@ -1770,6 +2035,38 @@ class AnalysisDialog(tk.Toplevel):
             self.tz_previous_selected = current_value
             self.update_all_charts()
 
+    def combo_selected_basin_event(self, event):
+        curent_value = self.basin_combobox.get()
+        if current_value != self.basin_previous_selected:
+            self.basin_previous_selected = self.basin_combobox.get()
+            self.update_opt_preset_min_max(pdf=True)
+
+    def combo_selected_cdf_event(self, event):
+        current_value = self.cdf_combobox.get()
+        if current_value != self.cdf_previous_selected:
+            self.cdf_previous_selected = current_value
+            # Update the chart on tab switch only
+            self.do_update_cdf_chart = True
+
+    def combo_selected_cdf_preset_event(self, event):
+        current_value = self.cdf_preset_combobox.get()
+        if current_value != self.cdf_preset_previous_selected:
+            self.cdf_preset_previous_selected = current_value
+            self.update_opt_preset_min_max(cdf=True)
+
+    def combo_selected_pdf_event(self, event):
+        current_value = self.pdf_combobox.get()
+        if current_value != self.pdf_previous_selected:
+            self.pdf_previous_selected = current_value
+            # Update the chart on tab switch only
+            self.do_update_pdf_chart = True
+
+    def combo_selected_pdf_preset_event(self, event):
+        current_value = self.pdf_preset_combobox.get()
+        if current_value != self.pdf_preset_previous_selected:
+            self.pdf_preset_previous_selected = current_value
+            self.update_opt_preset_min_max(pdf=True)
+
     # convert it to native (strip tz) for easier charting
     def convert_to_selected_timezone(self, dt, timezone_str):
         """Convert a datetime object from UTC to the selected timezone."""
@@ -1803,6 +2100,56 @@ class AnalysisDialog(tk.Toplevel):
         return self.buttonbox
 
     @staticmethod
+    def filter_series(first=False, min_val=0, max_val=9999, x=None, y=None, pdf=False, cdf=False):
+        new_x = new_y = None
+        if not (pdf or cdf):
+            return new_x, new_y
+
+
+        x_counts = {}
+        if pdf:
+            for x_val, y_val in list(zip(x, y)):
+                if y_val <= max_val and y_val >= min_val:
+                    # aggregate by 24 hours
+                    x_day = x_val.replace(hour=0, minute=0, second=0, microsecond=0)
+                    if first:
+                        x_counts[x_day] = 1
+                    else:
+                        if x_day not in x_counts:
+                            x_counts[x_day] = 0
+
+                        x_counts[x_day] += 1
+
+            if not x_counts:
+                return new_x, new_y
+
+            earliest_day = min(x_counts.keys())
+            new_x = [earliest_day]
+            new_y = [x_counts[earliest_day]]
+
+        elif cdf:
+            for x_val, y_val in list(zip(x, y)):
+                if y_val <= max_val and y_val >= min_val:
+                    # don't aggregate by 24 hours
+                    if first:
+                        x_counts[x_val] = 1
+                    else:
+                        if x_day not in x_counts:
+                            x_counts[x_val] = 0
+
+                        x_counts[x_val] += 1
+
+            if not x_counts:
+                return new_x, new_y
+
+            earliest_time = min(x_counts.keys())
+            new_x = [earliest_time]
+            new_y = [x_counts[earliest_time]]
+
+        return new_x, new_y
+
+
+    @staticmethod
     def generate_distinct_colors(n):
         # Generates evenly spaced colors in Lab color space
         colors_lab = np.zeros((n, 3))
@@ -1819,6 +2166,339 @@ class AnalysisDialog(tk.Toplevel):
         colors_rgb = np.clip(colors_rgb, 0, 1)
 
         return colors_rgb
+
+    @staticmethod
+    def generate_freq_analysis_series(first=True, model_series_freq=None,
+                                      num_ensembles=0, pdf=False, cdf=False):
+        # generate the pdf/cdf series for each ensemble
+        # for the ALL-TCGEN case, equally weight the ensembles
+        series_data = []
+        pdf_series_data = []
+        cdf_series_data = []
+        all_x = []
+        all_y = []
+        if not model_series_freq:
+            return
+
+        if num_ensembles == 0:
+            total_ens_name = 'GLOBAL-DET'
+            counts = {}
+            counts_total_ens = {}
+            for model_name, x, y in model_series_freq:
+                first_x = x[0]
+                if first:
+                    if model_name not in counts:
+                        counts[model_name] = {}
+                    if first_x not in counts:
+                        counts[model_name][first_x] = 0
+                    if y[0] > 0:
+                        counts[model_name][first_x] += y[0]
+                        all_x.append(first_x)
+                else:
+                    # this is freq of the PDF for each synoptic hour which is 0 or 1
+                    for x_val, y_val in list(zip(x,y)):
+                        if x_val not in counts:
+                            counts[model_name][x_val] = 0
+
+                        if y_val > 0:
+                            counts[model_name][x_val] += y_val
+                            all_x.append(x_val)
+
+            # aggregate model members
+            counts_total_ens = {}
+            for model_name, xy_dict in counts.items():
+                for x_val in sorted(xy_dict.keys()):
+                    y_val = xy_dict[x_val]
+                    if x_val not in counts_total_ens:
+                        counts_total_ens[x_val] = 0
+
+                    counts_total_ens[x_val] += y_val
+
+            counts[total_ens_name] = counts_total_ens
+
+            # first do pdf
+            # now we need the pdf at each point (normalize)
+            all_x = sorted(all_x)
+
+            model_y_vals = set()
+            for model_name, xy_dict in counts.items():
+                if model_name == total_ens_name:
+                    norm_by_num_models = num_global_det_members
+                else:
+                    norm_by_num_models = 1
+                x_vals = []
+                y_vals = []
+                for x_val in sorted(xy_dict.keys()):
+                    y_val = xy_dict[x_val]
+                    x_vals.append(x_val)
+                    # normalize, convert to percent
+
+                    if first:
+                        norm_yval = 100.0 * y_val / norm_by_num_models
+                    else:
+                        # For varying number of synoptic hours: will be wrong at start/end of model init
+                        # TODO: FIX IF USE OTHER FUNCTION THAT EARLIEST FOR ANALYSIS
+                        # Normalize to number of synoptic hours
+                        norm_yval = 100.0 * y_val / (4.0 * norm_by_num_models)
+
+                    y_vals.append(norm_yval)
+                    model_y_vals.add(norm_yval)
+
+                pdf_series_data.append((model_name, x_vals, y_vals))
+                all_y.extend(model_y_vals)
+
+            # cdf
+            if cdf:
+                #TODO: FIX FOR ANALYSIS CASE OTHER THAN EARLIEST
+                all_y = []
+                for (model_name, x_vals, y_vals) in pdf_series_data:
+                    max_yval = None
+                    series_x = []
+                    series_y = []
+
+                    for i, y_val in enumerate(y_vals):
+                        if max_yval is None:
+                            max_yval = y_val
+                        else:
+                            max_yval += y_val
+
+                        series_x.append(x_vals[i])
+                        series_y.append(max_yval)
+                        all_y.append(max_yval)
+
+                    cdf_series_data.append((model_name, series_x, series_y))
+
+        elif num_ensembles == 1:
+            # to be replaced
+            total_ens_name = 'Ensemble Mean'
+            ens_names = set()
+            counts = {}
+            counts_total_ens = {}
+            for model_name, x, y in model_series_freq:
+                first_x = x[0]
+                if first:
+                    if model_name not in counts:
+                        counts[model_name] = {}
+                    if first_x not in counts:
+                        counts[model_name][first_x] = 0
+                    if y[0] > 0:
+                        counts[model_name][first_x] += y[0]
+                        all_x.append(first_x)
+                else:
+                    # this is freq of the PDF for each synoptic hour which is 0 or 1
+                    for x_val, y_val in list(zip(x,y)):
+                        if x_val not in counts:
+                            counts[model_name][x_val] = 0
+
+                        if y_val > 0:
+                            counts[model_name][x_val] += y_val
+                            all_x.append(x_val)
+
+            # aggregate model members
+            counts_total_ens = {}
+            for model_name, xy_dict in counts.items():
+                if model_name in model_name_to_ensemble_name:
+                    ens_names.add(model_name_to_ensemble_name[model_name])
+                for x_val in sorted(xy_dict.keys()):
+                    y_val = xy_dict[x_val]
+                    if x_val not in counts_total_ens:
+                        counts_total_ens[x_val] = 0
+
+                    counts_total_ens[x_val] += y_val
+
+            ens_name = None
+            ens_names = list(ens_names)
+            # sanity check
+            if ens_names and len(ens_names) == 1:
+                ens_name = ens_names[0]
+                total_ens_name = ens_names[0]
+                total_num_models_in_ensemble = tcgen_num_models_by_ensemble[ens_name]
+            else:
+                print("Error (bug): Wrong number of ensembles in analysis calculation")
+                return [], [], []
+
+            counts[total_ens_name] = counts_total_ens
+
+            # first do pdf
+            # now we need the pdf at each point (normalize)
+            all_x = sorted(all_x)
+
+            model_y_vals = set()
+            for model_name, xy_dict in counts.items():
+                if model_name != total_ens_name:
+                    # for single (perturbation) ensemble, skip showing each member
+                    continue
+                if model_name == total_ens_name:
+                    norm_by_num_models = total_num_models_in_ensemble
+                else:
+                    norm_by_num_models = 1
+                x_vals = []
+                y_vals = []
+                for x_val in sorted(xy_dict.keys()):
+                    y_val = xy_dict[x_val]
+                    x_vals.append(x_val)
+                    # normalize, convert to percent
+
+                    if first:
+                        norm_yval = 100.0 * y_val / norm_by_num_models
+                    else:
+                        # For varying number of synoptic hours: will be wrong at start/end of model init
+                        # TODO: FIX IF USE OTHER FUNCTION THAT EARLIEST FOR ANALYSIS
+                        # Normalize to number of synoptic hours
+                        norm_yval = 100.0 * y_val / (4.0 * norm_by_num_models)
+
+                    y_vals.append(norm_yval)
+                    model_y_vals.add(norm_yval)
+
+                pdf_series_data.append((model_name, x_vals, y_vals))
+                all_y.extend(model_y_vals)
+
+            # cdf
+            if cdf:
+                #TODO: FIX FOR ANALYSIS CASE OTHER THAN EARLIEST
+                all_y = []
+                for (model_name, x_vals, y_vals) in pdf_series_data:
+                    max_yval = None
+                    series_x = []
+                    series_y = []
+
+                    for i, y_val in enumerate(y_vals):
+                        if max_yval is None:
+                            max_yval = y_val
+                        else:
+                            max_yval += y_val
+
+                        series_x.append(x_vals[i])
+                        series_y.append(max_yval)
+                        all_y.append(max_yval)
+
+                    cdf_series_data.append((model_name, series_x, series_y))
+
+        elif num_ensembles > 1:
+            total_ens_name = 'ALL-TCGEN'
+            ens_names = set()
+            counts = {}
+            counts_total_ens = {}
+            for model_name, x, y in model_series_freq:
+                first_x = x[0]
+                if first:
+                    if model_name not in counts:
+                        counts[model_name] = {}
+                    if first_x not in counts:
+                        counts[model_name][first_x] = 0
+                    if y[0] > 0:
+                        counts[model_name][first_x] += y[0]
+                        all_x.append(first_x)
+                else:
+                    # this is freq of the PDF for each synoptic hour which is 0 or 1
+                    for x_val, y_val in list(zip(x,y)):
+                        if x_val not in counts:
+                            counts[model_name][x_val] = 0
+
+                        if y_val > 0:
+                            counts[model_name][x_val] += y_val
+                            all_x.append(x_val)
+
+            ens_counts = {}
+            # aggregate counts by ensemble
+            for model_name, xy_dict in counts.items():
+                if model_name in model_name_to_ensemble_name:
+                    ens_name = model_name_to_ensemble_name[model_name]
+                    ens_names.add(ens_name)
+                    if ens_name not in ens_counts:
+                        ens_counts[ens_name] = {}
+                    for x_val in sorted(xy_dict.keys()):
+                        y_val = xy_dict[x_val]
+                        if x_val not in ens_counts[ens_name]:
+                            ens_counts[ens_name][x_val] = 0
+
+                        ens_counts[ens_name][x_val] += y_val
+
+            if ens_names and len(ens_names) > 1:
+                # TODO: HARDCODED. FIX IF CHANGING ANALYSIS FROM ENSEMBLES OTHER THAN TCGEN
+                total_ens_name = 'ALL-TCGEN'
+            else:
+                print("Error (bug): Wrong number of ensembles in analysis calculation")
+                return [], [], []
+
+            # first do pdf
+            # now we need the pdf at each point (normalize)
+            all_x = sorted(all_x)
+
+            model_y_vals = set()
+            for ens_name, xy_dict in ens_counts.items():
+                norm_by_num_models = tcgen_num_models_by_ensemble[ens_name]
+                x_vals = []
+                y_vals = []
+                for x_val in sorted(xy_dict.keys()):
+                    y_val = xy_dict[x_val]
+                    x_vals.append(x_val)
+                    # normalize, convert to percent
+
+                    if first:
+                        norm_yval = 100.0 * y_val / norm_by_num_models
+                    else:
+                        # For varying number of synoptic hours: will be wrong at start/end of model init
+                        # TODO: FIX IF USE OTHER FUNCTION THAT EARLIEST FOR ANALYSIS
+                        # Normalize to number of synoptic hours
+                        norm_yval = 100.0 * y_val / (4.0 * norm_by_num_models)
+
+                    y_vals.append(norm_yval)
+                    all_y.append(norm_yval)
+                    model_y_vals.add(norm_yval)
+
+                pdf_series_data.append((ens_name, x_vals, y_vals))
+                all_y.extend(model_y_vals)
+
+            # calculate the mean now for all ensembles
+            mean_data = {}
+            # normalize by number of ensembles (equally weight each ensemble)
+            weight = 1.0 / num_ensembles
+            for ens_name, x_vals, y_vals in pdf_series_data:
+                for x_val, y_val in list(zip(x_vals, y_vals)):
+                    if x_val not in mean_data:
+                        mean_data[x_val] = 0
+
+                    mean_data[x_val] += y_val * weight
+
+            mean_x_vals = []
+            mean_y_vals = []
+            for x_val in sorted(mean_data.keys()):
+                y_val = mean_data[x_val]
+                mean_x_vals.append(x_val)
+                mean_y_vals.append(y_val)
+                all_y.append(y_val)
+
+            # ADD ALL-TCGEN to series (equally weighted by ensemble)
+            pdf_series_data.append((total_ens_name, mean_x_vals, mean_y_vals))
+
+            # cdf
+            if cdf:
+                #TODO: FIX FOR ANALYSIS CASE OTHER THAN EARLIEST
+                all_y = []
+                for (model_name, x_vals, y_vals) in pdf_series_data:
+                    max_yval = None
+                    series_x = []
+                    series_y = []
+
+                    for i, y_val in enumerate(y_vals):
+                        if max_yval is None:
+                            max_yval = y_val
+                        else:
+                            max_yval += y_val
+
+                        series_x.append(x_vals[i])
+                        series_y.append(max_yval)
+                        all_y.append(max_yval)
+
+                    cdf_series_data.append((model_name, series_x, series_y))
+
+        if pdf:
+            return pdf_series_data, list(all_x), list(all_y)
+        elif cdf:
+            return cdf_series_data, list(all_x), list(all_y)
+        else:
+            return [], [], []
 
     def generate_time_series(self, internal_id, dependent_variable):
         # Find the matching tc_candidate
@@ -1846,18 +2526,14 @@ class AnalysisDialog(tk.Toplevel):
             if len(filtered_values) == 0:
                 filtered_values = None
                 filtered_datetimes = None
-                series_sum = 0
-            else:
-                series_sum = sum(filtered_values)
             datetimes = filtered_datetimes
             values = filtered_values
         else:
-            series_sum = 0
             values = None
             datetimes = None
 
         # Return the time series data as a tuple (x, y)
-        return (model_name, series_sum, datetimes, values,)
+        return (model_name, datetimes, values,)
 
     @staticmethod
     # get color index, num_ensembles, and num represented ensemble members
@@ -1865,10 +2541,13 @@ class AnalysisDialog(tk.Toplevel):
         ensemble_names = set()
         num_represented = {}
         for model_name in model_names_set:
-            if model_name not in model_name_to_ensemble_name:
+            if model_name[-5:] == 'TCGEN' or model_name == 'GLOBAL-DET':
+                ensemble_name = model_name
+            elif model_name not in model_name_to_ensemble_name:
                 # TODO: for now don't count ensembles for adeck data as we don't have a complete list of member names
                 continue
-            ensemble_name = model_name_to_ensemble_name[model_name]
+            else:
+                ensemble_name = model_name_to_ensemble_name[model_name]
             ensemble_names.add(ensemble_name)
             if ensemble_name not in num_represented:
                 num_represented[ensemble_name] = 0
@@ -1879,15 +2558,25 @@ class AnalysisDialog(tk.Toplevel):
             return None, num_ensembles, num_represented
 
         ensemble_to_enum = {}
+        last_i = 0
         for i, ensemble_name in enumerate(ensemble_names):
             ensemble_to_enum[ensemble_name] = i
+            last_i = i
 
         model_color_indices = {}
         # Must sort since model_names_set is not sorted and the series/legend will be in sorted order
         for model_name in sorted(model_names_set):
             if model_name not in model_name_to_ensemble_name:
-                # TODO: for now don't count ensembles for adeck data as we don't have a complete list of member names
-                model_color_indices[model_name] = 0
+                if model_name[-5:] == 'TCGEN':
+                    # PDF/CDF case with only 1 ensemble
+                    last_i += 1
+                    model_color_indices[model_name] = last_i
+                elif model_name == 'GLOBAL-DET':
+                    last_i += 1
+                    model_color_indices[model_name] = last_i
+                else:
+                    # TODO: for now don't count ensembles for adeck data as we don't have a complete list of member names
+                    model_color_indices[model_name] = 0
             else:
                 model_color_indices[model_name] = ensemble_to_enum[model_name_to_ensemble_name[model_name]]
 
@@ -1896,6 +2585,21 @@ class AnalysisDialog(tk.Toplevel):
     def get_current_tab_name(self):
         current_tab_index = self.notebook.index("current")
         return self.notebook_tab_names[current_tab_index]
+
+    def on_cdf_range_changed(self, *args):
+        self.do_update_cdf_chart = True
+
+    def on_pdf_range_changed(self, *args):
+        self.do_update_pdf_chart = True
+
+    def on_tab_changed(self, event):
+        tab_name = self.notebook.tab("current")["text"]
+        if tab_name == 'PDF':
+            if self.do_update_pdf_chart:
+                self.update_pdf_chart()
+        elif tab_name == 'CDF':
+            if self.do_update_cdf_chart:
+                self.update_cdf_chart()
 
     def get_timezones_with_offsets(self):
         """Get a list of all timezones with their UTC offsets."""
@@ -1970,6 +2674,483 @@ class AnalysisDialog(tk.Toplevel):
         self.update_tc_size_chart()
         self.update_track_spread_chart()
         self.update_rvor_chart()
+        self.update_pdf_chart()
+        self.update_cdf_chart()
+
+    def update_opt_preset_min_max(self, pdf=False, cdf=False):
+        basin = self.basin_previous_selected
+
+        if cdf:
+            analysis = self.cdf_previous_selected
+            preset = self.cdf_preset_previous_selected
+            min, max = self.min_max_presets_by_preset_and_basin_and_analysis[preset][basin][analysis]
+            self.cdf_min.set(min)
+            self.cdf_max.set(max)
+        if pdf:
+            analysis = self.pdf_previous_selected
+            preset = self.pdf_preset_previous_selected
+            min, max = self.min_max_presets_by_preset_and_basin_and_analysis[preset][basin][analysis]
+            self.pdf_min.set(min)
+            self.pdf_max.set(max)
+
+    def update_cdf_chart(self):
+        self.do_update_cdf_chart = False
+        with plt.style.context('dark_background'):
+            if self.fig_cdf:
+                plt.close(self.fig_cdf)
+                self.fig_cdf = None
+                self.notebook_figs['cdf'] = None
+            if self.canvas_cdf is not None:
+                self.canvas_cdf.get_tk_widget().destroy()
+                self.canvas_cdf = None
+            # Create a figure and axis object
+            self.fig_cdf, self.ax_cdf = plt.subplots(figsize=(6, 4), dpi=100)
+
+            # Initialize lists to store all x and y values
+            all_x = []
+            all_y = []
+            # Plot the data for all storms
+            any_data = False
+            num_tracks_with_data = 0
+            series_data = []
+            track_series_data = []
+            model_series_data = []
+            model_names_set = set()
+            # unlike the other analysis charts this does not generate the final time series for the chart
+            # generate the intermediate data we need
+
+            analysis_name = self.cdf_previous_selected
+            analysis_min = self.cdf_min.get()
+            analysis_max = self.cdf_max.get()
+            analysis_range = False
+            var_name = None
+            var_proper_name = ''
+            var_proper_long_desc = ''
+            earliest_analysis = False
+            if analysis_name == 'Earliest VMax @ 10m >= min':
+                var_name = 'vmax10m'
+                var_proper_name = 'VMax'
+                var_proper_long_desc = f'Earliest VMax @ 10m >= {analysis_min} kt'
+                earliest_analysis = True
+            elif analysis_name == 'min <= Earliest VMax @ 10m <= max':
+                var_name = 'vmax10m'
+                var_proper_name = 'VMax'
+                var_proper_long_desc = f'{analysis_min} <= Earliest VMax @ 10m <= {analysis_max} kt'
+                earliest_analysis = True
+            elif analysis_name == 'Earliest MSLP <= max':
+                var_name = 'mslp_value'
+                var_proper_name = 'MSLP'
+                var_proper_long_desc = f'Earliest MSLP <= {analysis_max} hPa'
+                earliest_analysis = True
+            elif analysis_name == 'min <= Earliest MSLP <= max':
+                var_name = 'mslp_value'
+                var_proper_name = 'MSLP'
+                var_proper_long_desc = f'{analysis_min} <= Earliest MSLP <= {analysis_max} hPa'
+                earliest_analysis = True
+
+            if var_name is None:
+                # Should not reach
+                return
+
+            for internal_storm_id in self.selected_internal_storm_ids:
+                model_name, x, y = self.generate_time_series(internal_storm_id, var_name)
+                if y is not None:
+                    # filter by analysis constraints (should return length 1 or 0 for Earliest analysis)
+                    new_x, new_y = self.filter_series(first=earliest_analysis, min_val=analysis_min, max_val=analysis_max, x=x, y=y, cdf=True)
+                    if new_y is not None:
+                        any_data = True
+                        #all_x.extend(new_x)
+                        #all_y.extend(new_y)
+                        track_series_data.append([model_name, new_x, new_y])
+                        num_tracks_with_data += 1
+                        model_names_set.add(model_name)
+
+            if not any_data:
+                return
+
+            # Now convert the track_deries_data to model_series_data
+            model_series_data = self.aggregate_tracks_to_model_series(track_series_data, first=earliest_analysis)
+
+            model_series_data.sort(key=lambda x: x[0])
+            num_unique_models = len(model_names_set)
+
+            num_plotted_ensembles = 1
+            # Process the data by ensemble
+            global_det_case = False
+            if self.total_ensembles >= 1 and self.possible_ensemble:
+                # unlike the other charts, we are interested here in the TOTAL model count (not represented)
+                # the series data is aggregated so we don't have individual models anyway
+                if self.total_ensembles == 1:
+                    series_data, all_x, all_y = self.generate_freq_analysis_series(first=earliest_analysis,
+                                                                     model_series_freq=model_series_data,
+                                                                     num_ensembles=1, cdf=True)
+                    ens_names = [s[0] for s in series_data]
+                    ens_name = ens_names[-1]
+                    total_num_models_in_ensemble = tcgen_num_models_by_ensemble[ens_name]
+                    ensemble_model_count_str = f'{self.total_ensembles} Ensemble ({total_num_models_in_ensemble} total members)'
+                else:
+                    # ALL-TCGEN case? (HARCODED) CHANGE IF ENSEMBLE SOURCES CHANGE
+                    series_data, all_x, all_y = self.generate_freq_analysis_series(first=earliest_analysis,
+                                                                                   model_series_freq=model_series_data,
+                                                                                   num_ensembles=self.total_ensembles,
+                                                                                   cdf=True)
+                    ens_names = [s[0] for s in series_data]
+                    ens_name = ens_names[-1]
+                    # Don't include member count in super ensemble as this is misleading since we are equally weighting by ensemble
+                    ensemble_model_count_str = f'{self.total_ensembles} total Ensembles'
+            else:
+                # GLOBAL-DET case
+                global_det_case = True
+                series_data, all_x, all_y = self.generate_freq_analysis_series(first=earliest_analysis,
+                                                                               model_series_freq=model_series_data,
+                                                                               num_ensembles=0,
+                                                                               cdf=True)
+                ens_names = [s[0] for s in series_data]
+                ensemble_model_count_str = f'{num_unique_models} models'
+
+            num_colors = len(ens_names)
+            distinct_colors = self.generate_distinct_colors(num_colors)
+            color_index_by_model_name, num_ensembles, num_represented = self.get_color_index_by_model_name(ens_names)
+
+            x_min = min(all_x)
+            x_max = max(all_x)
+
+            simplify_colors = len(series_data) > 8
+            for i, series in enumerate(series_data):
+                model_name, x, y = series
+                if global_det_case:
+                    color_index = i
+                else:
+                    if not simplify_colors:
+                        color_index = i
+                    elif model_name == 'ALL-TCGEN':
+                        color_index = 0
+                    else:
+                        # all members of the ensemble get the same color
+                        color_index = num_colors - 1
+
+                print(f"\nCDF for {model_name}, {var_proper_long_desc}:")
+                print("")
+
+                for x_val, y_val in zip(x, y):
+                    print(f"  {x_val.strftime('%m/%d')}: {y_val:.2f}%")
+
+                self.ax_cdf.plot(x, y, label=model_name, color=distinct_colors[color_index], marker='o', markersize=10)
+
+            # Find the overall min/max of all x and y values
+            x_min = min(all_x)
+            x_max = max(all_x)
+            y_max = max(all_y)
+            y_lim_min = -5
+            y_lim_max = 105
+            # Set the x-axis to display dates
+            self.ax_cdf.xaxis.set_major_locator(mdates.DayLocator())
+            self.ax_cdf.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            # Set the x-axis to display minor ticks every 6 hours
+            # self.ax_cdf.xaxis.set_minor_locator(mdates.HourLocator(interval=6))
+            # Set the x-axis limits to start at the first day - 1 and end at the last day + 1
+            start_of_day = x_min.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            end_of_day = x_max.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            self.ax_cdf.set_xlim([start_of_day, end_of_day])
+            # Set y-axis major ticks and labels every 10 %
+            self.ax_cdf.yaxis.set_major_locator(ticker.MultipleLocator(10))
+            # Set y-axis minor ticks (no label) every 5 %
+            self.ax_cdf.yaxis.set_minor_locator(ticker.MultipleLocator(5))
+            self.ax_cdf.set_ylim([y_lim_min, y_lim_max])
+            # Set title and labels
+            num_storm_ids = len(self.selected_internal_storm_ids)
+            self.ax_cdf.set_title(f'CDF of {var_proper_long_desc}, {ensemble_model_count_str}')
+            self.ax_cdf.set_ylabel('%')
+            self.ax_cdf.set_xlabel(self.tz_previous_selected)
+            self.ax_cdf.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
+            self.ax_cdf.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
+            self.ax_cdf.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
+
+            # Get the number of legend items
+            num_items = len(self.ax_cdf.get_legend_handles_labels()[0])
+            # Calculate the number of columns based on the available space
+            available_height = FULL_SCREEN_HEIGHT * 0.9
+            max_items_per_column = available_height / 30
+            num_columns = min(max(1, num_items // max_items_per_column), 5)
+            # Create the legend with the calculated number of columns
+            self.ax_cdf.legend(
+                loc='lower left',
+                bbox_to_anchor=(1.052, 0),
+                borderaxespad=0,
+                ncol=num_columns
+            )
+            # all fine tuned values since we haven't drawn/packed it yet
+            est_legend_width = num_columns * 80 / FULL_SCREEN_WIDTH
+            self.fig_cdf.subplots_adjust(left=90/FULL_SCREEN_WIDTH, right=(0.88 - est_legend_width), bottom=60/FULL_SCREEN_HEIGHT, top=0.9)
+
+            # Create a canvas to display the plot in the frame
+            self.canvas_cdf = FigureCanvasTkAgg(self.fig_cdf, master=self.cdf_frame)
+            self.canvas_cdf.draw()
+            self.canvas_cdf.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+            self.notebook_figs['cdf'] = self.fig_cdf
+
+    def update_pdf_chart(self):
+        self.do_update_pdf_chart = False
+        with plt.style.context('dark_background'):
+            if self.fig_pdf:
+                plt.close(self.fig_pdf)
+                self.fig_pdf = None
+                self.notebook_figs['pdf'] = None
+            if self.canvas_pdf is not None:
+                self.canvas_pdf.get_tk_widget().destroy()
+                self.canvas_pdf = None
+            # Create a figure and axis object
+            self.fig_pdf, self.ax_pdf = plt.subplots(figsize=(6, 4), dpi=100)
+
+            # Initialize lists to store all x and y values
+            all_x = []
+            all_y = []
+            # Plot the data for all storms
+            any_data = False
+            num_tracks_with_data = 0
+            series_data = []
+            track_series_data = []
+            model_series_data = []
+            model_names_set = set()
+            # unlike the other analysis charts this does not generate the final time series for the chart
+            # generate the intermediate data we need
+
+            analysis_name = self.pdf_previous_selected
+            analysis_min = self.pdf_min.get()
+            analysis_max = self.pdf_max.get()
+            analysis_range = False
+            var_name = None
+            var_proper_name = ''
+            var_proper_long_desc = ''
+            earliest_analysis = False
+            if analysis_name == 'Earliest VMax @ 10m >= min':
+                var_name = 'vmax10m'
+                var_proper_name = 'VMax'
+                var_proper_long_desc = f'Earliest VMax @ 10m >= {analysis_min} kt'
+                earliest_analysis = True
+            elif analysis_name == 'min <= Earliest VMax @ 10m <= max':
+                var_name = 'vmax10m'
+                var_proper_name = 'VMax'
+                var_proper_long_desc = f'{analysis_min} <= Earliest VMax @ 10m <= {analysis_max} kt'
+                earliest_analysis = True
+            elif analysis_name == 'Earliest MSLP <= max':
+                var_name = 'mslp_value'
+                var_proper_name = 'MSLP'
+                var_proper_long_desc = f'Earliest MSLP <= {analysis_max} hPa'
+                earliest_analysis = True
+            elif analysis_name == 'min <= Earliest MSLP <= max':
+                var_name = 'mslp_value'
+                var_proper_name = 'MSLP'
+                var_proper_long_desc = f'{analysis_min} <= Earliest MSLP <= {analysis_max} hPa'
+                earliest_analysis = True
+
+            if var_name is None:
+                # Should not reach
+                return
+
+            for internal_storm_id in self.selected_internal_storm_ids:
+                model_name, x, y = self.generate_time_series(internal_storm_id, var_name)
+                if y is not None:
+                    # filter by analysis constraints (should return length 1 or 0 for Earliest analysis)
+                    new_x, new_y = self.filter_series(first=earliest_analysis, min_val=analysis_min, max_val=analysis_max, x=x, y=y, pdf=True)
+                    if new_y is not None:
+                        any_data = True
+                        track_series_data.append([model_name, new_x, new_y])
+                        num_tracks_with_data += 1
+                        model_names_set.add(model_name)
+
+            if not any_data:
+                return
+
+            # Now convert the track_deries_data to model_series_data
+            model_series_data = self.aggregate_tracks_to_model_series(track_series_data, first=earliest_analysis)
+
+            model_series_data.sort(key=lambda x: x[0])
+            num_unique_models = len(model_names_set)
+
+            num_plotted_ensembles = 1
+            # Process the data by ensemble
+            global_det_case = False
+            if self.total_ensembles >= 1 and self.possible_ensemble:
+                # unlike the other charts, we are interested here in the TOTAL model count (not represented)
+                # the series data is aggregated so we don't have individual models anyway
+                if self.total_ensembles == 1:
+                    series_data, all_x, all_y = self.generate_freq_analysis_series(first=earliest_analysis,
+                                                                     model_series_freq=model_series_data,
+                                                                     num_ensembles=1, pdf=True)
+                    ens_names = [s[0] for s in series_data]
+                    ens_name = ens_names[-1]
+                    total_num_models_in_ensemble = tcgen_num_models_by_ensemble[ens_name]
+                    ensemble_model_count_str = f'{self.total_ensembles} Ensemble ({total_num_models_in_ensemble} total members)'
+                else:
+                    # ALL-TCGEN case? (HARCODED) CHANGE IF ENSEMBLE SOURCES CHANGE
+                    series_data, all_x, all_y = self.generate_freq_analysis_series(first=earliest_analysis,
+                                                                     model_series_freq=model_series_data,
+                                                                     num_ensembles=self.total_ensembles, pdf=True)
+                    ens_names = [s[0] for s in series_data]
+                    ens_name = ens_names[-1]
+                    # Don't include member count in super ensemble as this is misleading since we are equally weighting by ensemble
+                    ensemble_model_count_str = f'{self.total_ensembles} total Ensembles'
+            else:
+                # GLOBAL-DET case
+                global_det_case = True
+                series_data, all_x, all_y = self.generate_freq_analysis_series(first=earliest_analysis,
+                                                                 model_series_freq=model_series_data, num_ensembles=0,
+                                                                 pdf=True)
+                ens_names = [s[0] for s in series_data]
+                ensemble_model_count_str = f'{num_unique_models} models'
+
+            num_colors = len(ens_names)
+            distinct_colors = self.generate_distinct_colors(num_colors)
+            color_index_by_model_name, num_ensembles, num_represented = self.get_color_index_by_model_name(ens_names)
+
+            x_min = min(all_x)
+            x_max = max(all_x)
+
+            # Create a dictionary to store the offsets for overlapping x-values
+            offsets = {}
+
+            min_marker_size = 25
+            max_marker_size = 100
+            marker_size = max_marker_size
+            marker_decr = 10
+
+            # JITTER CODE
+            # Loop over the series data to find overlapping x-values
+            for i, series in enumerate(series_data):
+                model_name, x, y = series
+                print(f"\nPDF for {model_name}, {var_proper_long_desc}:")
+                print("")
+
+                for x_val, y_val in zip(x,y):
+                    print(f"  {x_val.strftime('%m/%d')}: {y_val:.2f}%")
+
+                    if x_val in offsets:
+                        offsets[x_val].append((i, y_val))
+                    else:
+                        offsets[x_val] = [(i, y_val)]
+
+            # Calculate the offsets for overlapping x-values
+            offset_width = 4.0
+            xoffsets = {}
+            bin_width = 5.0
+            # Calculate the offsets for overlapping x-values
+            for x_val, series_indices in offsets.items():
+                if len(series_indices) > 1:
+                    # Bin the y-values by 5
+                    y_bins = {}
+                    for series_index, y_val in series_indices:
+                        y_bin = int(round(y_val / bin_width) * bin_width)
+                        if y_bin in y_bins:
+                            y_bins[y_bin].append((series_index, y_val))
+                        else:
+                            y_bins[y_bin] = [(series_index, y_val)]
+
+                    bin_marker_size = max_marker_size
+                    for j, (y_bin, bin_series_indices) in enumerate(y_bins.items()):
+                        num_bin_series_indices = len(bin_series_indices)
+                        if num_bin_series_indices == 1:
+                            # don't offset this bin
+                            if x_val not in xoffsets:
+                                xoffsets[x_val] = {}
+
+                            if series_index not in xoffsets[x_val]:
+                                xoffsets[x_val][series_index] = {}
+
+                            xoffsets[x_val][series_index][y_bin] = timedelta(hours=0)
+                        else:
+                            offset_range = timedelta(hours=offset_width / num_bin_series_indices)
+                            center = offset_range * (num_bin_series_indices - 1) / 2
+                            for k, (series_index, y_val) in enumerate(bin_series_indices):
+                                if x_val not in xoffsets:
+                                    xoffsets[x_val] = {}
+
+                                if series_index not in xoffsets[x_val]:
+                                    xoffsets[x_val][series_index] = {}
+
+                                xoffsets[x_val][series_index][y_bin] = (offset_range * k) - center
+                                bin_marker_size -= marker_decr
+
+                        marker_size = max(bin_marker_size, min_marker_size)
+
+            # END JITTER CODE
+
+            simplify_colors = len(series_data) > 8
+            for i, series in enumerate(series_data):
+                model_name, x, y = series
+                if global_det_case:
+                    color_index = i
+                else:
+                    if not simplify_colors:
+                        color_index = i
+                    elif model_name == 'ALL-TCGEN':
+                        color_index = 0
+                    else:
+                        # all members of the ensemble get the same color
+                        color_index = num_colors - 1
+
+                x_jittered = []
+                # offset the data slightly horizontally if there are multiple values at the time
+                for x_val, y_val in list(zip(x,y)):
+                    y_bin = int(round(y_val / bin_width) * bin_width)
+                    if x_val in xoffsets and len(xoffsets[x_val]) > 1 and i in xoffsets[x_val] and y_bin in xoffsets[x_val][i]:
+                        x_jittered.append(x_val + xoffsets[x_val][i][y_bin])
+                    else:
+                        x_jittered.append(x_val)
+
+
+                self.ax_pdf.scatter(x_jittered, y, label=model_name, color=distinct_colors[color_index], marker='o', s=marker_size)
+                #self.ax_pdf.scatter(x, y, label=model_name, color=distinct_colors[color_index], marker='o', s=100)
+
+            # Find the overall min/max of all x and y values
+            y_max = max(all_y)
+            y_lim_min = -5
+            y_lim_max = 105
+            # Set the x-axis to display dates
+            self.ax_pdf.xaxis.set_major_locator(mdates.DayLocator())
+            self.ax_pdf.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            # Set the x-axis to display minor ticks every 6 hours
+            # self.ax_pdf.xaxis.set_minor_locator(mdates.HourLocator(interval=6))
+            # Set the x-axis limits to start at the first day - 1 and end at the last day + 1
+            start_of_day = x_min.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+            end_of_day = x_max.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            self.ax_pdf.set_xlim([start_of_day, end_of_day])
+            # Set y-axis major ticks and labels every 10 %
+            self.ax_pdf.yaxis.set_major_locator(ticker.MultipleLocator(10))
+            # Set y-axis minor ticks (no label) every 5 %
+            self.ax_pdf.yaxis.set_minor_locator(ticker.MultipleLocator(5))
+            self.ax_pdf.set_ylim([y_lim_min, y_lim_max])
+            # Set title and labels
+            num_storm_ids = len(self.selected_internal_storm_ids)
+            self.ax_pdf.set_title(f'PDF of {var_proper_long_desc}, {ensemble_model_count_str}')
+            self.ax_pdf.set_ylabel('%')
+            self.ax_pdf.set_xlabel(self.tz_previous_selected)
+            self.ax_pdf.grid(which='major', axis='y', linestyle=':', linewidth=0.8)
+            self.ax_pdf.grid(which='major', axis='x', linestyle=':', linewidth=1.0)
+            self.ax_pdf.grid(which='minor', axis='x', linestyle=':', linewidth=0.5)
+
+            # Get the number of legend items
+            num_items = len(self.ax_pdf.get_legend_handles_labels()[0])
+            # Calculate the number of columns based on the available space
+            available_height = FULL_SCREEN_HEIGHT * 0.9
+            max_items_per_column = available_height / 30
+            num_columns = min(max(1, num_items // max_items_per_column), 5)
+            # Create the legend with the calculated number of columns
+            self.ax_pdf.legend(
+                loc='lower left',
+                bbox_to_anchor=(1.052, 0),
+                borderaxespad=0,
+                ncol=num_columns
+            )
+            # all fine tuned values since we haven't drawn/packed it yet
+            est_legend_width = num_columns * 80 / FULL_SCREEN_WIDTH
+            self.fig_pdf.subplots_adjust(left=90/FULL_SCREEN_WIDTH, right=(0.88 - est_legend_width), bottom=60/FULL_SCREEN_HEIGHT, top=0.9)
+
+            # Create a canvas to display the plot in the frame
+            self.canvas_pdf = FigureCanvasTkAgg(self.fig_pdf, master=self.pdf_frame)
+            self.canvas_pdf.draw()
+            self.canvas_pdf.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+            self.notebook_figs['pdf'] = self.fig_pdf
 
     def update_pres_chart(self):
         with plt.style.context('dark_background'):
@@ -1991,12 +3172,12 @@ class AnalysisDialog(tk.Toplevel):
             series_data = []
             model_names_set = set()
             for internal_storm_id in self.selected_internal_storm_ids:
-                model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'mslp_value')
+                model_name, x, y = self.generate_time_series(internal_storm_id, 'mslp_value')
                 if y is not None:
                     any_data = True
                     all_x.extend(x)
                     all_y.extend(y)
-                    series_data.append([model_name, series_sum, x, y])
+                    series_data.append([model_name, x, y])
                     num_tracks_with_data += 1
                     model_names_set.add(model_name)
             if not any_data:
@@ -2031,7 +3212,7 @@ class AnalysisDialog(tk.Toplevel):
 
             distinct_colors = self.generate_distinct_colors(num_colors)
             for i, series in enumerate(series_data):
-                model_name, series_sum, x, y = series
+                model_name, x, y = series
                 if use_color_index:
                     color_index = color_index_by_model_name[model_name]
                 else:
@@ -2110,12 +3291,12 @@ class AnalysisDialog(tk.Toplevel):
             series_data = []
             model_names_set = set()
             for internal_storm_id in self.selected_internal_storm_ids:
-                model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'rv850max')
+                model_name, x, y = self.generate_time_series(internal_storm_id, 'rv850max')
                 if y is not None:
                     any_data = True
                     all_x.extend(x)
                     all_y.extend(y)
-                    series_data.append([model_name, series_sum, x, y])
+                    series_data.append([model_name, x, y])
                     num_tracks_with_data += 1
                     model_names_set.add(model_name)
             if not any_data:
@@ -2151,7 +3332,7 @@ class AnalysisDialog(tk.Toplevel):
 
             distinct_colors = self.generate_distinct_colors(num_colors)
             for i, series in enumerate(series_data):
-                model_name, series_sum, x, y = series
+                model_name, x, y = series
                 if use_color_index:
                     color_index = color_index_by_model_name[model_name]
                 else:
@@ -2230,7 +3411,7 @@ class AnalysisDialog(tk.Toplevel):
             model_names_set = set()
             any_data = False
             for internal_storm_id in self.selected_internal_storm_ids:
-                model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'lon')
+                model_name, x, y = self.generate_time_series(internal_storm_id, 'lon')
                 if y is not None:
                     any_data = True
                     num_tracks_with_data += 1
@@ -2349,12 +3530,12 @@ class AnalysisDialog(tk.Toplevel):
             series_data = []
             model_names_set = set()
             for internal_storm_id in self.selected_internal_storm_ids:
-                model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'roci')
+                model_name, x, y = self.generate_time_series(internal_storm_id, 'roci')
                 if y is not None:
                     any_data = True
                     all_x.extend(x)
                     all_y.extend(y)
-                    series_data.append([model_name, series_sum, x, y])
+                    series_data.append([model_name, x, y])
                     num_tracks_with_data += 1
                     model_names_set.add(model_name)
             if not any_data:
@@ -2390,7 +3571,7 @@ class AnalysisDialog(tk.Toplevel):
 
             distinct_colors = self.generate_distinct_colors(num_colors)
             for i, series in enumerate(series_data):
-                model_name, series_sum, x, y = series
+                model_name, x, y = series
                 if use_color_index:
                     color_index = color_index_by_model_name[model_name]
                 else:
@@ -2495,12 +3676,12 @@ class AnalysisDialog(tk.Toplevel):
             series_data = []
             model_names_set = set()
             for internal_storm_id in self.selected_internal_storm_ids:
-                model_name, series_sum, x, y = self.generate_time_series(internal_storm_id, 'vmax10m')
+                model_name, x, y = self.generate_time_series(internal_storm_id, 'vmax10m')
                 if y is not None:
                     any_data = True
                     all_x.extend(x)
                     all_y.extend(y)
-                    series_data.append([model_name, series_sum, x, y])
+                    series_data.append([model_name, x, y])
                     num_tracks_with_data += 1
                     model_names_set.add(model_name)
             if not any_data:
@@ -2535,7 +3716,7 @@ class AnalysisDialog(tk.Toplevel):
 
             distinct_colors = self.generate_distinct_colors(num_colors)
             for i, series in enumerate(series_data):
-                model_name, series_sum, x, y = series
+                model_name, x, y = series
                 if use_color_index:
                     color_index = color_index_by_model_name[model_name]
                 else:
@@ -4049,6 +5230,7 @@ class App:
         self.genesis_previous_selected = None
         self.adeck_storm = None
         self.genesis_model_cycle_time = None
+        self.genesis_model_cycle_time_navigate = None
         self.zoom_selection_box = None
         self.last_cursor_lon_lat = (0.0, 0.0)
         self.lastgl = None
@@ -5119,10 +6301,12 @@ class App:
                     model_dates[model_name] = completed_time.strftime('%d/%HZ')
                 elif most_recent_model_timestamps[model_name] == datetime.min:
                     most_recent_model_timestamps[model_name] = model_timestamp
-                    model_dates[model_name] = model_timestamp.strftime('%d/%HZ')
+                    if genesis_source_type != 'GLOBAL-DET':
+                        model_dates[model_name] = model_timestamp.strftime('%d/%HZ')
                 elif most_recent_model_timestamps[model_name] < model_timestamp:
                     most_recent_model_timestamps[model_name] = model_timestamp
-                    model_dates[model_name] = model_timestamp.strftime('%d/%HZ')
+                    if genesis_source_type != 'GLOBAL-DET':
+                        model_dates[model_name] = model_timestamp.strftime('%d/%HZ')
 
         # should match model cycle
         most_recent_model_cycle = max(most_recent_model_timestamps.values())
@@ -5152,6 +6336,8 @@ class App:
             if datetime.fromisoformat(most_recent_timestamp) < datetime.fromisoformat(model_timestamp):
                 most_recent_timestamp = model_timestamp
                 model_dates[model_name] = datetime.fromisoformat(most_recent_timestamp).strftime('%d/%HZ')
+            elif model_dates[model_name] is None:
+                model_dates[model_name] = datetime.fromisoformat(model_timestamp).strftime('%d/%HZ')
 
             numdisturb = 0
             prev_lat = None
@@ -5355,6 +6541,7 @@ class App:
         self.label_genesis_mode.config(
             text="GENESIS MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime('%Y-%m-%d'))
         self.genesis_model_cycle_time = most_recent_model_cycle
+        # Update model times label
         self.genesis_models_label.config(
             text=f"Latest models: GFS [{model_dates['GFS']}], ECM[{model_dates['ECM']}], NAV[{model_dates['NAV']}], CMC[{model_dates['CMC']}]")
         self.update_selection_info_label()
@@ -5888,6 +7075,7 @@ class App:
         self.set_focus_on_map()
 
     def next_genesis_cycle(self):
+        nav_time = self.genesis_model_cycle_time_navigate
         self.update_genesis_data_staleness()
         if self.genesis_model_cycle_time is None:
             self.genesis_model_cycle_time = datetime.now()
@@ -5897,7 +7085,7 @@ class App:
             else:
                 model_cycle = model_cycles['next']
         else:
-            model_cycles = get_tc_model_init_times_relative_to(self.genesis_model_cycle_time)
+            model_cycles = get_tc_model_init_times_relative_to(nav_time)
             if model_cycles['next'] is None:
                 # nothing after current cycle
                 return
@@ -5905,6 +7093,7 @@ class App:
 
         if model_cycle:
             if model_cycle != self.genesis_model_cycle_time:
+                self.genesis_model_cycle_time_navigate = model_cycle
                 self.redraw_map_with_data(model_cycle=model_cycle)
 
     def on_key_press(self, event):
@@ -6148,6 +7337,9 @@ class App:
 
     def prev_genesis_cycle(self):
         self.update_genesis_data_staleness()
+        nav_time = self.genesis_model_cycle_time_navigate
+        if not nav_time:
+            nav_time = self.genesis_model_cycle_time
         if self.genesis_model_cycle_time is None:
             self.genesis_model_cycle_time = datetime.now()
             model_cycles = get_tc_model_init_times_relative_to(self.genesis_model_cycle_time)
@@ -6156,7 +7348,7 @@ class App:
             else:
                 model_cycle = model_cycles['previous']
         else:
-            model_cycles = get_tc_model_init_times_relative_to(self.genesis_model_cycle_time)
+            model_cycles = get_tc_model_init_times_relative_to(nav_time)
             if model_cycles['previous'] is None:
                 # nothing before current cycle
                 return
@@ -6164,6 +7356,7 @@ class App:
 
         if model_cycle:
             if model_cycle != self.genesis_model_cycle_time:
+                self.genesis_model_cycle_time_navigate = model_cycle
                 self.redraw_map_with_data(model_cycle=model_cycle)
 
     def redraw_map_with_data(self, model_cycle=None):
