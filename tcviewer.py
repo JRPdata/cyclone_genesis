@@ -3214,7 +3214,7 @@ class AnalysisDialog(tk.Toplevel):
             if self.fig_pres:
                 plt.close(self.fig_pres)
                 self.fig_pres = None
-                self.notebook_pres['size'] = None
+                self.notebook_figs['size'] = None
             if self.canvas_pres is not None:
                 self.canvas_pres.get_tk_widget().destroy()
                 self.canvas_pres = None
