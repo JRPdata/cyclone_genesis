@@ -1608,7 +1608,7 @@ class AnalysisDialog(tk.Toplevel):
                              ]
 
         # Construct presets
-        self.intensity_preset_names = ['TC', 'TD', 'TS', 'CAT1', 'CAT2', 'CAT3', 'CAT4', 'CAT5']
+        self.intensity_preset_names = ['TC', 'SD', 'TD', 'SS', 'TS', 'CAT1', 'CAT2', 'CAT3', 'CAT4', 'CAT5']
 
         pres_presets = {}
         for basin, basin_dict in pres_stats_by_basin_by_intensity_cat.items():
@@ -1628,15 +1628,18 @@ class AnalysisDialog(tk.Toplevel):
             basin_presets['TC'] = (min_value, 9999)
             pres_presets[basin] = basin_presets
 
-        # extra 0 at beginning for loop
-        sss = [0, 0, 34, 64, 83, 96, 113, 137]
-        # construct preset vals for vmax for TC, TD, TS, CAT1, CAT2, CAT3, CAT4, CAT5
-        vmax_presets = {}
-        for i, preset_name in enumerate(self.intensity_preset_names):
-            if i == 0:
-                vmax_presets[preset_name] = (0, 9999)
-                continue
-            elif i+1 == len(sss):
+
+        vmax_presets = {
+            'TC': (0, 9999),
+            'SD': (0, 33),
+            'TD': (0, 33),
+            'SS': (34, 63),
+            'TS': (34, 63)
+        }
+        sss = [64, 83, 96, 113, 137]
+        # construct preset vals for vmax for CAT1, CAT2, CAT3, CAT4, CAT5
+        for i, preset_name in enumerate(self.intensity_preset_names[5:]):
+            if i+1 == len(sss):
                 range_max = 9999
             else:
                 range_max = sss[i+1] - 1
@@ -3929,8 +3932,9 @@ class AnnotatedCircles:
         if not hasattr(cls.ax, 'draggable_annotations') or cls.ax.draggable_annotations is None:
             cls.ax.draggable_annotations = []
 
-        if cls.has_overlap(lat=lat, lon=lon):
-            return None
+        # Since they are draggable, preference should be to annotate all (even overlapped)
+        #if cls.has_overlap(lat=lat, lon=lon):
+        #    return None
 
         lon_offset, lat_offset = cls.calculate_offset_pixels()
         # calculate radius of pixels in degrees
@@ -5614,7 +5618,7 @@ class App:
 
     def check_for_stale_deck_data(self):
         if self.deck_timer_id is not None:
-            self.root.after_cancel(deck_timer_id)
+            self.root.after_cancel(self.deck_timer_id)
         self.deck_timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_deck_data)
         if self.dt_mods_tcvitals:
             for url, old_dt_mod in self.dt_mods_tcvitals.items():
