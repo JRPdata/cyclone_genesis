@@ -1673,7 +1673,6 @@ class AnalysisDialog(tk.Toplevel):
             basin_presets['TC'] = (min_value, 9999)
             pres_presets[basin] = basin_presets
 
-
         vmax_presets = {
             'TC': (0, 9999),
             'SD': (0, 33),
@@ -1709,7 +1708,6 @@ class AnalysisDialog(tk.Toplevel):
                 basin_dicts[basin_name] = basin_dict
 
             self.min_max_presets_by_preset_and_basin_and_analysis[intensity_range_name] = basin_dicts
-
 
         self.cdf_selected_analysis = tk.StringVar()
         self.cdf_previous_selected = None
@@ -2209,7 +2207,6 @@ class AnalysisDialog(tk.Toplevel):
         if not (pdf or cdf):
             return new_x, new_y
 
-
         x_counts = {}
         if pdf:
             for x_val, y_val in list(zip(x, y)):
@@ -2251,7 +2248,6 @@ class AnalysisDialog(tk.Toplevel):
             new_y = [x_counts[earliest_time]]
 
         return new_x, new_y
-
 
     @staticmethod
     def generate_distinct_colors(n):
@@ -3202,7 +3198,6 @@ class AnalysisDialog(tk.Toplevel):
                     else:
                         x_jittered.append(x_val)
 
-
                 self.ax_pdf.scatter(x_jittered, y, label=model_name, color=distinct_colors[color_index], marker='o', s=marker_size)
                 #self.ax_pdf.scatter(x, y, label=model_name, color=distinct_colors[color_index], marker='o', s=100)
 
@@ -3892,20 +3887,22 @@ class AnalysisDialog(tk.Toplevel):
 # For extrema annotations (holds a collection of AnnotatedCircle)
 class AnnotatedCircles:
     ax = None
+    # this contains the plain Circle artist objects that each AnnotatedCircle contributes to
     circle_handles = None
     rtree_p = index.Property()
     rtree_idx = index.Index(properties=rtree_p)
-    annotated_circles = None
     # only increment counter so we only have unique ids
     counter = 0
 
     class AnnotatedCircle:
-        def __init__(self, draggable_annotation, circle_handle, rtree_id):
+        def __init__(self, draggable_annotation, circle_handle, rtree_id, internal_id=None, point_index=None):
             self.draggable_annotation_object = draggable_annotation
             self.circle_handle_object = circle_handle
             self.visible = True
             # id in the index for rtree_idx
             self.rtree_id = rtree_id
+            self.internal_id = internal_id
+            self.point_index = point_index
 
         def annotation_has_focus(self, event):
             if self.draggable_annotation_object:
@@ -3943,43 +3940,41 @@ class AnnotatedCircles:
                     traceback.print_exc()
                     pass
                 # self.annotation_handles = None
-                draggable_annotations = AnnotatedCircles.get_draggable_annotations()
-                if draggable_annotations:
-                    draggable_annotations.remove(self.draggable_annotation_object)
+                if App.draggable_annotations and self.draggable_annotation_object in App.draggable_annotations:
+                    App.draggable_annotations.remove(self.draggable_annotation_object)
                 self.draggable_annotation_object = None
             if self.circle_handle_object:
                 try:
+                    AnnotatedCircles.removeCircle(self)
                     self.circle_handle_object.remove()
                     removed = True
                 except:
                     traceback.print_exc()
                     pass
-                circle_handles = AnnotatedCircles.get_circle_handles()
-                if circle_handles:
-                    circle_handles.remove(self.circle_handle_object)
                 self.circle_handle_object = None
             if removed:
                 AnnotatedCircles.delete_point(self.rtree_id)
 
-                if AnnotatedCircles.annotated_circles:
-                    AnnotatedCircles.annotated_circles.remove(self)
-
-    def __init__(self, ax):
-        self.__class__.ax = ax
-
     # add AnnotatedCircle
     @classmethod
-    def add(cls, lat=None, lon=None, label=None, label_color=DEFAULT_ANNOTATE_TEXT_COLOR):
-        if lat is None or lon is None or label is None or cls.ax is None:
+    def add_point(cls, coords):
+        cls.counter += 1
+        cls.rtree_idx.insert(cls.counter, coords)
+        return cls.counter
+
+    @classmethod
+    def add(cls, lat=None, lon=None, label=None, label_color=DEFAULT_ANNOTATE_TEXT_COLOR, internal_id=None, point_index=None):
+        if lat is None or lon is None or label is None or App.ax is None:
             return None
         if cls.circle_handles is None:
-            cls.circle_handles = []
-        if not hasattr(cls.ax, 'draggable_annotations') or cls.ax.draggable_annotations is None:
-            cls.ax.draggable_annotations = []
+            cls.circle_handles = {}
+        if App.draggable_annotations is None:
+            App.draggable_annotations = []
 
         # Since they are draggable, preference should be to annotate all (even overlapped)
-        #if cls.has_overlap(lat=lat, lon=lon):
-        #    return None
+        # no longer check for overlap based on lat/lon, only on internal id and point to make sure we don't annotate twice
+        if cls.has_overlap(internal_id=internal_id, point_index=point_index):
+            return None
 
         lon_offset, lat_offset = cls.calculate_offset_pixels()
         # calculate radius of pixels in degrees
@@ -3987,9 +3982,11 @@ class AnnotatedCircles:
         circle_handle = Circle((lon, lat), radius=radius_pixels_degrees, color=DEFAULT_ANNOTATE_MARKER_COLOR,
                                fill=False, linestyle='dotted', linewidth=2, alpha=0.8,
                                transform=ccrs.PlateCarree())
-        cls.ax.add_patch(circle_handle)
+        App.ax.add_patch(circle_handle)
         rtree_id = cls.add_point((lon, lat, lon, lat))
-        cls.circle_handles.append(circle_handle)
+        if internal_id not in cls.circle_handles:
+            cls.circle_handles[internal_id] = {}
+        cls.circle_handles[internal_id][point_index] = circle_handle
 
         bbox_props = {
             'boxstyle': 'round,pad=0.3',
@@ -3999,36 +3996,28 @@ class AnnotatedCircles:
         }
 
         # Original annotation creation with DraggableAnnotation integration
-        annotation_handle = cls.ax.annotate(label, xy=(lon, lat),
+        annotation_handle = App.ax.annotate(label, xy=(lon, lat),
                                             xytext=(lon + lon_offset, lat + lat_offset),
                                             textcoords='data', color=label_color,
                                             fontsize=12, ha='left', va='bottom', bbox=bbox_props)
 
         # Create DraggableAnnotation instance
         draggable_annotation = DraggableAnnotation(
-            annotation_handle, (lon, lat), cls.ax, bbox_props)
+            annotation_handle, (lon, lat), bbox_props)
 
-        annotated_circle = cls.AnnotatedCircle(draggable_annotation, circle_handle, rtree_id)
-        if not cls.annotated_circles:
-            cls.annotated_circles = []
-        cls.annotated_circles.append(annotated_circle)
+        annotated_circle = cls.AnnotatedCircle(draggable_annotation, circle_handle, rtree_id, internal_id=internal_id, point_index=point_index)
+
         # create a way access the annotated_circle from the draggable annotation
         draggable_annotation.set_circle_annotation(annotated_circle)
-        cls.ax.draggable_annotations.append(draggable_annotation)
+        App.draggable_annotations.append(draggable_annotation)
 
         return annotated_circle
         # draw later as we will likely add multiple circles
         # self.canvas.draw()
 
     @classmethod
-    def add_point(cls, coords):
-        cls.counter += 1
-        cls.rtree_idx.insert(cls.counter, coords)
-        return cls.counter
-
-    @classmethod
     def any_annotation_contains_point(cls, event):
-        annotations = cls.get_draggable_annotations()
+        annotations = App.draggable_annotations
         if annotations:
             for annotation in annotations:
                 if annotation and annotation.contains_point(event):
@@ -4039,12 +4028,12 @@ class AnnotatedCircles:
     @classmethod
     def calculate_offset_pixels(cls):
         # Get current extent of the map in degrees and pixels
-        extent = cls.ax.get_extent()
+        extent = App.ax.get_extent()
         lon_diff = extent[1] - extent[0]
         lat_diff = extent[3] - extent[2]
 
         # Get window extent in pixels
-        window_extent = cls.ax.get_window_extent()
+        window_extent = App.ax.get_window_extent()
         lon_pixels = window_extent.width
         lat_pixels = window_extent.height
 
@@ -4065,12 +4054,12 @@ class AnnotatedCircles:
     # calculate radius of pixels in degrees
     def calculate_radius_pixels(cls):
         # Get current extent of the map in degrees and pixels
-        extent = cls.ax.get_extent()
+        extent = App.ax.get_extent()
         lon_diff = extent[1] - extent[0]
         lat_diff = extent[3] - extent[2]
 
         # Get window extent in pixels
-        window_extent = cls.ax.get_window_extent()
+        window_extent = App.ax.get_window_extent()
         lon_pixels = window_extent.width
         lat_pixels = window_extent.height
 
@@ -4084,32 +4073,32 @@ class AnnotatedCircles:
         return radius_degrees
 
     @classmethod
-    def changed_extent(cls, ax):
-        cls.ax = ax
+    def changed_extent(cls):
         cls.circle_handles = None
-        cls.ax.draggable_annotations = None
+        App.draggable_annotations = None
         cls.rtree_p = index.Property()
         cls.rtree_idx = index.Index(properties=cls.rtree_p)
-        cls.annotated_circles = None
+        App.annotated_circle_objects = {}
         cls.counter = 0
 
     @classmethod
     def clear(cls):
         # if self.annotation_handles:
-        if not cls.ax or not hasattr(cls.ax, 'draggable_annotations'):
+        if not App.draggable_annotations:
             return
-        if cls.ax.draggable_annotations:
-            try:
-                for annotation in cls.ax.draggable_annotations:
-                    annotation.remove()
-            except:
-                traceback.print_exc()
-                pass
-            cls.ax.draggable_annotations = None
+        try:
+            for annotation in App.draggable_annotations:
+                annotation.remove()
+        except:
+            traceback.print_exc()
+            pass
+        App.draggable_annotations = None
         if cls.circle_handles:
             try:
-                for circle_handle in cls.circle_handles:
-                    circle_handle.remove()
+                for internal_id, point_index_circles in cls.circle_handles.items():
+                    for point_index, circle_object in point_index_circles.items():
+                        print(internal_id, point_index, circle_object)
+                        circle_object.remove()
             except:
                 traceback.print_exc()
                 pass
@@ -4118,8 +4107,8 @@ class AnnotatedCircles:
             cls.rtree_p = index.Property()
         if cls.rtree_idx:
             cls.rtree_idx = index.Index(properties=cls.rtree_p)
-        if cls.annotated_circles:
-            cls.annotated_circles = []
+
+        App.redraw_fig_canvas(stale_bg=True)
 
     @classmethod
     def delete_point(cls, rtree_id):
@@ -4146,26 +4135,20 @@ class AnnotatedCircles:
         return None
 
     @classmethod
-    def get_draggable_annotations(cls):
-        if cls.ax and hasattr(cls.ax, 'draggable_annotations'):
-            return cls.ax.draggable_annotations
-        return None
+    def has_overlap(cls, internal_id=None, point_index=None):
+        if not App.annotated_circle_objects:
+            return False
+
+        if internal_id in App.annotated_circle_objects and point_index in App.annotated_circle_objects[internal_id]:
+            return True
+
+        return False
 
     @classmethod
-    def has_overlap(cls, lat=None, lon=None):
-        if lat is None or lon is None or len(cls.rtree_idx) == 0:
-            return False
-        # Define a bounding box around the annotated circle for initial query (in degrees)
-        buffer = ANNOTATE_CIRCLE_OVERLAP_IN_DEGREES  # Adjust this value based on desired precision
-        bounding_box = (lon - buffer, lat - buffer, lon + buffer, lat + buffer)
-
-        # Query the R-tree for points within the bounding box
-        possible_matches = list(cls.rtree_idx.intersection(bounding_box, objects=True))
-
-        if possible_matches:
-            return True
-        else:
-            return False
+    def removeCircle(cls, circle):
+        if circle.internal_id in cls.circle_handles:
+            if circle.point_index in cls.circle_handles[circle.internal_id]:
+                del cls.circle_handles[circle.internal_id][circle.point_index]
 
 # use toplevel rather than simple dialog as with this we can center the dialog
 class ConfigDialog(tk.Toplevel):
@@ -4411,11 +4394,10 @@ class ConfigDialog(tk.Toplevel):
 
 # The draggable, annotated textbox used by AnnotatedCircles
 class DraggableAnnotation:
-    def __init__(self, annotation, original_point, ax, bbox_props):
+    def __init__(self, annotation, original_point, bbox_props):
         self.blocking = False
         self.circle_annotation = None
         self.original_annotation = annotation
-        self.ax = ax
         self.zorder = self.original_annotation.get_zorder()
 
         self.original_point = original_point
@@ -4450,7 +4432,7 @@ class DraggableAnnotation:
         textcoords = getattr(self.original_annotation, 'textcoords', xycoords)
 
         # Create a copy of the annotation for dragging
-        self.dragging_annotation = self.ax.annotate(
+        self.dragging_annotation = App.ax.annotate(
             text,
             xy=xy,
             xytext=xytext,
@@ -4464,9 +4446,9 @@ class DraggableAnnotation:
         # self.bring_to_front()
 
         # Connect to the event handlers
-        self.cid_press = self.ax.figure.canvas.mpl_connect('button_press_event', self.on_press)
-        self.cid_release = self.ax.figure.canvas.mpl_connect('button_release_event', self.on_release)
-        self.cid_motion = self.ax.figure.canvas.mpl_connect('motion_notify_event', self.on_motion)
+        self.cid_press = App.ax.figure.canvas.mpl_connect('button_press_event', self.on_press)
+        self.cid_release = App.ax.figure.canvas.mpl_connect('button_release_event', self.on_release)
+        self.cid_motion = App.ax.figure.canvas.mpl_connect('motion_notify_event', self.on_motion)
 
     def block_for_dragging(self):
         # only start blocking when we have a line
@@ -4477,8 +4459,8 @@ class DraggableAnnotation:
         return True
 
     def bring_to_front(self):
-        if self.ax.draggable_annotations:
-            top_zorder = max(ann.zorder for ann in self.ax.draggable_annotations) + 1
+        if App.draggable_annotations:
+            top_zorder = max(ann.zorder for ann in App.draggable_annotations) + 1
             self.zorder = top_zorder
             self.original_annotation.set_zorder(top_zorder)
             self.dragging_annotation.set_zorder(top_zorder)
@@ -4493,7 +4475,7 @@ class DraggableAnnotation:
         if not self.visible:
             return
 
-        if not self.ax.draggable_annotations:
+        if not App.draggable_annotations:
             return
 
         if self != self.get_topmost_annotation(event):
@@ -4508,23 +4490,23 @@ class DraggableAnnotation:
         self.original_annotation.set_visible(False)
         if self.line:
             self.line.set_visible(False)
-        self.ax.figure.canvas.draw()
-        self.background = self.ax.figure.canvas.copy_from_bbox(self.ax.bbox)
+        App.redraw_fig_canvas()
+        self.background = App.ax.figure.canvas.copy_from_bbox(App.ax.bbox)
         self.dragging_annotation.set_position(self.original_annotation.get_position())
         self.dragging_annotation.set_visible(True)
         if self.line:
             self.line.set_visible(True)
-        self.ax.figure.canvas.draw()
+        App.redraw_fig_canvas()
         self.set_dragging(True)
 
     def calculate_radius_pixels(self):
         # Get current extent of the map in degrees and pixels
-        extent = self.ax.get_extent()
+        extent = App.ax.get_extent()
         lon_diff = extent[1] - extent[0]
         lat_diff = extent[3] - extent[2]
 
         # Get window extent in pixels
-        window_extent = self.ax.get_window_extent()
+        window_extent = App.ax.get_window_extent()
         lon_pixels = window_extent.width
         lat_pixels = window_extent.height
 
@@ -4545,7 +4527,7 @@ class DraggableAnnotation:
             return False
 
     def get_topmost_annotation(self, event):
-        annotations = self.ax.draggable_annotations
+        annotations = App.draggable_annotations
         # need a separate is dragging flag as bbox is unstable when we are blitting
         # (as it can become invisible during the setup for blitting (in an async event with the other handlers)
         # the bbox will result erroneously in a 1 pixel box causing the wrong annotation to drag
@@ -4578,11 +4560,11 @@ class DraggableAnnotation:
 
         (x0, y0), (x0_cur, y0_cur), xpress, ypress = self.press
 
-        xlim = self.ax.get_xlim()
-        ylim = self.ax.get_ylim()
+        xlim = App.ax.get_xlim()
+        ylim = App.ax.get_ylim()
 
         inbound = False
-        if event.inaxes == self.ax:
+        if event.inaxes == App.ax:
             # Check if mouse coordinates are within figure bounds
             try:
                 inbound = (xlim[0] <= event.xdata <= xlim[1] and ylim[0] <= event.ydata <= ylim[1])
@@ -4611,7 +4593,7 @@ class DraggableAnnotation:
         # Remove the old line and draw the new line
         if self.line:
             self.line.remove()
-        self.line = self.ax.plot(
+        self.line = App.ax.plot(
             [edge_x, new_x],
             [edge_y, new_y],
             linestyle='--',
@@ -4619,10 +4601,10 @@ class DraggableAnnotation:
             transform=ccrs.PlateCarree(),
             )[0]
 
-        self.ax.figure.canvas.restore_region(self.background)
-        self.ax.draw_artist(self.dragging_annotation)
-        self.ax.draw_artist(self.line)
-        self.ax.figure.canvas.blit(self.ax.bbox)
+        App.ax.figure.canvas.restore_region(self.background)
+        App.ax.draw_artist(self.dragging_annotation)
+        App.ax.draw_artist(self.line)
+        App.ax.figure.canvas.blit(App.ax.bbox)
 
     def on_release(self, event):
         if self.press is None:
@@ -4644,13 +4626,13 @@ class DraggableAnnotation:
         self.bring_to_front()
 
         # Redraw the figure to reflect the changes
-        self.ax.figure.canvas.draw()
+        App.redraw_fig_canvas(stale_bg=True)
 
     def remove(self):
         self.unblock_for_dragging()
-        self.ax.figure.canvas.mpl_disconnect(self.cid_press)
-        self.ax.figure.canvas.mpl_disconnect(self.cid_release)
-        self.ax.figure.canvas.mpl_disconnect(self.cid_motion)
+        App.ax.figure.canvas.mpl_disconnect(self.cid_press)
+        App.ax.figure.canvas.mpl_disconnect(self.cid_release)
+        App.ax.figure.canvas.mpl_disconnect(self.cid_motion)
         if self.line:
             self.line.remove()
         self.original_annotation.remove()
@@ -4732,8 +4714,7 @@ class EventManager:
 
 # Blitting measure tool (single instance)
 class MeasureTool:
-    def __init__(self, ax):
-        self.ax = ax
+    def __init__(self):
         self.measure_mode = False
         self.start_point = None
         self.end_point = None
@@ -4762,13 +4743,12 @@ class MeasureTool:
         nautical_miles = total_distance / 1852.0
         return nautical_miles
 
-    def changed_extent(self, ax):
-        self.ax = ax
+    def changed_extent(self):
         if self.line or self.distance_text:
             self.remove_artists()
-            ax.figure.canvas.draw()
+            App.redraw_fig_canvas(stale_bg=True)
             # update background region
-            self.bg = ax.figure.canvas.copy_from_bbox(ax.bbox)
+            self.bg = App.ax.figure.canvas.copy_from_bbox(App.ax.bbox)
             self.create_artists()
 
     def create_artists(self):
@@ -4776,8 +4756,8 @@ class MeasureTool:
         self.create_distance_text_artist(self.distance)
 
     def create_line_artist(self):
-        if self.ax and self.start_point and self.end_point:
-            self.line = self.ax.plot([self.start_point[0], self.end_point[0]],
+        if App.ax and self.start_point and self.end_point:
+            self.line = App.ax.plot([self.start_point[0], self.end_point[0]],
                                      [self.start_point[1], self.end_point[1]],
                                      color='cyan', linewidth=2, transform=ccrs.PlateCarree())[0]
 
@@ -4794,12 +4774,12 @@ class MeasureTool:
             offset_pixels = 20  # Adjust as needed
 
             # Calculate degrees per pixel in both x and y directions
-            extent = self.ax.get_extent()
+            extent = App.ax.get_extent()
             lon_diff = extent[1] - extent[0]
             lat_diff = extent[3] - extent[2]
 
-            lon_deg_per_pixel = lon_diff / self.ax.get_window_extent().width
-            lat_deg_per_pixel = lat_diff / self.ax.get_window_extent().height
+            lon_deg_per_pixel = lon_diff / App.ax.get_window_extent().width
+            lat_deg_per_pixel = lat_diff / App.ax.get_window_extent().height
 
             # Convert offset from pixels to degrees
             offset_degrees_x = offset_pixels * lon_deg_per_pixel
@@ -4815,7 +4795,7 @@ class MeasureTool:
                 offset_x_deg = -offset_x_deg
                 offset_y_deg = -offset_y_deg
 
-            self.distance_text = self.ax.text(mid_point[0] + offset_x_deg, mid_point[1] + offset_y_deg,
+            self.distance_text = App.ax.text(mid_point[0] + offset_x_deg, mid_point[1] + offset_y_deg,
                                               f"{distance:.2f} NM", color='white', fontsize=12,
                                               ha='center', va='center', rotation=angle,
                                               bbox=dict(facecolor='black', alpha=0.5))
@@ -4837,14 +4817,30 @@ class MeasureTool:
         if event.key == 'shift':
             self.measure_mode = True
             self.block_for_measure()
+            if self.line:
+                # updating existing line
+                # hide to get new blit, then do on motion
+                self.changed_extent()
+                inbound = False
+                xlim = App.ax.get_xlim()
+                ylim = App.ax.get_ylim()
+                if event.inaxes == App.ax:
+                    # Check if mouse coordinates are within figure bounds
+                    try:
+                        inbound = (xlim[0] <= event.xdata <= xlim[1] and ylim[0] <= event.ydata <= ylim[1])
+                    except:
+                        inbound = False
+                self.on_motion(event, inbound)
 
     def on_key_release(self, event):
         if event.key == 'shift':
             self.measure_mode = False
             self.unblock_for_measure()
+            if self.line:
+                # store blit of line
+                App.redraw_fig_canvas(stale_bg=True)
 
     def on_motion(self, event, inbound):
-        ax = self.ax
         if not self.measure_mode:
             return False
 
@@ -4858,7 +4854,7 @@ class MeasureTool:
 
         try:
             if not self.line:
-                self.bg = ax.figure.canvas.copy_from_bbox(ax.bbox)
+                self.bg = App.ax.figure.canvas.copy_from_bbox(App.ax.bbox)
                 self.create_line_artist()
         except:
             traceback.print_exc()
@@ -4880,10 +4876,10 @@ class MeasureTool:
 
         self.restore_region()
         if self.line:
-            ax.draw_artist(self.line)
+            App.ax.draw_artist(self.line)
         if self.distance_text:
-            ax.draw_artist(self.distance_text)
-        ax.figure.canvas.blit(ax.bbox)
+            App.ax.draw_artist(self.distance_text)
+        App.ax.figure.canvas.blit(App.ax.bbox)
         return True
 
     def remove_artists(self):
@@ -4908,16 +4904,16 @@ class MeasureTool:
 
     def reset_measurement(self):
         self.remove_artists()
-        self.ax.set_yscale('linear')
+        App.ax.set_yscale('linear')
         self.start_point = None
         self.end_point = None
         self.line = None
         self.distance = 0
-        self.ax.figure.canvas.draw()
+        App.redraw_fig_canvas(stale_bg=True)
 
     def restore_region(self):
         if self.bg:
-            self.ax.figure.canvas.restore_region(self.bg)
+            App.ax.figure.canvas.restore_region(self.bg)
 
     def unblock_for_measure(self):
         if self.blocking:
@@ -4927,21 +4923,20 @@ class MeasureTool:
 
 # Blitting box for map (for zooms / selections)
 class SelectionBox:
-    def __init__(self, ax):
+    def __init__(self):
         block_for_zoom = EventManager.block_events('zoom')
         if not block_for_zoom:
             raise ValueError("Failed to block events for SelectionBox")
         else:
-            self.ax = ax
             self.box = None
             self.lon1, self.lat1, self.lon2, self.lat2 = None, None, None, None
             self.has_latlons = False
-            self.bg = ax.figure.canvas.copy_from_bbox(ax.bbox)  # Save background
+            self.bg = App.ax.figure.canvas.copy_from_bbox(App.ax.bbox)  # Save background
 
     def destroy(self):
         self.remove()
         self.restore_region()  # Restore regions without drawing
-        self.ax.figure.canvas.blit(self.ax.bbox)
+        App.ax.figure.canvas.blit(App.ax.bbox)
         EventManager.unblock_events()
 
     def draw_box(self):
@@ -4950,13 +4945,13 @@ class SelectionBox:
                 self.box.remove()
             except:
                 pass
-        self.box = self.ax.plot(
+        self.box = App.ax.plot(
             [self.lon1, self.lon2, self.lon2, self.lon1, self.lon1],
             [self.lat1, self.lat1, self.lat2, self.lat2, self.lat1],
             color='yellow', linestyle='--', transform=ccrs.PlateCarree())
         for artist in self.box:
-            self.ax.draw_artist(artist)
-        self.ax.figure.canvas.blit(self.ax.bbox)
+            App.ax.draw_artist(artist)
+        App.ax.figure.canvas.blit(App.ax.bbox)
 
     def is_2d(self):
         if self.lon1 and self.lon2 and self.lat1 and self.lat2:
@@ -4965,7 +4960,7 @@ class SelectionBox:
             return False
 
     def restore_region(self):
-        self.ax.figure.canvas.restore_region(self.bg)
+        App.ax.figure.canvas.restore_region(self.bg)
 
     def remove(self):
         if self.box:
@@ -4982,11 +4977,11 @@ class SelectionBox:
         if lon1 and lat1 and lon2 and lat2:
             self.has_latlons = True
             self.draw_box()  # Draw the box
-        self.ax.figure.canvas.blit(self.ax.bbox)
+        App.ax.figure.canvas.blit(App.ax.bbox)
 
 # Blitting selection loop to select storm tracks
 class SelectionLoops:
-    ax = None
+    last_ax = None
     selection_loop_objects = []
     last_loop = None
     selecting = False
@@ -4995,8 +4990,8 @@ class SelectionLoops:
 
    # using shapely polygon as Polygon, and matplotlib polygon as MPLPolygon
     class SelectionLoop:
-        def __init__(self, ax, event, polys=None):
-            self.ax = ax
+        def __init__(self, event, polys=None):
+            self.last_ax = App.ax
             self.verts = []
             self.polygons = []
             self.preview = None
@@ -5014,15 +5009,15 @@ class SelectionLoops:
 
                 self.set_polygons(polys)
 
-        def changed_extent(self, ax):
+        def changed_extent(self):
             # preserve the polygons on the map across all map & data changes
-            if ax != self.ax:
-                self.ax = ax
+            if self.last_ax != App.ax:
+                self.last_ax = App.ax
                 if self.closed_artists:
                     self.remove()
-                    ax.figure.canvas.draw()
+                    App.redraw_fig_canvas()
                     # update background region
-                    self.bg = ax.figure.canvas.copy_from_bbox(ax.bbox)
+                    self.bg = App.ax.figure.canvas.copy_from_bbox(App.ax.bbox)
                     self.update_closed_artists()
 
         # find loops and return a list of (Shapely) Polygons
@@ -5098,33 +5093,34 @@ class SelectionLoops:
         def update_closed_artists(self):
             for poly in self.polygons:
                 patch = MPLPolygon(poly.exterior.coords, alpha=self.alpha)
-                self.closed_artists.append(self.ax.add_patch(patch))
+                self.closed_artists.append(App.ax.add_patch(patch))
             self.remove_preview_artists()
-            self.ax.figure.canvas.draw_idle()
+            #App.ax.figure.canvas.draw_idle()
+            App.redraw_fig_canvas(stale_bg=True)
 
         def update_preview(self):
             if self.background is None:
-                self.background = self.ax.figure.canvas.copy_from_bbox(self.ax.bbox)
+                self.background = App.ax.figure.canvas.copy_from_bbox(App.ax.bbox)
             if self.preview_artists is not None:
-                self.ax.figure.canvas.restore_region(self.background)
+                App.ax.figure.canvas.restore_region(self.background)
 
             self.remove_preview_artists()
             self.preview = self.close_loop()
             if self.preview:
                 for poly in self.preview:
                     patch = MPLPolygon(poly.exterior.coords, alpha=self.alpha)
-                    artist = self.ax.add_patch(patch)
+                    artist = App.ax.add_patch(patch)
                     self.preview_artists.append(artist)
-                    self.ax.draw_artist(artist)
-                self.ax.figure.canvas.blit(self.ax.bbox)
+                    App.ax.draw_artist(artist)
+                App.ax.figure.canvas.blit(App.ax.bbox)
                 return
             else:
-                self.ax.figure.canvas.restore_region(self.background)
+                App.ax.figure.canvas.restore_region(self.background)
                 return
 
     @classmethod
     def add_poly(cls, geos):
-        cls.last_loop = cls.SelectionLoop(cls.ax, None, polys=list(geos))
+        cls.last_loop = cls.SelectionLoop(None, polys=list(geos))
         cls.selection_loop_objects.append(cls.last_loop)
         cls.last_loop.on_release(polys=list(geos))
 
@@ -5138,12 +5134,13 @@ class SelectionLoops:
             cls.blocking = False
 
     @classmethod
-    def changed_extent(cls, new_ax):
-        if cls.ax != new_ax:
+    def changed_extent(cls):
+        if cls.last_ax != App.ax:
             cls.visible = True
-        cls.ax = new_ax
+
+        cls.last_ax = App.ax
         for selection_loop_obj in cls.selection_loop_objects:
-            selection_loop_obj.changed_extent(new_ax)
+            selection_loop_obj.changed_extent()
 
     @classmethod
     def clear(cls):
@@ -5153,7 +5150,8 @@ class SelectionLoops:
         cls.last_loop = None
         cls.selecting = False
         cls.unblock()
-        cls.ax.figure.canvas.draw_idle()
+        #App.ax.figure.canvas.draw_idle()
+        App.redraw_fig_canvas(stale_bg=True)
 
     @classmethod
     def get_polygons(cls):
@@ -5172,7 +5170,7 @@ class SelectionLoops:
     @classmethod
     def on_click(cls, event):
         if event.button == 1:  # left click
-            cls.last_loop = cls.SelectionLoop(cls.ax, event)
+            cls.last_loop = cls.SelectionLoop(event)
             cls.selection_loop_objects.append(cls.last_loop)
             cls.selecting = True
             cls.block()
@@ -5189,7 +5187,8 @@ class SelectionLoops:
                     cls.last_loop = cls.selection_loop_objects[-1]
                 else:
                     cls.last_loop = None
-                cls.ax.figure.canvas.draw_idle()
+                #App.ax.figure.canvas.draw_idle()
+                App.redraw_fig_canvas(stale_bg=True)
             return True
 
     @classmethod
@@ -5216,7 +5215,8 @@ class SelectionLoops:
             cls.visible = not (cls.visible)
             for selection_loop_obj in cls.selection_loop_objects:
                 selection_loop_obj.set_visible(cls.visible)
-            cls.ax.figure.canvas.draw_idle()
+            #App.ax.figure.canvas.draw_idle()
+            App.redraw_fig_canvas(stale_bg=True)
 
     @classmethod
     def unblock(cls):
@@ -5281,239 +5281,217 @@ class App:
     # manually hidden tc candidates and annotations
     hidden_tc_candidates = set()
 
-    # Initialize app and its tools
-    def __init__(self, root):
-        self.level_vars = None
-        self.top_frame = None
-        self.tools_frame = None
-        self.canvas_frame = None
-        self.canvas = None
-        self.adeck_mode_frame = None
-        self.exit_button_adeck = None
-        self.reload_button_adeck = None
-        self.label_adeck_mode = None
-        self.adeck_selected_combobox = None
-        self.adeck_selection_info_label = None
-        self.switch_to_genesis_button = None
-        self.adeck_config_button = None
-        self.genesis_mode_frame = None
-        self.exit_button_genesis = None
-        self.reload_button_genesis = None
-        self.label_genesis_mode = None
-        self.prev_genesis_cycle_button = None
-        self.latest_genesis_cycle_button = None
-        self.genesis_models_label = None
-        self.genesis_selected_combobox = None
-        self.adeck_selection_info_label = None
-        self.genesis_selection_info_label = None
-        self.switch_to_adeck_button = None
-        self.genesis_config_button = None
-        self.add_marker_button = None
-        self.toggle_selection_loop_button = None
-        self.label_mouse_coords_prefix = None
-        self.label_mouse_coords = None
-        self.label_mouse_hover_info_prefix = None
-        self.label_mouse_hover_matches = None
-        self.label_mouse_hover_info_coords = None
-        self.label_mouse_hover_info_valid_time_prefix = None
-        self.label_mouse_hover_info_valid_time = None
-        self.label_mouse_hover_info_model_init_prefix = None
-        self.label_mouse_hover_info_model_init = None
-        self.label_mouse_hover_info_vmax10m_prefix = None
-        self.label_mouse_hover_info_vmax10m = None
-        self.label_mouse_hover_info_mslp_prefix = None
-        self.label_mouse_hover_info_mslp = None
-        self.label_mouse_hover_info_roci_prefix = None
-        self.label_mouse_hover_info_roci = None
-        self.label_mouse_hover_info_isobar_delta_prefix = None
-        self.label_mouse_hover_info_isobar_delta = None
-        self.fig = None
-        self.ax = None
-        self.canvas = None
-        self.axes_size = None
-        App.root = root
-        self.root = root
-        self.root.title("tcviewer")
-        self.root.attributes('-fullscreen', True)
-        self.root.configure(bg="black")
-        # global extent
-        self.global_extent = [-180, 180, -90, 90]
-        # default mode (AB DECK mode)
-        self.mode = "ADECK"
-        self.recent_storms = None
-        self.adeck = None
-        self.bdeck = None
-        self.adeck_selected = tk.StringVar()
-        self.adeck_previous_selected = None
-        self.genesis_selected = tk.StringVar()
-        self.genesis_previous_selected = None
-        self.adeck_storm = None
-        self.genesis_model_cycle_time = None
-        self.genesis_model_cycle_time_navigate = None
-        self.zoom_selection_box = None
-        self.last_cursor_lon_lat = (0.0, 0.0)
-        self.lastgl = None
-        # track first fetch (don't update staleness until a reload, combobox selection, or model cycle change)
-        self.have_deck_data = False
-        self.have_genesis_data = False
-        # track whether there is new tcvitals,adecks,bdecks data
-        self.deck_timer_id = None
-        self.genesis_timer_id = None
-        self.stale_urls = dict()
-        self.stale_urls['tcvitals'] = set()
-        self.stale_urls['adeck'] = set()
-        self.stale_urls['bdeck'] = set()
-        self.stale_genesis_data = dict()
-        self.stale_genesis_data['global-det'] = []
-        self.stale_genesis_data['tcgen'] = []
-        # keys are the urls we will check for if it is stale, values are datetime objects
-        self.dt_mods_tcvitals = {}
-        self.dt_mods_adeck = {}
-        self.dt_mods_bdeck = {}
-        # keys are the type of genesis data we will check for if data is stale ('global-det' or 'tcgen'), values are datetime objects
-        self.dt_mods_genesis = {}
-        # measure tool
-        self.measure_mode = False
-        self.start_point = None
-        self.end_point = None
-        self.line = None
-        self.distance_text = None
-        # input event tracking
-        self.cid_press = None
-        self.cid_release = None
-        self.cid_motion = None
-        self.cid_key_press = None
-        self.cid_key_release = None
-        # keep list of all lat_lon_with_time_step_list (plural) used to create points in last drawn map
-        #   note, each item is also a list of dicts (not enumerated)
-        self.plotted_tc_candidates = []
-        # r-tree index
-        self.rtree_p = index.Property()
-        self.rtree_idx = index.Index(properties=self.rtree_p)
-        # Mapping from rtree point index to (internal_id, tc_index, tc_candidate_point_index)
-        self.rtree_tuple_point_id = 0
-        self.rtree_tuple_index_mapping = {}
+    level_vars = None
+    top_frame = None
+    tools_frame = None
+    canvas_frame = None
+    canvas = None
+    adeck_mode_frame = None
+    exit_button_adeck = None
+    reload_button_adeck = None
+    label_adeck_mode = None
+    adeck_selected_combobox = None
+    adeck_selection_info_label = None
+    switch_to_genesis_button = None
+    adeck_config_button = None
+    genesis_mode_frame = None
+    exit_button_genesis = None
+    reload_button_genesis = None
+    label_genesis_mode = None
+    prev_genesis_cycle_button = None
+    latest_genesis_cycle_button = None
+    genesis_models_label = None
+    genesis_selected_combobox = None
+    adeck_selection_info_label = None
+    genesis_selection_info_label = None
+    switch_to_adeck_button = None
+    genesis_config_button = None
+    add_marker_button = None
+    toggle_selection_loop_button = None
+    label_mouse_coords_prefix = None
+    label_mouse_coords = None
+    label_mouse_hover_info_prefix = None
+    label_mouse_hover_matches = None
+    label_mouse_hover_info_coords = None
+    label_mouse_hover_info_valid_time_prefix = None
+    label_mouse_hover_info_valid_time = None
+    label_mouse_hover_info_model_init_prefix = None
+    label_mouse_hover_info_model_init = None
+    label_mouse_hover_info_vmax10m_prefix = None
+    label_mouse_hover_info_vmax10m = None
+    label_mouse_hover_info_mslp_prefix = None
+    label_mouse_hover_info_mslp = None
+    label_mouse_hover_info_roci_prefix = None
+    label_mouse_hover_info_roci = None
+    label_mouse_hover_info_isobar_delta_prefix = None
+    label_mouse_hover_info_isobar_delta = None
+    fig = None
+    ax = None
+    canvas = None
+    axes_size = None
+    # global extent
+    global_extent = [-180, 180, -90, 90]
+    # default mode (AB DECK mode)
+    mode = "ADECK"
+    recent_storms = None
+    adeck = None
+    bdeck = None
+    adeck_previous_selected = None
+    genesis_previous_selected = None
+    adeck_storm = None
+    genesis_model_cycle_time = None
+    genesis_model_cycle_time_navigate = None
+    zoom_selection_box = None
+    last_cursor_lon_lat = (0.0, 0.0)
+    lastgl = None
+    # track first fetch (don't update staleness until a reload, combobox selection, or model cycle change)
+    have_deck_data = False
+    have_genesis_data = False
+    # track whether there is new tcvitals,adecks,bdecks data
+    deck_timer_id = None
+    genesis_timer_id = None
+    stale_urls = dict()
+    stale_urls['tcvitals'] = set()
+    stale_urls['adeck'] = set()
+    stale_urls['bdeck'] = set()
+    stale_genesis_data = dict()
+    stale_genesis_data['global-det'] = []
+    stale_genesis_data['tcgen'] = []
+    # keys are the urls we will check for if it is stale, values are datetime objects
+    dt_mods_tcvitals = {}
+    dt_mods_adeck = {}
+    dt_mods_bdeck = {}
+    # keys are the type of genesis data we will check for if data is stale ('global-det' or 'tcgen'), values are datetime objects
+    dt_mods_genesis = {}
+    # measure tool
+    measure_mode = False
+    start_point = None
+    end_point = None
+    line = None
+    distance_text = None
+    # input event tracking
+    cid_press = None
+    cid_release = None
+    cid_motion = None
+    cid_key_press = None
+    cid_key_release = None
+    # keep list of all lat_lon_with_time_step_list (plural) used to create points in last drawn map
+    #   note, each item is also a list of dicts (not enumerated)
+    plotted_tc_candidates = []
+    # r-tree index
+    rtree_p = index.Property()
+    rtree_idx = index.Index(properties=rtree_p)
+    # Mapping from rtree point index to (internal_id, tc_index, tc_candidate_point_index)
+    rtree_tuple_point_id = 0
+    rtree_tuple_index_mapping = {}
 
-        self.scatter_objects = {}
-        self.line_collection_objects = {}
-        self.annotated_circle_objects = {}
-        # circle patch for selected marker
-        self.circle_handle = None
-        self.last_circle_lon = None
-        self.last_circle_lat = None
-        # track overlapped points (by index, pointing to the plotted_tc_candidates)
-        #   this will hold information on the marker where the cursor previously pointed to (current circle patch),
-        #   and which one of the possible matches was (is currently) viewed
-        self.nearest_point_indices_overlapped = SortedCyclicEnumDict()
-        # settings for plotting
-        self.time_step_marker_colors = [
-            '#ffff00',
-            '#ba0a0a', '#e45913', '#fb886e', '#fdd0a2',
-            '#005b1c', '#07a10b', '#9cd648', '#a5ee96',
-            '#0d3860', '#2155c4', '#33aaff', '#7acaff',
-            '#710173', '#b82cae', '#c171cf', '#ffb9ee',
-            '#636363', '#969696', '#bfbfbf', '#e9e9e9'
-        ]
-        self.time_step_legend_fg_colors = [
-            '#000000',
-            '#ffffff', '#ffffff', '#000000', '#000000',
-            '#ffffff', '#ffffff', '#000000', '#000000',
-            '#ffffff', '#ffffff', '#000000', '#000000',
-            '#ffffff', '#ffffff', '#000000', '#000000',
-            '#ffffff', '#000000', '#000000', '#000000'
-        ]
-        # Will change when clicked
-        self.time_step_opacity = [
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0
-        ]
-        # Define 6 different time_step ranges and their corresponding colors
-        self.time_step_ranges = [
-            (float('-inf'), -1),
-            (0, 23),
-            (24, 47),
-            (48, 71),
-            (72, 95),
-            (96, 119),
-            (120, 143),
-            (144, 167),
-            (168, 191),
-            (192, 215),
-            (216, 239),
-            (240, 263),
-            (264, 287),
-            (288, 311),
-            (312, 335),
-            (336, 359),
-            (360, 383),
-            (384, 407),
-            (408, 431),
-            (432, 455),
-            (456, float('inf'))
-        ]
-        self.time_step_legend_objects = []
-        # a pair of dicts of selected rvor levels' contours, with contour ids as keys
-        self.overlay_rvor_contour_objs = []
-        self.overlay_rvor_label_objs = []
-        self.overlay_rvor_contour_dict = None
-        self.init_rvor_contour_dict()
-        self.overlay_rvor_contour_visible = True
-        self.overlay_rvor_label_visible = True
-        self.overlay_rvor_label_last_alpha = 1.0
-        # settings
-        self.load_settings()
-        # bind main app keys
-        self.root.bind("p", self.take_screenshot)
-        self.root.bind("l", self.toggle_rvor_labels)
-        self.root.bind("v", self.toggle_rvor_contours)
-        # self.root.bind("v", self.toggle_rvor_contours)
-        self.rvor_dialog_open = False
-        self.root.bind("V", self.show_rvor_dialog)
+    scatter_objects = {}
+    line_collection_objects = {}
+    annotated_circle_objects = {}
+    # circle patch for selected marker
+    circle_handle = None
+    last_circle_lon = None
+    last_circle_lat = None
+    # track overlapped points (by index, pointing to the plotted_tc_candidates)
+    #   this will hold information on the marker where the cursor previously pointed to (current circle patch),
+    #   and which one of the possible matches was (is currently) viewed
+    nearest_point_indices_overlapped = SortedCyclicEnumDict()
+    # settings for plotting
+    time_step_marker_colors = [
+        '#ffff00',
+        '#ba0a0a', '#e45913', '#fb886e', '#fdd0a2',
+        '#005b1c', '#07a10b', '#9cd648', '#a5ee96',
+        '#0d3860', '#2155c4', '#33aaff', '#7acaff',
+        '#710173', '#b82cae', '#c171cf', '#ffb9ee',
+        '#636363', '#969696', '#bfbfbf', '#e9e9e9'
+    ]
+    time_step_legend_fg_colors = [
+        '#000000',
+        '#ffffff', '#ffffff', '#000000', '#000000',
+        '#ffffff', '#ffffff', '#000000', '#000000',
+        '#ffffff', '#ffffff', '#000000', '#000000',
+        '#ffffff', '#ffffff', '#000000', '#000000',
+        '#ffffff', '#000000', '#000000', '#000000'
+    ]
+    # Will change when clicked
+    time_step_opacity = [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+    ]
+    # Define 6 different time_step ranges and their corresponding colors
+    time_step_ranges = [
+        (float('-inf'), -1),
+        (0, 23),
+        (24, 47),
+        (48, 71),
+        (72, 95),
+        (96, 119),
+        (120, 143),
+        (144, 167),
+        (168, 191),
+        (192, 215),
+        (216, 239),
+        (240, 263),
+        (264, 287),
+        (288, 311),
+        (312, 335),
+        (336, 359),
+        (360, 383),
+        (384, 407),
+        (408, 431),
+        (432, 455),
+        (456, float('inf'))
+    ]
+    time_step_legend_objects = []
+    # a pair of dicts of selected rvor levels' contours, with contour ids as keys
+    overlay_rvor_contour_objs = []
+    overlay_rvor_label_objs = []
+    overlay_rvor_contour_dict = None
 
-        self.analysis_dialog_open = False
-        self.root.bind("a", self.show_analysis_dialog)
+    overlay_rvor_contour_visible = True
+    overlay_rvor_label_visible = True
+    overlay_rvor_label_last_alpha = 1.0
 
-        self.root.bind('z', self.zoom_to_basin_dialog)
-        self.root.bind('b', self.select_basin_dialog)
+    rvor_dialog_open = False
+    analysis_dialog_open = False
 
-        # setup widges
-        self.create_widgets()
-        # setup tools
-        self.measure_tool = MeasureTool(self.ax)
-        self.selection_loop_mode = False
-        # display initial map
-        self.display_map()
+    selection_loop_mode = False
+    # Bbox for circle patch blitting
+    background_for_blit = None
 
-    def annotate_single_storm_extrema(self, point_index=None):
+    draggable_annotations = []
+
+    @classmethod
+    def annotate_single_storm_extrema(cls, point_index=None):
         global ANNOTATE_COLOR_LEVELS
         if point_index is None or len(point_index) != 3:
             return
         internal_id, tc_index, tc_point_index = point_index
-        if not self.plotted_tc_candidates or (tc_index + 1) > len(self.plotted_tc_candidates):
+        if not cls.plotted_tc_candidates or (tc_index + 1) > len(cls.plotted_tc_candidates):
             return
 
         results = {}
         for short_name in DISPLAYED_FUNCTIONAL_ANNOTATIONS:
-            result_tuple = annotations_result_val[short_name](self.plotted_tc_candidates[tc_index][1])
+            result_tuple = annotations_result_val[short_name](cls.plotted_tc_candidates[tc_index][1])
             if not result_tuple:
                 continue
             point_idx, result_val = result_tuple
@@ -5541,7 +5519,7 @@ class App:
                 if result_val is None or short_name is None:
                     continue
 
-                result_point = self.plotted_tc_candidates[tc_index][1][result_idx]
+                result_point = cls.plotted_tc_candidates[tc_index][1][result_idx]
                 append = False
                 if result_idx in point_index_labels:
                     append = True
@@ -5571,56 +5549,74 @@ class App:
 
         # finally add the annotated circle for each label
         added = False
+        cleared_once = False
         for label_point_index, (point_label, color_level) in point_index_labels.items():
-            point = self.plotted_tc_candidates[tc_index][1][label_point_index]
+            point = cls.plotted_tc_candidates[tc_index][1][label_point_index]
             added = True
             # check if already annotated
             #   there is a question of how we want to use annotations (one or many per (nearby or same) point?)
-            #   in AnnotatedCircles, we use has_overlap() to prevent that
+            #   in AnnotatedCircles, we use has_overlap() to prevent annotating twice
             annotated_circle = AnnotatedCircles.add(lat=point['lat'], lon=point['lon'], label=point_label,
-                                                    label_color=ANNOTATE_COLOR_LEVELS[color_level])
-            # handle case to make sure we don't add doubles or nearby
-            if annotated_circle is None:
-                continue
-            if internal_id not in self.annotated_circle_objects:
-                self.annotated_circle_objects[internal_id] = []
-            self.annotated_circle_objects[internal_id].append(annotated_circle)
+                                                    label_color=ANNOTATE_COLOR_LEVELS[color_level], internal_id=internal_id, point_index=label_point_index)
+            # handle case to make sure we don't add doubles
+            if annotated_circle is None and not cleared_once:
+                # in this case let's re-annotate by clearning the existing annotations for this track (internal_id)
+                if internal_id in cls.annotated_circle_objects:
+                    removed_any = False
+                    for point_index, ac in cls.annotated_circle_objects[internal_id].items():
+                        ac.remove()
+                        removed_any = True
+
+                    del cls.annotated_circle_objects[internal_id]
+                    if removed_any:
+                        cleared_once = True
+                        annotated_circle = AnnotatedCircles.add(lat=point['lat'], lon=point['lon'], label=point_label,
+                                                                label_color=ANNOTATE_COLOR_LEVELS[color_level],
+                                                                internal_id=internal_id, point_index=label_point_index)
+
+            if not cls.annotated_circle_objects:
+                cls.annotated_circle_objects = {}
+            if internal_id not in cls.annotated_circle_objects:
+                cls.annotated_circle_objects[internal_id] = {}
+            cls.annotated_circle_objects[internal_id][label_point_index] = annotated_circle
 
         if added:
-            self.ax.figure.canvas.draw()
+            cls.redraw_fig_canvas(stale_bg=True)
 
-    def annotate_storm_extrema(self):
-        if len(self.plotted_tc_candidates) == 0:
+    @classmethod
+    def annotate_storm_extrema(cls):
+        if len(cls.plotted_tc_candidates) == 0:
             return
 
         # note: point_index is a tuple of tc_index, tc_point_index
-        if len(self.nearest_point_indices_overlapped) == 0:
+        if len(cls.nearest_point_indices_overlapped) == 0:
             # annotate all storm extrema in current view
-            for tc_index in range(len(self.plotted_tc_candidates)):
-                internal_id, tc_candidate = self.plotted_tc_candidates[tc_index]
+            for tc_index in range(len(cls.plotted_tc_candidates)):
+                internal_id, tc_candidate = cls.plotted_tc_candidates[tc_index]
                 if len(tc_candidate):
-                    if self.any_storm_points_in_bounds(tc_index):
+                    if cls.any_storm_points_in_bounds(tc_index):
                         point_index = (internal_id, tc_index, 0)
-                        self.annotate_single_storm_extrema(point_index=point_index)
+                        cls.annotate_single_storm_extrema(point_index=point_index)
         else:
             # annotate storm extrema of previously selected
-            num, cursor_point_index = self.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
-            self.annotate_single_storm_extrema(point_index=cursor_point_index)
+            num, cursor_point_index = cls.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
+            cls.annotate_single_storm_extrema(point_index=cursor_point_index)
 
-    def any_storm_points_in_bounds(self, tc_index):
-        if not self.plotted_tc_candidates:
+    @classmethod
+    def any_storm_points_in_bounds(cls, tc_index):
+        if not cls.plotted_tc_candidates:
             return False
-        if (tc_index + 1) > len(self.plotted_tc_candidates):
+        if (tc_index + 1) > len(cls.plotted_tc_candidates):
             return False
-        if not self.ax:
+        if not cls.ax:
             return False
 
         any_in_bound = False
 
-        xlim = self.ax.get_xlim()
-        ylim = self.ax.get_ylim()
+        xlim = cls.ax.get_xlim()
+        ylim = cls.ax.get_ylim()
         try:
-            internal_id, tc_candidate = self.plotted_tc_candidates[tc_index]
+            internal_id, tc_candidate = cls.plotted_tc_candidates[tc_index]
             for point in tc_candidate:
                 if len(App.hidden_tc_candidates) == 0 or internal_id not in App.hidden_tc_candidates:
                     lat = point['lat']
@@ -5632,6 +5628,23 @@ class App:
 
         return any_in_bound
 
+    @classmethod
+    def blit_circle_patch(cls, stale_bg=False):
+        if cls.ax is None:
+            return
+
+        if stale_bg or cls.background_for_blit is None or cls.circle_handle is None:
+            cls.background_for_blit = cls.ax.figure.canvas.copy_from_bbox(cls.ax.bbox)
+            if not cls.circle_handle:
+                return
+
+        if cls.circle_handle:
+            cls.ax.draw_artist(cls.circle_handle)
+            cls.ax.figure.canvas.blit(cls.ax.bbox)
+        elif cls.background_for_blit:
+            cls.ax.figure.canvas.restore_region(cls.background_for_blit)
+            cls.ax.figure.canvas.blit(cls.ax.bbox)
+
     @staticmethod
     def calculate_distance(start_point, end_point):
         geod = cgeo.Geodesic()
@@ -5641,14 +5654,15 @@ class App:
         return nautical_miles
 
     # calculate radius of pixels in degrees
-    def calculate_radius_pixels(self):
+    @classmethod
+    def calculate_radius_pixels(cls):
         # Get current extent of the map in degrees and pixels
-        extent = self.ax.get_extent()
+        extent = cls.ax.get_extent()
         lon_diff = extent[1] - extent[0]
         lat_diff = extent[3] - extent[2]
 
         # Get window extent in pixels
-        window_extent = self.ax.get_window_extent()
+        window_extent = cls.ax.get_window_extent()
         lon_pixels = window_extent.width
         lat_pixels = window_extent.height
 
@@ -5661,41 +5675,43 @@ class App:
 
         return radius_degrees
 
-    def check_for_stale_deck_data(self):
-        if self.deck_timer_id is not None:
-            self.root.after_cancel(self.deck_timer_id)
-        self.deck_timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_deck_data)
-        if self.dt_mods_tcvitals:
-            for url, old_dt_mod in self.dt_mods_tcvitals.items():
+    @classmethod
+    def check_for_stale_deck_data(cls):
+        if cls.deck_timer_id is not None:
+            cls.root.after_cancel(cls.deck_timer_id)
+        cls.deck_timer_id = cls.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, cls.check_for_stale_deck_data)
+        if cls.dt_mods_tcvitals:
+            for url, old_dt_mod in cls.dt_mods_tcvitals.items():
                 new_dt_mod = http_get_modification_date(url)
                 if new_dt_mod:
                     if new_dt_mod > old_dt_mod:
-                        self.stale_urls['tcvitals'] = self.stale_urls['tcvitals'] | {url}
-        if self.dt_mods_adeck:
-            for url, old_dt_mod in self.dt_mods_adeck.items():
+                        cls.stale_urls['tcvitals'] = cls.stale_urls['tcvitals'] | {url}
+        if cls.dt_mods_adeck:
+            for url, old_dt_mod in cls.dt_mods_adeck.items():
                 new_dt_mod = http_get_modification_date(url)
                 if new_dt_mod:
                     if new_dt_mod > old_dt_mod:
-                        self.stale_urls['adeck'] = self.stale_urls['adeck'] | {url}
-        if self.dt_mods_bdeck:
-            for url, old_dt_mod in self.dt_mods_bdeck.items():
+                        cls.stale_urls['adeck'] = cls.stale_urls['adeck'] | {url}
+        if cls.dt_mods_bdeck:
+            for url, old_dt_mod in cls.dt_mods_bdeck.items():
                 new_dt_mod = http_get_modification_date(url)
                 if new_dt_mod:
                     if new_dt_mod > old_dt_mod:
-                        self.stale_urls['bdeck'] = self.stale_urls['bdeck'] | {url}
+                        cls.stale_urls['bdeck'] = cls.stale_urls['bdeck'] | {url}
 
-        self.update_reload_button_color_for_deck()
+        cls.update_reload_button_color_for_deck()
 
-    def check_for_stale_genesis_data(self):
-        if self.genesis_timer_id is not None:
-            self.root.after_cancel(self.genesis_timer_id)
+    @classmethod
+    def check_for_stale_genesis_data(cls):
+        if cls.genesis_timer_id is not None:
+            cls.root.after_cancel(cls.genesis_timer_id)
 
-        self.genesis_timer_id = self.root.after(LOCAL_TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_genesis_data)
+        cls.genesis_timer_id = cls.root.after(LOCAL_TIMER_INTERVAL_MINUTES * 60 * 1000, cls.check_for_stale_genesis_data)
 
-        if self.dt_mods_genesis:
+        if cls.dt_mods_genesis:
             # genesis_source_type is either 'global-det' or 'tcgen'
             for genesis_source_type, model_init_times, model_completed_times, \
-                ensemble_completed_times, completed_ensembles in self.get_latest_genesis_data_times():
+                ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times():
 
                 max_dt = datetime.min
 
@@ -5711,17 +5727,17 @@ class App:
 
                 new_dt_mod = max_dt
 
-                if genesis_source_type in self.dt_mods_genesis:
-                    old_dt_mod = self.dt_mods_genesis[genesis_source_type]
+                if genesis_source_type in cls.dt_mods_genesis:
+                    old_dt_mod = cls.dt_mods_genesis[genesis_source_type]
                 else:
                     old_dt_mod = datetime.min
 
                 if new_dt_mod != datetime.min and new_dt_mod > old_dt_mod:
-                    self.stale_genesis_data[genesis_source_type] = new_dt_mod
+                    cls.stale_genesis_data[genesis_source_type] = new_dt_mod
 
         else:
             for genesis_source_type, model_init_times, model_completed_times, \
-                ensemble_completed_times, completed_ensembles in self.get_latest_genesis_data_times():
+                ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times():
 
                 if not model_completed_times:
                     continue
@@ -5736,62 +5752,72 @@ class App:
 
                 new_dt_mod = max_dt
                 if new_dt_mod != datetime.min:
-                    self.stale_genesis_data[genesis_source_type] = max_dt
+                    cls.stale_genesis_data[genesis_source_type] = max_dt
 
-        self.update_reload_button_color_for_genesis()
+        cls.update_reload_button_color_for_genesis()
 
-    def clear_circle_patch(self):
-        if self.circle_handle:
-            self.circle_handle.remove()
-            self.circle_handle = None
-            self.ax.set_yscale('linear')
-            self.ax.figure.canvas.draw()
+    @classmethod
+    def clear_circle_patch(cls):
+        if cls.circle_handle:
+            # restore region
+            if cls.background_for_blit:
+                cls.ax.figure.canvas.restore_region(cls.background_for_blit)
+                App.ax.figure.canvas.blit(App.ax.bbox)
 
-        self.last_circle_lon = None
-        self.last_circle_lat = None
+            #cls.circle_handle.remove()
+            cls.circle_handle = None
+            # cls.ax.set_yscale('linear')
+            # cls.redraw_fig_canvas()
 
-    def clear_plotted_list(self):
-        self.plotted_tc_candidates = []
-        self.rtree_p = index.Property()
-        self.rtree_idx = index.Index(properties=self.rtree_p)
-        self.rtree_tuple_point_id = 0
-        self.rtree_tuple_index_mapping = {}
+        cls.last_circle_lon = None
+        cls.last_circle_lat = None
+
+    @classmethod
+    def clear_plotted_list(cls):
+        cls.plotted_tc_candidates = []
+        cls.rtree_p = index.Property()
+        cls.rtree_idx = index.Index(properties=cls.rtree_p)
+        cls.rtree_tuple_point_id = 0
+        cls.rtree_tuple_index_mapping = {}
         # reset all labels
-        self.update_tc_status_labels()
-        self.clear_circle_patch()
+        cls.update_tc_status_labels()
+        cls.clear_circle_patch()
         App.lon_lat_tc_records = []
 
-    @staticmethod
-    def clear_storm_extrema_annotations():
+    @classmethod
+    def clear_storm_extrema_annotations(cls):
         AnnotatedCircles.clear()
+        cls.annotated_circle_objects = {}
 
-    def adeck_combo_selected_models_event(self, event):
-        current_value = self.adeck_selected_combobox.get()
-        if current_value == self.adeck_previous_selected:
+    @classmethod
+    def adeck_combo_selected_models_event(cls, event):
+        current_value = cls.adeck_selected_combobox.get()
+        if current_value == cls.adeck_previous_selected:
             # user did not change selection
-            self.set_focus_on_map()
+            cls.set_focus_on_map()
             return
         else:
-            self.adeck_previous_selected = current_value
-            self.display_map()
-            if not self.have_deck_data:
-                self.update_deck_data()
+            cls.adeck_previous_selected = current_value
+            cls.display_map()
+            if not cls.have_deck_data:
+                cls.update_deck_data()
             App.hidden_tc_candidates = set()
-            self.display_deck_data()
-            self.set_focus_on_map()
+            cls.display_deck_data()
+            cls.set_focus_on_map()
 
-    def genesis_combo_selected_models_event(self, event):
-        current_value = self.genesis_selected_combobox.get()
-        if current_value == self.genesis_previous_selected:
+    @classmethod
+    def genesis_combo_selected_models_event(cls, event):
+        current_value = cls.genesis_selected_combobox.get()
+        if current_value == cls.genesis_previous_selected:
             # user did not change selection
-            self.set_focus_on_map()
+            cls.set_focus_on_map()
             return
         else:
-            self.genesis_previous_selected = current_value
-            if not self.have_genesis_data:
+            cls.genesis_previous_selected = current_value
+            if not cls.have_genesis_data:
                 # track first fetch
-                self.update_genesis_data_staleness()
-            model_cycle = self.genesis_model_cycle_time
+                cls.update_genesis_data_staleness()
+            model_cycle = cls.genesis_model_cycle_time
             if model_cycle is None:
                 model_cycles = get_tc_model_init_times_relative_to(datetime.now())
                 if model_cycles['next'] is None:
@@ -5800,225 +5826,232 @@ class App:
                     model_cycle = model_cycles['next']
             if model_cycle:
                 # clear map
-                self.redraw_map_with_data(model_cycle=model_cycle)
-                self.set_focus_on_map()
+                cls.redraw_map_with_data(model_cycle=model_cycle)
+                cls.set_focus_on_map()
 
-    def create_adeck_mode_widgets(self):
-        self.adeck_mode_frame = ttk.Frame(self.top_frame, style="TopFrame.TFrame")
+    @classmethod
+    def create_adeck_mode_widgets(cls):
+        cls.adeck_mode_frame = ttk.Frame(cls.top_frame, style="TopFrame.TFrame")
 
-        self.exit_button_adeck = ttk.Button(self.adeck_mode_frame, text="EXIT", command=self.root.quit, style="TButton")
-        self.exit_button_adeck.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.exit_button_adeck = ttk.Button(cls.adeck_mode_frame, text="EXIT", command=cls.root.quit, style="TButton")
+        cls.exit_button_adeck.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.reload_button_adeck = ttk.Button(self.adeck_mode_frame, text="(RE)LOAD", command=self.reload_adeck,
+        cls.reload_button_adeck = ttk.Button(cls.adeck_mode_frame, text="(RE)LOAD", command=cls.reload_adeck,
                                               style="White.TButton")
-        self.reload_button_adeck.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.reload_button_adeck.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_adeck_mode = ttk.Label(self.adeck_mode_frame, text="ADECK MODE. Models: 0", style="TLabel")
-        self.label_adeck_mode.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_adeck_mode = ttk.Label(cls.adeck_mode_frame, text="ADECK MODE. Models: 0", style="TLabel")
+        cls.label_adeck_mode.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.adeck_selected_combobox = ttk.Combobox(self.adeck_mode_frame, width=14, textvariable=self.adeck_selected,
+        cls.adeck_selected_combobox = ttk.Combobox(cls.adeck_mode_frame, width=14, textvariable=cls.adeck_selected,
                                                     state='readonly', style='Black.TCombobox')
-        self.adeck_selected_combobox.pack(side=tk.LEFT, padx=5, pady=5)
-        self.adeck_selected_combobox['state'] = 'readonly'  # Set the state according to configure colors
-        self.adeck_selected_combobox['values'] = (
+        cls.adeck_selected_combobox.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.adeck_selected_combobox['state'] = 'readonly'  # Set the state according to configure colors
+        cls.adeck_selected_combobox['values'] = (
         'ALL', 'STATISTICAL', 'GLOBAL', 'GEFS-MEMBERS', 'REGIONAL', 'CONSENSUS', 'OFFICIAL')
-        self.adeck_selected_combobox.current(6)
-        self.adeck_previous_selected = self.adeck_selected.get()
+        cls.adeck_selected_combobox.current(6)
+        cls.adeck_previous_selected = cls.adeck_selected.get()
 
-        self.adeck_selected_combobox.bind("<<ComboboxSelected>>", self.adeck_combo_selected_models_event)
+        cls.adeck_selected_combobox.bind("<<ComboboxSelected>>", cls.adeck_combo_selected_models_event)
 
-        self.adeck_selection_info_label = ttk.Label(self.adeck_mode_frame,
+        cls.adeck_selection_info_label = ttk.Label(cls.adeck_mode_frame,
                                                     text="",
                                                     style="TLabel")
-        self.adeck_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.adeck_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.adeck_selection_info_label = ttk.Label(self.adeck_mode_frame,
+        cls.adeck_selection_info_label = ttk.Label(cls.adeck_mode_frame,
                                                       text="",
                                                       style="TLabel")
-        self.adeck_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.adeck_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.switch_to_genesis_button = ttk.Button(self.adeck_mode_frame, text="SWITCH TO GENESIS MODE",
-                                                   command=self.switch_mode, style="TButton")
-        self.switch_to_genesis_button.pack(side=tk.RIGHT, padx=5, pady=5)
+        cls.switch_to_genesis_button = ttk.Button(cls.adeck_mode_frame, text="SWITCH TO GENESIS MODE",
+                                                   command=cls.switch_mode, style="TButton")
+        cls.switch_to_genesis_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
-        self.adeck_config_button = ttk.Button(self.adeck_mode_frame, text="CONFIG \u2699",
-                                              command=self.show_config_adeck_dialog, style="TButton")
-        self.adeck_config_button.pack(side=tk.RIGHT, padx=5, pady=5)
+        cls.adeck_config_button = ttk.Button(cls.adeck_mode_frame, text="CONFIG \u2699",
+                                              command=cls.show_config_adeck_dialog, style="TButton")
+        cls.adeck_config_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
-    def create_genesis_mode_widgets(self):
-        self.genesis_mode_frame = ttk.Frame(self.top_frame, style="TopFrame.TFrame")
+    @classmethod
+    def create_genesis_mode_widgets(cls):
+        cls.genesis_mode_frame = ttk.Frame(cls.top_frame, style="TopFrame.TFrame")
 
-        self.exit_button_genesis = ttk.Button(self.genesis_mode_frame, text="EXIT", command=self.root.quit,
+        cls.exit_button_genesis = ttk.Button(cls.genesis_mode_frame, text="EXIT", command=cls.root.quit,
                                               style="TButton")
-        self.exit_button_genesis.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.exit_button_genesis.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.reload_button_genesis = ttk.Button(self.genesis_mode_frame, text="(RE)LOAD", command=self.reload_genesis,
+        cls.reload_button_genesis = ttk.Button(cls.genesis_mode_frame, text="(RE)LOAD", command=cls.reload_genesis,
                                                 style="White.TButton")
-        self.reload_button_genesis.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.reload_button_genesis.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_genesis_mode = ttk.Label(self.genesis_mode_frame, text="GENESIS MODE: Start valid day: YYYY-MM-DD",
+        cls.label_genesis_mode = ttk.Label(cls.genesis_mode_frame, text="GENESIS MODE: Start valid day: YYYY-MM-DD",
                                             style="TLabel")
-        self.label_genesis_mode.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_genesis_mode.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.prev_genesis_cycle_button = ttk.Button(self.genesis_mode_frame, text="PREV CYCLE",
-                                                    command=self.prev_genesis_cycle, style="TButton")
-        self.prev_genesis_cycle_button.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.prev_genesis_cycle_button = ttk.Button(cls.genesis_mode_frame, text="PREV CYCLE",
+                                                    command=cls.prev_genesis_cycle, style="TButton")
+        cls.prev_genesis_cycle_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.prev_genesis_cycle_button = ttk.Button(self.genesis_mode_frame, text="NEXT CYCLE",
-                                                    command=self.next_genesis_cycle, style="TButton")
-        self.prev_genesis_cycle_button.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.prev_genesis_cycle_button = ttk.Button(cls.genesis_mode_frame, text="NEXT CYCLE",
+                                                    command=cls.next_genesis_cycle, style="TButton")
+        cls.prev_genesis_cycle_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.latest_genesis_cycle_button = ttk.Button(self.genesis_mode_frame, text="LATEST CYCLE",
-                                                      command=self.latest_genesis_cycle, style="TButton")
-        self.latest_genesis_cycle_button.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.latest_genesis_cycle_button = ttk.Button(cls.genesis_mode_frame, text="LATEST CYCLE",
+                                                      command=cls.latest_genesis_cycle, style="TButton")
+        cls.latest_genesis_cycle_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.genesis_models_label = ttk.Label(self.genesis_mode_frame,
+        cls.genesis_models_label = ttk.Label(cls.genesis_mode_frame,
                                               text="Models: GFS [--/--Z], ECM[--/--Z], NAV[--/--Z], CMC[--/--Z]",
                                               style="TLabel")
-        self.genesis_models_label.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.genesis_models_label.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.genesis_selected_combobox = ttk.Combobox(self.genesis_mode_frame, width=14, textvariable=self.genesis_selected,
+        cls.genesis_selected_combobox = ttk.Combobox(cls.genesis_mode_frame, width=14, textvariable=cls.genesis_selected,
                                                     state='readonly', style='Black.TCombobox')
-        self.genesis_selected_combobox.pack(side=tk.LEFT, padx=5, pady=5)
-        self.genesis_selected_combobox['state'] = 'readonly'  # Set the state according to configure colors
-        self.genesis_selected_combobox['values'] = (
+        cls.genesis_selected_combobox.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.genesis_selected_combobox['state'] = 'readonly'  # Set the state according to configure colors
+        cls.genesis_selected_combobox['values'] = (
             'GLOBAL-DET', 'ALL-TCGEN', 'GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN')
-        self.genesis_selected_combobox.current(0)
-        self.genesis_previous_selected = self.genesis_selected.get()
-        self.genesis_selected_combobox.bind("<<ComboboxSelected>>", self.genesis_combo_selected_models_event)
+        cls.genesis_selected_combobox.current(0)
+        cls.genesis_previous_selected = cls.genesis_selected.get()
+        cls.genesis_selected_combobox.bind("<<ComboboxSelected>>", cls.genesis_combo_selected_models_event)
 
-        self.genesis_selection_info_label = ttk.Label(self.genesis_mode_frame,
+        cls.genesis_selection_info_label = ttk.Label(cls.genesis_mode_frame,
                                                       text="",
                                                       style="TLabel")
-        self.genesis_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.genesis_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.switch_to_adeck_button = ttk.Button(self.genesis_mode_frame, text="SWITCH TO ADECK MODE",
-                                                 command=self.switch_mode, style="TButton")
-        self.switch_to_adeck_button.pack(side=tk.RIGHT, padx=5, pady=5)
+        cls.switch_to_adeck_button = ttk.Button(cls.genesis_mode_frame, text="SWITCH TO ADECK MODE",
+                                                 command=cls.switch_mode, style="TButton")
+        cls.switch_to_adeck_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
-        self.genesis_config_button = ttk.Button(self.genesis_mode_frame, text="CONFIG \u2699",
-                                                command=self.show_config_genesis_dialog, style="TButton")
-        self.genesis_config_button.pack(side=tk.RIGHT, padx=5, pady=5)
+        cls.genesis_config_button = ttk.Button(cls.genesis_mode_frame, text="CONFIG \u2699",
+                                                command=cls.show_config_genesis_dialog, style="TButton")
+        cls.genesis_config_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
-    def create_tools_widgets(self):
-        # self.tools_frame = ttk.Frame(self.tools_frame, style="Tools.TFrame")
+    @classmethod
+    def create_tools_widgets(cls):
+        # cls.tools_frame = ttk.Frame(cls.tools_frame, style="Tools.TFrame")
 
-        self.toggle_selection_loop_button = ttk.Button(self.tools_frame, text="\u27B0 SELECT",
-                                                       command=self.toggle_selection_loop_mode, style="TButton")
-        self.toggle_selection_loop_button.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.toggle_selection_loop_button = ttk.Button(cls.tools_frame, text="\u27B0 SELECT",
+                                                       command=cls.toggle_selection_loop_mode, style="TButton")
+        cls.toggle_selection_loop_button.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_coords_prefix = ttk.Label(self.tools_frame, text="Cursor position:", style="TLabel")
-        self.label_mouse_coords_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_coords_prefix = ttk.Label(cls.tools_frame, text="Cursor position:", style="TLabel")
+        cls.label_mouse_coords_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_coords = ttk.Label(self.tools_frame, text="(-tt.tttt, -nnn.nnnn)",
+        cls.label_mouse_coords = ttk.Label(cls.tools_frame, text="(-tt.tttt, -nnn.nnnn)",
                                             style="FixedWidthWhite.TLabel")
-        self.label_mouse_coords.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_coords.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_prefix = ttk.Label(self.tools_frame, text="(Hover) Matches:", style="TLabel")
-        self.label_mouse_hover_info_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_prefix = ttk.Label(cls.tools_frame, text="(Hover) Matches:", style="TLabel")
+        cls.label_mouse_hover_info_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_matches = ttk.Label(self.tools_frame, text="0  ", style="FixedWidthWhite.TLabel")
-        self.label_mouse_hover_matches.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_matches = ttk.Label(cls.tools_frame, text="0  ", style="FixedWidthWhite.TLabel")
+        cls.label_mouse_hover_matches.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_coords = ttk.Label(self.tools_frame, text="(-tt.tttt, -nnn.nnnn)",
+        cls.label_mouse_hover_info_coords = ttk.Label(cls.tools_frame, text="(-tt.tttt, -nnn.nnnn)",
                                                        style="FixedWidthWhite.TLabel")
-        self.label_mouse_hover_info_coords.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_coords.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_valid_time_prefix = ttk.Label(self.tools_frame, text="Valid time:", style="TLabel")
-        self.label_mouse_hover_info_valid_time_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_valid_time_prefix = ttk.Label(cls.tools_frame, text="Valid time:", style="TLabel")
+        cls.label_mouse_hover_info_valid_time_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_valid_time = ttk.Label(self.tools_frame, text="YYYY-MM-DD hhZ",
+        cls.label_mouse_hover_info_valid_time = ttk.Label(cls.tools_frame, text="YYYY-MM-DD hhZ",
                                                            style="FixedWidthWhite.TLabel")
-        self.label_mouse_hover_info_valid_time.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_valid_time.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_model_init_prefix = ttk.Label(self.tools_frame, text="Model init:", style="TLabel")
-        self.label_mouse_hover_info_model_init_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_model_init_prefix = ttk.Label(cls.tools_frame, text="Model init:", style="TLabel")
+        cls.label_mouse_hover_info_model_init_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_model_init = ttk.Label(self.tools_frame, text="YYYY-MM-DD hhZ",
+        cls.label_mouse_hover_info_model_init = ttk.Label(cls.tools_frame, text="YYYY-MM-DD hhZ",
                                                            style="FixedWidthWhite.TLabel")
-        self.label_mouse_hover_info_model_init.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_model_init.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_vmax10m_prefix = ttk.Label(self.tools_frame, text="Vmax @ 10m:", style="TLabel")
-        self.label_mouse_hover_info_vmax10m_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_vmax10m_prefix = ttk.Label(cls.tools_frame, text="Vmax @ 10m:", style="TLabel")
+        cls.label_mouse_hover_info_vmax10m_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_vmax10m = ttk.Label(self.tools_frame, text="---.- kt",
+        cls.label_mouse_hover_info_vmax10m = ttk.Label(cls.tools_frame, text="---.- kt",
                                                         style="FixedWidthWhite.TLabel")
-        self.label_mouse_hover_info_vmax10m.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_vmax10m.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_mslp_prefix = ttk.Label(self.tools_frame, text="MSLP:", style="TLabel")
-        self.label_mouse_hover_info_mslp_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_mslp_prefix = ttk.Label(cls.tools_frame, text="MSLP:", style="TLabel")
+        cls.label_mouse_hover_info_mslp_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_mslp = ttk.Label(self.tools_frame, text="----.- hPa",
+        cls.label_mouse_hover_info_mslp = ttk.Label(cls.tools_frame, text="----.- hPa",
                                                      style="FixedWidthWhite.TLabel")
-        self.label_mouse_hover_info_mslp.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_mslp.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_roci_prefix = ttk.Label(self.tools_frame, text="ROCI:", style="TLabel")
-        self.label_mouse_hover_info_roci_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_roci_prefix = ttk.Label(cls.tools_frame, text="ROCI:", style="TLabel")
+        cls.label_mouse_hover_info_roci_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_roci = ttk.Label(self.tools_frame, text="---- km", style="FixedWidthWhite.TLabel")
-        self.label_mouse_hover_info_roci.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_roci = ttk.Label(cls.tools_frame, text="---- km", style="FixedWidthWhite.TLabel")
+        cls.label_mouse_hover_info_roci.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_isobar_delta_prefix = ttk.Label(self.tools_frame, text="Isobar delta:",
+        cls.label_mouse_hover_info_isobar_delta_prefix = ttk.Label(cls.tools_frame, text="Isobar delta:",
                                                                     style="TLabel")
-        self.label_mouse_hover_info_isobar_delta_prefix.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_isobar_delta_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.label_mouse_hover_info_isobar_delta = ttk.Label(self.tools_frame, text="--- hPa",
+        cls.label_mouse_hover_info_isobar_delta = ttk.Label(cls.tools_frame, text="--- hPa",
                                                              style="FixedWidthWhite.TLabel")
-        self.label_mouse_hover_info_isobar_delta.pack(side=tk.LEFT, padx=5, pady=5)
+        cls.label_mouse_hover_info_isobar_delta.pack(side=tk.LEFT, padx=5, pady=5)
 
-    def create_widgets(self):
-        self.top_frame = ttk.Frame(self.root, style="TopFrame.TFrame")
-        self.top_frame.pack(side=tk.TOP, fill=tk.X, expand=False)
+    @classmethod
+    def create_widgets(cls):
+        cls.top_frame = ttk.Frame(cls.root, style="TopFrame.TFrame")
+        cls.top_frame.pack(side=tk.TOP, fill=tk.X, expand=False)
 
         # Middle frame
-        self.tools_frame = ttk.Frame(self.root, style="ToolsFrame.TFrame")
-        self.tools_frame.pack(side=tk.TOP, fill=tk.X, expand=False)
+        cls.tools_frame = ttk.Frame(cls.root, style="ToolsFrame.TFrame")
+        cls.tools_frame.pack(side=tk.TOP, fill=tk.X, expand=False)
 
-        self.create_adeck_mode_widgets()
-        self.create_genesis_mode_widgets()
-        self.create_tools_widgets()
+        cls.create_adeck_mode_widgets()
+        cls.create_genesis_mode_widgets()
+        cls.create_tools_widgets()
 
-        self.update_mode()
+        cls.update_mode()
 
-        self.canvas_frame = ttk.Frame(self.root, style="CanvasFrame.TFrame")
-        self.canvas_frame.pack(fill=tk.X, expand=True, anchor=tk.NW)
+        cls.canvas_frame = ttk.Frame(cls.root, style="CanvasFrame.TFrame")
+        cls.canvas_frame.pack(fill=tk.X, expand=True, anchor=tk.NW)
 
-        self.canvas = None
-        self.fig = None
+        cls.canvas = None
+        cls.fig = None
 
-    def cycle_to_next_overlapped_point(self):
+    @classmethod
+    def cycle_to_next_overlapped_point(cls):
         # called when user hovers on overlapped points and hits the TAB key
-        total_num_overlapped_points = len(self.nearest_point_indices_overlapped)
+        total_num_overlapped_points = len(cls.nearest_point_indices_overlapped)
         if total_num_overlapped_points > 1:
-            overlapped_point_num, nearest_point_index = self.nearest_point_indices_overlapped.next_enum_key_tuple()
+            overlapped_point_num, nearest_point_index = cls.nearest_point_indices_overlapped.next_enum_key_tuple()
             internal_id, tc_index, point_index = nearest_point_index
-            self.update_tc_status_labels(tc_index, point_index, overlapped_point_num, total_num_overlapped_points)
+            cls.update_tc_status_labels(tc_index, point_index, overlapped_point_num, total_num_overlapped_points)
             # get the nearest_point
-            point = self.plotted_tc_candidates[tc_index][1][point_index]
+            point = cls.plotted_tc_candidates[tc_index][1][point_index]
             lon = point['lon']
             lat = point['lat']
-            self.update_circle_patch(lon=lon, lat=lat)
+            cls.update_circle_patch(lon=lon, lat=lat)
 
-    def display_custom_boundaries(self, label_column=None):
+    @classmethod
+    def display_custom_boundaries(cls, label_column=None):
         if custom_gdf is not None:
             for geometry in custom_gdf.geometry:
                 if isinstance(geometry, Polygon):
-                    self.ax.add_geometries([geometry], crs=ccrs.PlateCarree(), edgecolor='magenta', facecolor='none',
+                    cls.ax.add_geometries([geometry], crs=ccrs.PlateCarree(), edgecolor='magenta', facecolor='none',
                                            linewidth=2)
                 else:
-                    self.ax.add_geometries([geometry], crs=ccrs.PlateCarree(), edgecolor='magenta', facecolor='none',
+                    cls.ax.add_geometries([geometry], crs=ccrs.PlateCarree(), edgecolor='magenta', facecolor='none',
                                            linewidth=2)
 
         if label_column:
             for idx, row in custom_gdf.iterrows():
                 x, y = row.geometry.x, row.geometry.y
-                self.ax.text(x, y, row[label_column], transform=ccrs.PlateCarree(), fontsize=8, color='magenta')
+                cls.ax.text(x, y, row[label_column], transform=ccrs.PlateCarree(), fontsize=8, color='magenta')
 
     # display custom rvor overlay from shape files
-    def display_custom_overlay(self):
+    @classmethod
+    def display_custom_overlay(cls):
         if not overlay_gdfs:
             return
-        self.init_rvor_contour_dict()
+        cls.init_rvor_contour_dict()
         global RVOR_CYCLONIC_CONTOURS
         global RVOR_CYCLONIC_LABELS
         global RVOR_ANTICYCLONIC_LABELS
@@ -6027,7 +6060,7 @@ class App:
         if SELECTED_PRESSURE_LEVELS == []:
             return
 
-        extent, min_span_lat_deg, min_span_lon_deg = self.get_contour_min_span_deg()
+        extent, min_span_lat_deg, min_span_lon_deg = cls.get_contour_min_span_deg()
 
         do_overlay_shapes = {
             'rvor_c_poly': RVOR_CYCLONIC_CONTOURS,
@@ -6036,7 +6069,7 @@ class App:
             'rvor_ac_points': RVOR_ANTICYCLONIC_LABELS
         }
 
-        renderable_ids = self.overlay_rvor_contour_dict['renderable_ids']
+        renderable_ids = cls.overlay_rvor_contour_dict['renderable_ids']
         for gdf_name, do_overlay in do_overlay_shapes.items():
             if not do_overlay:
                 continue
@@ -6054,9 +6087,9 @@ class App:
                 span_lat = row['span_lat']
                 if span_lon >= min_span_lon_deg and span_lat >= min_span_lat_deg:
                     renderable_ids.add(contour_id)
-                self.overlay_rvor_contour_dict['ids'].add(contour_id)
-                self.overlay_rvor_contour_dict['contour_span_lons'][contour_id] = span_lon
-                self.overlay_rvor_contour_dict['contour_span_lats'][contour_id] = span_lat
+                cls.overlay_rvor_contour_dict['ids'].add(contour_id)
+                cls.overlay_rvor_contour_dict['contour_span_lons'][contour_id] = span_lon
+                cls.overlay_rvor_contour_dict['contour_span_lats'][contour_id] = span_lat
 
         # Draw contours and labels based on the filtered IDs
         for gdf_name, do_overlay in do_overlay_shapes.items():
@@ -6073,19 +6106,19 @@ class App:
             gdf3 = all_levels_gdf[all_levels_gdf['level'].isin(SELECTED_PRESSURE_LEVELS)]
 
             # global visibility based on current display settings (keyboard shortcuts) and if global extent or not
-            contour_visible = self.overlay_rvor_contour_visible
+            contour_visible = cls.overlay_rvor_contour_visible
             not_at_global_extent = not (
-                    extent[0] == self.global_extent[0] and
-                    extent[1] == self.global_extent[1] and
-                    extent[2] == self.global_extent[2] and
-                    extent[3] == self.global_extent[3]
+                    extent[0] == cls.global_extent[0] and
+                    extent[1] == cls.global_extent[1] and
+                    extent[2] == cls.global_extent[2] and
+                    extent[3] == cls.global_extent[3]
             )
-            label_visible = contour_visible and self.overlay_rvor_label_visible and not_at_global_extent
+            label_visible = contour_visible and cls.overlay_rvor_label_visible and not_at_global_extent
             if label_visible:
                 alpha_label_visible = 1.0
             else:
                 alpha_label_visible = 0.0
-            self.overlay_rvor_label_last_alpha = alpha_label_visible
+            cls.overlay_rvor_label_last_alpha = alpha_label_visible
 
             if cyclonic:
                 edge_colors = CYCLONIC_PRESSURE_LEVEL_COLORS
@@ -6103,40 +6136,41 @@ class App:
                     # is_visible = contour_visible and is_renderable
                     # only limit labels to detail
                     is_visible = contour_visible
-                    obj = self.ax.add_geometries([geom], crs=ccrs.PlateCarree(), edgecolor=edge_color, facecolor='none',
+                    obj = cls.ax.add_geometries([geom], crs=ccrs.PlateCarree(), edgecolor=edge_color, facecolor='none',
                                                  linewidth=2, visible=is_visible)
-                    self.overlay_rvor_contour_dict['contour_objs'][contour_id] = [obj]
+                    cls.overlay_rvor_contour_dict['contour_objs'][contour_id] = [obj]
                 else:
                     # Draw labels
                     edge_color = edge_colors[str(row['level'])]
                     is_visible = label_visible and is_renderable
                     x, y = geom.x, geom.y
                     label = row['label']
-                    # obj = self.ax.text(x, y, label, transform=ccrs.PlateCarree(), color='black', fontsize=12, ha='center', va='center', bbox=dict(facecolor=edge_color, edgecolor='black', pad=2), alpha=alpha_label_visible)
-                    obj = self.ax.text(x, y, label, transform=ccrs.PlateCarree(), color='black', fontsize=12,
+                    # obj = cls.ax.text(x, y, label, transform=ccrs.PlateCarree(), color='black', fontsize=12, ha='center', va='center', bbox=dict(facecolor=edge_color, edgecolor='black', pad=2), alpha=alpha_label_visible)
+                    obj = cls.ax.text(x, y, label, transform=ccrs.PlateCarree(), color='black', fontsize=12,
                                        ha='center', va='center',
                                        bbox=dict(facecolor=edge_color, edgecolor='black', pad=2), visible=is_visible)
                     obj_bbox = obj.get_bbox_patch()
                     # obj_bbox.set_alpha(alpha_label_visible)
                     obj_bbox.set_visible(is_visible)
-                    self.overlay_rvor_contour_dict['label_objs'][contour_id] = [obj, obj_bbox]
+                    cls.overlay_rvor_contour_dict['label_objs'][contour_id] = [obj, obj_bbox]
 
-        self.ax.set_yscale('linear')
+        cls.ax.set_yscale('linear')
 
-    def display_deck_data(self):
+    @classmethod
+    def display_deck_data(cls):
         vmax_kt_threshold = [(34.0, 'v'), (64.0, '^'), (83.0, 's'), (96.0, '<'), (113.0, '>'), (137.0, 'D'),
                              (float('inf'), '*')]
         vmax_labels = ['\u25BD TD', '\u25B3 TS', '\u25A1 1', '\u25C1 2', '\u25B7 3', '\u25C7 4', '\u2606 5']
         marker_sizes = {'v': 6, '^': 6, 's': 8, '<': 10, '>': 12, 'D': 12, '*': 14}
 
-        valid_datetime, num_all_models, num_models, tc_candidates = self.get_selected_model_candidates_from_decks()
+        valid_datetime, num_all_models, num_models, tc_candidates = cls.get_selected_model_candidates_from_decks()
         start_of_day = valid_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
         valid_day = start_of_day.isoformat()
 
-        self.clear_plotted_list()
+        cls.clear_plotted_list()
         lon_lat_tc_records = []
         numc = 0
-        day_minus_toggle_3rd_mode = (self.time_step_opacity[0] == 1.0) and all(q==0.3 for q in self.time_step_opacity[1:])
+        day_minus_toggle_3rd_mode = (cls.time_step_opacity[0] == 1.0) and all(q==0.3 for q in cls.time_step_opacity[1:])
         for storm_atcf_id, tc in tc_candidates.items():
             numc += 1
             numd = 0
@@ -6223,7 +6257,7 @@ class App:
                         prev_lon = lon
 
                         # check whether we want to display it (first valid time limit)
-                        for i, (start, end) in list(enumerate(self.time_step_ranges)):
+                        for i, (start, end) in list(enumerate(cls.time_step_ranges)):
                             # opacity == 0.3 case (hide all points beyond legend valid time)
                             # for D- we will treat it differently for a-deck mode
                             # this is so we can selectively show only or hide all but old data from best tracks
@@ -6234,10 +6268,10 @@ class App:
 
                             hours_after = candidate_info['hours_after_valid_day']
                             if start <= hours_after <= end:
-                                if self.time_step_opacity[i] == 1.0:
+                                if cls.time_step_opacity[i] == 1.0:
                                     lat_lon_with_time_step_list.append(candidate_info)
                                     have_displayed_points = True
-                                elif have_displayed_points and self.time_step_opacity[i] == 0.6:
+                                elif have_displayed_points and cls.time_step_opacity[i] == 0.6:
                                     # for D- this effectively hides model data and shows best track data
                                     lat_lon_with_time_step_list.append(candidate_info)
                                 elif flip_for_best:
@@ -6247,10 +6281,10 @@ class App:
                                     break
 
                     if lat_lon_with_time_step_list:
-                        self.update_plotted_list(internal_id, lat_lon_with_time_step_list)
+                        cls.update_plotted_list(internal_id, lat_lon_with_time_step_list)
 
                     # do in reversed order so most recent items get rendered on top
-                    for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
+                    for i, (start, end) in reversed(list(enumerate(cls.time_step_ranges))):
                         opacity = 1.0
                         lons = {}
                         lats = {}
@@ -6272,18 +6306,17 @@ class App:
                                     lats[marker].append(point['lat'])
                                     lon_lat_tuples.append([point['lon'], point['lat']])
 
-
                         for vmaxmarker in lons.keys():
-                            scatter = self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
-                                                      facecolors='none', edgecolors=self.time_step_marker_colors[i],
+                            scatter = cls.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
+                                                      facecolors='none', edgecolors=cls.time_step_marker_colors[i],
                                                       s=marker_sizes[vmaxmarker] ** 2, alpha=opacity, antialiased=False)
-                            if internal_id not in self.scatter_objects:
-                                self.scatter_objects[internal_id] = []
-                            self.scatter_objects[internal_id].append(scatter)
+                            if internal_id not in cls.scatter_objects:
+                                cls.scatter_objects[internal_id] = []
+                            cls.scatter_objects[internal_id].append(scatter)
 
                     # do in reversed order so most recent items get rendered on top
-                    for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
-                        line_color = self.time_step_marker_colors[i]
+                    for i, (start, end) in reversed(list(enumerate(cls.time_step_ranges))):
+                        line_color = cls.time_step_marker_colors[i]
                         opacity = 1.0
                         strokewidth = 0.5
 
@@ -6303,10 +6336,10 @@ class App:
                         # Create a LineCollection
                         lc = LineCollection(line_segments, color=line_color, linewidth=strokewidth, alpha=opacity)
                         # Add the LineCollection to the axes
-                        line_collection = self.ax.add_collection(lc)
-                        if internal_id not in self.line_collection_objects:
-                            self.line_collection_objects[internal_id] = []
-                        self.line_collection_objects[internal_id].append(line_collection)
+                        line_collection = cls.ax.add_collection(lc)
+                        if internal_id not in cls.line_collection_objects:
+                            cls.line_collection_objects[internal_id] = []
+                        cls.line_collection_objects[internal_id].append(line_collection)
 
                     # add the visible points for the track to the m-tree
                     if lon_lat_tuples and len(lon_lat_tuples) > 1:
@@ -6327,49 +6360,50 @@ class App:
         App.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
 
         labels_positive = [f' D+{str(i): >2} ' for i in
-                           range(len(self.time_step_marker_colors) - 1)]  # Labels corresponding to colors
+                           range(len(cls.time_step_marker_colors) - 1)]  # Labels corresponding to colors
         labels = [' D-   ']
         labels.extend(labels_positive)
 
-        self.time_step_legend_objects = []
+        cls.time_step_legend_objects = []
 
-        for i, (color, label) in enumerate(zip(reversed(self.time_step_marker_colors), reversed(labels))):
+        for i, (color, label) in enumerate(zip(reversed(cls.time_step_marker_colors), reversed(labels))):
             x_pos, y_pos = 100, 150 + i * 20
-            time_step_opacity = list(reversed(self.time_step_opacity))[i]
+            time_step_opacity = list(reversed(cls.time_step_opacity))[i]
             if time_step_opacity == 1.0:
                 edgecolor = "#FFFFFF"
             elif time_step_opacity == 0.6:
                 edgecolor = "#FF77B0"
             else:
                 edgecolor = "#A63579"
-            legend_object = self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels',
-                                             color=list(reversed(self.time_step_legend_fg_colors))[i],
+            legend_object = cls.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels',
+                                             color=list(reversed(cls.time_step_legend_fg_colors))[i],
                                              fontsize=8, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
                                                                                            edgecolor=edgecolor,
                                                                                            facecolor=color, alpha=1.0))
-            self.time_step_legend_objects.append(legend_object)
+            cls.time_step_legend_objects.append(legend_object)
 
         # Draw the second legend items inline using display coordinates
         for i, label in enumerate(reversed(vmax_labels)):
             x_pos, y_pos = 160, 155 + i * 35
-            self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color='white',
+            cls.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color='white',
                              fontsize=12, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
                                                                             edgecolor='#FFFFFF', facecolor='#000000',
                                                                             alpha=1.0))
 
-        self.ax.figure.canvas.draw()
-        self.label_adeck_mode.config(text=f"ADECK MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime(
+        cls.redraw_fig_canvas(stale_bg=True)
+        cls.label_adeck_mode.config(text=f"ADECK MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime(
             '%Y-%m-%d') + f". Models: {num_models}/{num_all_models}")
-        self.update_selection_info_label()
+        cls.update_selection_info_label()
 
-    def display_genesis_data(self, model_cycle):
+    @classmethod
+    def display_genesis_data(cls, model_cycle):
         # vmax_kt_threshold = [(34.0, 'v'), (64.0, '^'), (83.0, 's'), (96.0, 'p'), (113.0, 'o'), (137.0, 'D'), (float('inf'), '+')]
         vmax_kt_threshold = [(34.0, 'v'), (64.0, '^'), (83.0, 's'), (96.0, '<'), (113.0, '>'), (137.0, 'D'),
                              (float('inf'), '*')]
         vmax_labels = ['\u25BD TD', '\u25B3 TS', '\u25A1 1', '\u25C1 2', '\u25B7 3', '\u25C7 4', '\u2605 5']
         marker_sizes = {'v': 6, '^': 6, 's': 8, '<': 10, '>': 12, 'D': 12, '*': 14}
 
-        if self.genesis_previous_selected != 'GLOBAL-DET':
+        if cls.genesis_previous_selected != 'GLOBAL-DET':
             is_ensemble = True
         else:
             is_ensemble = False
@@ -6381,7 +6415,7 @@ class App:
         # model_init_times, tc_candidates = get_tc_candidates_from_valid_time(now.isoformat())
         # model_init_times, tc_candidates = get_tc_candidates_at_or_before_init_time(model_cycle)
         (model_init_times, earliest_recent_ensemble_init_times, model_completed_times, ensemble_completed_times, \
-         completed_ensembles, tc_candidates) = get_tc_candidates_at_or_before_init_time(self.genesis_previous_selected, model_cycle)
+         completed_ensembles, tc_candidates) = get_tc_candidates_at_or_before_init_time(cls.genesis_previous_selected, model_cycle)
         # if model_init_times != last_model_init_times:
 
         """
@@ -6405,7 +6439,7 @@ class App:
             most_recent_model_timestamps[model_name] = datetime.min
 
         for genesis_source_type, model_init_times, model_completed_times, \
-            ensemble_completed_times, completed_ensembles in self.get_latest_genesis_data_times():
+            ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times():
 
             if not model_init_times:
                 continue
@@ -6444,11 +6478,11 @@ class App:
         # model_init_times, tc_candidates = get_tc_candidates_from_valid_time(now.isoformat())
         #model_init_times, tc_candidates = get_tc_candidates_at_or_before_init_time(most_recent_model_cycle)
         model_init_times, earliest_recent_ensemble_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, \
-            tc_candidates = get_tc_candidates_at_or_before_init_time(self.genesis_previous_selected, model_cycle)
+            tc_candidates = get_tc_candidates_at_or_before_init_time(cls.genesis_previous_selected, model_cycle)
 
         most_recent_timestamp = None
 
-        self.clear_plotted_list()
+        cls.clear_plotted_list()
         lon_lat_tc_records = []
         numc = 0
         for tc in tc_candidates:
@@ -6543,23 +6577,23 @@ class App:
                     prev_lon = lon
 
                     # check whether we want to display it (first valid time limit)
-                    for i, (start, end) in list(enumerate(self.time_step_ranges)):
+                    for i, (start, end) in list(enumerate(cls.time_step_ranges)):
                         hours_after = candidate_info['hours_after_valid_day']
                         if start <= hours_after <= end:
-                            if self.time_step_opacity[i] == 1.0:
+                            if cls.time_step_opacity[i] == 1.0:
                                 lat_lon_with_time_step_list.append(candidate_info)
                                 have_displayed_points = True
-                            elif have_displayed_points and self.time_step_opacity[i] == 0.6:
+                            elif have_displayed_points and cls.time_step_opacity[i] == 0.6:
                                 lat_lon_with_time_step_list.append(candidate_info)
                             else:
                                 # opacity == 0.3 case (hide all points beyond legend valid time)
                                 break
 
                 if lat_lon_with_time_step_list:
-                    self.update_plotted_list(internal_id, lat_lon_with_time_step_list)
+                    cls.update_plotted_list(internal_id, lat_lon_with_time_step_list)
 
                 # do in reversed order so most recent items get rendered on top
-                for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
+                for i, (start, end) in reversed(list(enumerate(cls.time_step_ranges))):
                     opacity = 1.0
                     lons = {}
                     lats = {}
@@ -6581,16 +6615,16 @@ class App:
                             lon_lat_tuples.append([point['lon'], point['lat']])
 
                     for vmaxmarker in lons.keys():
-                        scatter = self.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
-                                                  facecolors='none', edgecolors=self.time_step_marker_colors[i],
+                        scatter = cls.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
+                                                  facecolors='none', edgecolors=cls.time_step_marker_colors[i],
                                                   s=marker_sizes[vmaxmarker] ** 2, alpha=opacity, antialiased=False)
-                        if internal_id not in self.scatter_objects:
-                            self.scatter_objects[internal_id] = []
-                        self.scatter_objects[internal_id].append(scatter)
+                        if internal_id not in cls.scatter_objects:
+                            cls.scatter_objects[internal_id] = []
+                        cls.scatter_objects[internal_id].append(scatter)
 
                 # do in reversed order so most recent items get rendered on top
-                for i, (start, end) in reversed(list(enumerate(self.time_step_ranges))):
-                    line_color = self.time_step_marker_colors[i]
+                for i, (start, end) in reversed(list(enumerate(cls.time_step_ranges))):
+                    line_color = cls.time_step_marker_colors[i]
                     opacity = 1.0
                     strokewidth = 0.5
 
@@ -6610,10 +6644,10 @@ class App:
                     # Create a LineCollection
                     lc = LineCollection(line_segments, color=line_color, linewidth=strokewidth, alpha=opacity)
                     # Add the LineCollection to the axes
-                    line_collection = self.ax.add_collection(lc)
-                    if internal_id not in self.line_collection_objects:
-                        self.line_collection_objects[internal_id] = []
-                    self.line_collection_objects[internal_id].append(line_collection)
+                    line_collection = cls.ax.add_collection(lc)
+                    if internal_id not in cls.line_collection_objects:
+                        cls.line_collection_objects[internal_id] = []
+                    cls.line_collection_objects[internal_id].append(line_collection)
 
                 # add the visible points for the track to the m-tree
                 if lon_lat_tuples and len(lon_lat_tuples) > 1:
@@ -6634,47 +6668,47 @@ class App:
         App.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
 
         labels_positive = [f' D+{str(i): >2} ' for i in
-                           range(len(self.time_step_marker_colors) - 1)]  # Labels corresponding to colors
+                           range(len(cls.time_step_marker_colors) - 1)]  # Labels corresponding to colors
         labels = [' D-   ']
         labels.extend(labels_positive)
 
-        self.time_step_legend_objects = []
+        cls.time_step_legend_objects = []
 
-        for i, (color, label) in enumerate(zip(reversed(self.time_step_marker_colors), reversed(labels))):
+        for i, (color, label) in enumerate(zip(reversed(cls.time_step_marker_colors), reversed(labels))):
             x_pos, y_pos = 100, 150 + i * 20
 
-            time_step_opacity = list(reversed(self.time_step_opacity))[i]
+            time_step_opacity = list(reversed(cls.time_step_opacity))[i]
             if time_step_opacity == 1.0:
                 edgecolor = "#FFFFFF"
             elif time_step_opacity == 0.6:
                 edgecolor = "#FF77B0"
             else:
                 edgecolor = "#A63579"
-            legend_object = self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels',
-                                             color=list(reversed(self.time_step_legend_fg_colors))[i],
+            legend_object = cls.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels',
+                                             color=list(reversed(cls.time_step_legend_fg_colors))[i],
                                              fontsize=8, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
                                                                                            edgecolor=edgecolor,
                                                                                            facecolor=color, alpha=1.0))
-            self.time_step_legend_objects.append(legend_object)
+            cls.time_step_legend_objects.append(legend_object)
 
         # Draw the second legend items inline using display coordinates
         for i, label in enumerate(reversed(vmax_labels)):
             x_pos, y_pos = 160, 155 + i * 35
-            self.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color='white',
+            cls.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color='white',
                              fontsize=12, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
                                                                             edgecolor='#FFFFFF', facecolor='#000000',
                                                                             alpha=1.0))
 
-        self.ax.figure.canvas.draw()
+        cls.redraw_fig_canvas(stale_bg=True)
 
-        self.label_genesis_mode.config(
+        cls.label_genesis_mode.config(
             text="GENESIS MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime('%Y-%m-%d'))
-        self.genesis_model_cycle_time = most_recent_model_cycle
+        cls.genesis_model_cycle_time = most_recent_model_cycle
         if not is_ensemble:
             # Update model times label
-            self.genesis_models_label.config(
+            cls.genesis_models_label.config(
                 text=f"Models: GFS [{model_dates['GFS']}], ECM[{model_dates['ECM']}], NAV[{model_dates['NAV']}], CMC[{model_dates['CMC']}]")
-        elif self.genesis_previous_selected != 'GLOBAL-DET':
+        elif cls.genesis_previous_selected != 'GLOBAL-DET':
             ens_dates = []
             for ens_name, init_time in earliest_recent_ensemble_init_times.items():
                 ens_dates.append((ens_name, datetime.fromisoformat(init_time).strftime('%d/%HZ')))
@@ -6688,55 +6722,61 @@ class App:
             if join_model_labels:
                 model_labels_str = f'Models: {join_model_labels}'
 
-            self.genesis_models_label.config(text=model_labels_str)
+            cls.genesis_models_label.config(text=model_labels_str)
 
-        self.update_selection_info_label()
+        cls.update_selection_info_label()
 
-    def display_map(self):
-        self.scatter_objects = {}
-        self.line_collection_objects = {}
+    @classmethod
+    def display_map(cls):
+        cls.scatter_objects = {}
+        cls.line_collection_objects = {}
+        # reset for circle patch (hover) blitting
+        cls.background_for_blit = None
+        cls.circle_handle = None
+        cls.last_circle_lat = None
+        cls.last_circle_lon = None
 
-        if self.canvas:
-            self.canvas.get_tk_widget().pack_forget()
+        if cls.canvas:
+            cls.canvas.get_tk_widget().pack_forget()
 
         # Adjust figure size to fill the screen
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
+        screen_width = cls.root.winfo_screenwidth()
+        screen_height = cls.root.winfo_screenheight()
 
-        if self.fig:
+        if cls.fig:
             try:
-                plt.close(self.fig)
-                self.measure_tool.reset_measurement()
+                plt.close(cls.fig)
+                cls.measure_tool.reset_measurement()
             except:
                 pass
 
-        self.fig = plt.figure(figsize=(screen_width / CHART_DPI, screen_height / CHART_DPI), dpi=CHART_DPI,
+        cls.fig = plt.figure(figsize=(screen_width / CHART_DPI, screen_height / CHART_DPI), dpi=CHART_DPI,
                               facecolor='black')
 
-        # self.fig.add_subplot(111, projection=ccrs.PlateCarree())
-        self.ax = plt.axes(projection=ccrs.PlateCarree())
-        self.measure_tool.changed_extent(self.ax)
-        self.ax.set_anchor("NW")
+        # cls.fig.add_subplot(111, projection=ccrs.PlateCarree())
+        cls.ax = plt.axes(projection=ccrs.PlateCarree())
+        cls.measure_tool.changed_extent()
+        cls.ax.set_anchor("NW")
 
-        self.ax.autoscale_view(scalex=False, scaley=False)
-        self.ax.set_yscale('linear')
-        self.ax.set_facecolor('black')
+        cls.ax.autoscale_view(scalex=False, scaley=False)
+        cls.ax.set_yscale('linear')
+        cls.ax.set_facecolor('black')
 
         # Draw a rectangle patch around the subplot to visualize its boundaries
-        extent = self.ax.get_extent()
+        extent = cls.ax.get_extent()
         rect = Rectangle((extent[0], extent[2]), extent[1] - extent[0], extent[3] - extent[2],
                          linewidth=2, edgecolor='white', facecolor='none')
-        self.ax.add_patch(rect)
+        cls.ax.add_patch(rect)
 
         # Adjust aspect ratio of the subplot
-        self.ax.set_aspect('equal')
+        cls.ax.set_aspect('equal')
 
         # Draw red border around figure
-        # self.fig.patch.set_edgecolor('red')
-        # self.fig.patch.set_linewidth(2)
+        # cls.fig.patch.set_edgecolor('red')
+        # cls.fig.patch.set_linewidth(2)
 
-        # self.ax.stock_img()
-        self.ax.set_extent(self.global_extent)
+        # cls.ax.stock_img()
+        cls.ax.set_extent(cls.global_extent)
 
         # Add state boundary lines
         states = cfeature.NaturalEarthFeature(
@@ -6746,7 +6786,7 @@ class App:
             facecolor='none'
         )
 
-        self.ax.add_feature(states, edgecolor='gray')
+        cls.ax.add_feature(states, edgecolor='gray')
 
         country_borders = cfeature.NaturalEarthFeature(
             category='cultural',
@@ -6754,52 +6794,53 @@ class App:
             scale='50m',
             facecolor='none'
         )
-        self.ax.add_feature(country_borders, edgecolor='white', linewidth=0.5)
-        self.ax.add_feature(cfeature.COASTLINE, edgecolor='yellow', linewidth=0.5)
+        cls.ax.add_feature(country_borders, edgecolor='white', linewidth=0.5)
+        cls.ax.add_feature(cfeature.COASTLINE, edgecolor='yellow', linewidth=0.5)
 
-        self.update_axes()
+        cls.update_axes()
 
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.canvas_frame)
-        self.canvas.draw()
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, anchor=tk.NW)
+        cls.canvas = FigureCanvasTkAgg(cls.fig, master=cls.canvas_frame)
+        cls.redraw_app_canvas()
+        cls.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, anchor=tk.NW)
 
-        self.cid_press = self.canvas.mpl_connect("button_press_event", self.on_click)
-        self.cid_release = self.canvas.mpl_connect("button_release_event", self.on_release)
-        self.cid_motion = self.canvas.mpl_connect("motion_notify_event", self.on_motion)
-        self.cid_key_press = self.canvas.mpl_connect('key_press_event', self.on_key_press)
-        self.cid_key_release = self.canvas.mpl_connect('key_release_event', self.on_key_release)
+        cls.cid_press = cls.canvas.mpl_connect("button_press_event", cls.on_click)
+        cls.cid_release = cls.canvas.mpl_connect("button_release_event", cls.on_release)
+        cls.cid_motion = cls.canvas.mpl_connect("motion_notify_event", cls.on_motion)
+        cls.cid_key_press = cls.canvas.mpl_connect('key_press_event', cls.on_key_press)
+        cls.cid_key_release = cls.canvas.mpl_connect('key_release_event', cls.on_key_release)
 
         # we only know how big the canvas frame/plot is after drawing/packing, and we need to wait until drawing to fix the size
-        self.canvas_frame.update_idletasks()
+        cls.canvas_frame.update_idletasks()
         # fix the size to the canvas frame
-        frame_hsize = float(self.canvas_frame.winfo_width()) / CHART_DPI
-        frame_vsize = float(self.canvas_frame.winfo_height()) / CHART_DPI
+        frame_hsize = float(cls.canvas_frame.winfo_width()) / CHART_DPI
+        frame_vsize = float(cls.canvas_frame.winfo_height()) / CHART_DPI
         h = [Size.Fixed(0), Size.Fixed(frame_hsize)]
         v = [Size.Fixed(0), Size.Fixed(frame_vsize)]
-        divider = Divider(self.fig, (0, 0, 1, 1), h, v, aspect=False)
-        self.ax.set_axes_locator(divider.new_locator(nx=1, ny=1))
-        self.clear_storm_extrema_annotations()
-        AnnotatedCircles.changed_extent(self.ax)
-        SelectionLoops.changed_extent(self.ax)
-        self.update_selection_info_label()
-        self.measure_tool.changed_extent(self.ax)
-        self.canvas.draw()
-        self.display_custom_boundaries()
-        self.display_custom_overlay()
-        self.axes_size = self.ax.get_figure().get_size_inches() * self.ax.get_figure().dpi
+        divider = Divider(cls.fig, (0, 0, 1, 1), h, v, aspect=False)
+        cls.ax.set_axes_locator(divider.new_locator(nx=1, ny=1))
+        cls.clear_storm_extrema_annotations()
+        AnnotatedCircles.changed_extent()
+        SelectionLoops.changed_extent()
+        cls.update_selection_info_label()
+        cls.measure_tool.changed_extent()
+        cls.redraw_app_canvas()
+        cls.display_custom_boundaries()
+        cls.display_custom_overlay()
+        cls.axes_size = cls.ax.get_figure().get_size_inches() * cls.ax.get_figure().dpi
         # make sure focus is always on map after updating
-        self.set_focus_on_map()
+        cls.set_focus_on_map()
 
-    def get_contour_min_span_deg(self):
+    @classmethod
+    def get_contour_min_span_deg(cls):
         global MINIMUM_CONTOUR_PX_X
         global MINIMUM_CONTOUR_PX_Y
         # Get the current extent in degrees
-        extent = self.ax.get_extent(ccrs.PlateCarree())
+        extent = cls.ax.get_extent(ccrs.PlateCarree())
         min_lon, max_lon, min_lat, max_lat = extent
         span_lon_extent = max_lon - min_lon
         span_lat_extent = max_lat - min_lat
         # Determine the minimum span in degrees for display
-        ax_width, ax_height = self.ax.get_figure().get_size_inches() * self.ax.get_figure().dpi
+        ax_width, ax_height = cls.ax.get_figure().get_size_inches() * cls.ax.get_figure().dpi
         lon_pixel_ratio = span_lon_extent / ax_width
         lat_pixel_ratio = span_lat_extent / ax_height
         minimum_contour_extent = [MINIMUM_CONTOUR_PX_X, MINIMUM_CONTOUR_PX_Y]  # Minimum in pixels for lon, lat
@@ -6808,7 +6849,8 @@ class App:
         return extent, min_span_lat_deg, min_span_lon_deg
 
     # generator to return data on latest model/ensemble times (yields once per genesis source type)
-    def get_latest_genesis_data_times(self):
+    @classmethod
+    def get_latest_genesis_data_times(cls):
         for genesis_source_type in ['GLOBAL-DET', 'ALL-TCGEN']:
             conn = None
             model_names = list(model_data_folders_by_model_name.keys())
@@ -6932,8 +6974,9 @@ class App:
         return list(result_items)
 
     # get model data from adeck, plus bdeck and tcvitals
-    def get_selected_model_candidates_from_decks(self):
-        selected_models = self.get_selected_deck_model_list()
+    @classmethod
+    def get_selected_model_candidates_from_decks(cls):
+        selected_models = cls.get_selected_deck_model_list()
         # reference current datetime since we are checking for old invests
         valid_datetime = datetime_utcnow()
         earliest_model_valid_datetime = valid_datetime
@@ -6942,10 +6985,10 @@ class App:
         all_models = set()
         # assume invests older than this are different storms (must have correct datetime on computer)
         max_time_delta = timedelta(days=4)
-        if self.adeck and self.adeck.keys():
-            for storm_atcf_id in self.adeck.keys():
-                if storm_atcf_id in self.adeck and self.adeck[storm_atcf_id]:
-                    for model_id, models in self.adeck[storm_atcf_id].items():
+        if cls.adeck and cls.adeck.keys():
+            for storm_atcf_id in cls.adeck.keys():
+                if storm_atcf_id in cls.adeck and cls.adeck[storm_atcf_id]:
+                    for model_id, models in cls.adeck[storm_atcf_id].items():
                         if models:
                             model_is_from_old_invest = True
                             for valid_time, data in models.items():
@@ -6965,10 +7008,10 @@ class App:
                                     selected_model_data[storm_atcf_id][model_id] = models
                                     actual_models.add(model_id)
 
-        if self.bdeck:
-            for storm_atcf_id in self.bdeck.keys():
-                if storm_atcf_id in self.bdeck and self.bdeck[storm_atcf_id]:
-                    for model_id, models in self.bdeck[storm_atcf_id].items():
+        if cls.bdeck:
+            for storm_atcf_id in cls.bdeck.keys():
+                if storm_atcf_id in cls.bdeck and cls.bdeck[storm_atcf_id]:
+                    for model_id, models in cls.bdeck[storm_atcf_id].items():
                         if models:
                             if model_id in selected_models:
                                 if storm_atcf_id not in selected_model_data.keys():
@@ -6976,9 +7019,9 @@ class App:
                                 selected_model_data[storm_atcf_id][model_id] = models
 
         # tcvitals
-        if self.recent_storms:
+        if cls.recent_storms:
             # max time delta for invests, to mark models corresponding to old invests
-            for storm_atcf_id, data in self.recent_storms.items():
+            for storm_atcf_id, data in cls.recent_storms.items():
                 valid_date_str = data['valid_time']
                 if storm_atcf_id not in selected_model_data.keys():
                     selected_model_data[storm_atcf_id] = {}
@@ -6997,8 +7040,9 @@ class App:
 
         return earliest_model_valid_datetime, len(all_models), len(actual_models), selected_model_data
 
-    def get_selected_deck_model_list(self):
-        selected_text = self.adeck_selected.get()
+    @classmethod
+    def get_selected_deck_model_list(cls):
+        selected_text = cls.adeck_selected.get()
         if selected_text == 'ALL':
             return included_intensity_models
         elif selected_text == 'GLOBAL':
@@ -7017,8 +7061,9 @@ class App:
             # sanity check
             return official_models
 
-    def get_selected_genesis_model_list(self):
-        selected_text = self.adeck_selected.get()
+    @classmethod
+    def get_selected_genesis_model_list(cls):
+        selected_text = cls.adeck_selected.get()
         if selected_text == 'ALL':
             return included_intensity_models
         elif selected_text == 'GLOBAL':
@@ -7038,11 +7083,12 @@ class App:
             return official_models
 
     # hide selected, or show all if none selected
-    def hide_tc_candidate(self):
+    @classmethod
+    def hide_tc_candidate(cls):
         # two modes now
         # when no selection loops present: hide mouse hovered storm, or unhide all
         # when selection loops present: hide mouse hovered storm, or if no hover, hide all tracks in selection
-        total_num_overlapped_points = len(self.nearest_point_indices_overlapped)
+        total_num_overlapped_points = len(cls.nearest_point_indices_overlapped)
         if total_num_overlapped_points == 0:
             if not SelectionLoops.is_empty():
                 to_hide_internal_ids = App.get_selected_internal_storm_ids()
@@ -7051,8 +7097,8 @@ class App:
                     #cursor_internal_id, tc_index, tc_point_index = cursor_point_index
                     App.hidden_tc_candidates.add(to_hide_internal_id)
 
-                    if self.scatter_objects:
-                        for internal_id, scatters in self.scatter_objects.items():
+                    if cls.scatter_objects:
+                        for internal_id, scatters in cls.scatter_objects.items():
                             if to_hide_internal_id == internal_id:
                                 try:
                                     for scatter in scatters:
@@ -7060,8 +7106,8 @@ class App:
                                 except:
                                     traceback.print_exc()
 
-                    if self.line_collection_objects:
-                        for internal_id, line_collections in self.line_collection_objects.items():
+                    if cls.line_collection_objects:
+                        for internal_id, line_collections in cls.line_collection_objects.items():
                             if to_hide_internal_id == internal_id:
                                 try:
                                     for line_collection in line_collections:
@@ -7069,55 +7115,54 @@ class App:
                                 except:
                                     traceback.print_exc()
 
-                    if self.annotated_circle_objects:
-                        for internal_id, annotated_circles in self.annotated_circle_objects.items():
-                            if to_hide_internal_id == internal_id:
+                    if cls.annotated_circle_objects:
+                        if to_hide_internal_id in cls.annotated_circle_objects:
+                            for point_index, annotated_circle in cls.annotated_circle_objects[to_hide_internal_id].items():
                                 try:
-                                    for annotated_circle in annotated_circles:
-                                        annotated_circle.set_visible(False)
+                                    annotated_circle.set_visible(False)
                                 except:
                                     traceback.print_exc()
 
-                self.ax.figure.canvas.draw()
+                cls.redraw_fig_canvas(stale_bg=True)
             # unhide all
             elif len(App.hidden_tc_candidates) > 0:
-                if self.scatter_objects:
-                    for internal_id, scatters in self.scatter_objects.items():
+                if cls.scatter_objects:
+                    for internal_id, scatters in cls.scatter_objects.items():
                         try:
                             for scatter in scatters:
                                 scatter.set_visible(True)
                         except:
                             traceback.print_exc()
 
-                if self.line_collection_objects:
-                    for internal_id, line_collections in self.line_collection_objects.items():
+                if cls.line_collection_objects:
+                    for internal_id, line_collections in cls.line_collection_objects.items():
                         try:
                             for line_collection in line_collections:
                                 line_collection.set_visible(True)
                         except:
                             traceback.print_exc()
 
-                if self.annotated_circle_objects:
-                    for internal_id, annotated_circles in self.annotated_circle_objects.items():
-                        try:
-                            for annotated_circle in annotated_circles:
+                if cls.annotated_circle_objects:
+                    for internal_id, point_index_circles in cls.annotated_circle_objects.items():
+                        for point_index, annotated_circle in point_index_circles:
+                            try:
                                 if annotated_circle:
                                     annotated_circle.set_visible(True)
-                        except:
-                            traceback.print_exc()
+                            except:
+                                traceback.print_exc()
 
                 App.hidden_tc_candidates = set()
-                (lon, lat) = self.last_cursor_lon_lat
-                self.update_labels_for_mouse_hover(lat=lat, lon=lon)
-                self.ax.figure.canvas.draw()
+                (lon, lat) = cls.last_cursor_lon_lat
+                cls.update_labels_for_mouse_hover(lat=lat, lon=lon)
+                cls.redraw_fig_canvas(stale_bg=True)
         else:
-            num, cursor_point_index = self.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
+            num, cursor_point_index = cls.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
             if cursor_point_index:
                 cursor_internal_id, tc_index, tc_point_index = cursor_point_index
                 App.hidden_tc_candidates.add(cursor_internal_id)
 
-                if self.scatter_objects:
-                    for internal_id, scatters in self.scatter_objects.items():
+                if cls.scatter_objects:
+                    for internal_id, scatters in cls.scatter_objects.items():
                         if cursor_internal_id == internal_id:
                             try:
                                 for scatter in scatters:
@@ -7125,8 +7170,8 @@ class App:
                             except:
                                 traceback.print_exc()
 
-                if self.line_collection_objects:
-                    for internal_id, line_collections in self.line_collection_objects.items():
+                if cls.line_collection_objects:
+                    for internal_id, line_collections in cls.line_collection_objects.items():
                         if cursor_internal_id == internal_id:
                             try:
                                 for line_collection in line_collections:
@@ -7134,32 +7179,67 @@ class App:
                             except:
                                 traceback.print_exc()
 
-                if self.annotated_circle_objects:
-                    for internal_id, annotated_circles in self.annotated_circle_objects.items():
-                        if cursor_internal_id == internal_id:
+                if cls.annotated_circle_objects:
+                    if cursor_internal_id in cls.annotated_circle_objects:
+                        for point_index, annotated_circle in cls.annotated_circle_objects[cursor_internal_id].items():
                             try:
-                                for annotated_circle in annotated_circles:
-                                    annotated_circle.set_visible(False)
+                                annotated_circle.set_visible(False)
                             except:
                                 traceback.print_exc()
 
-                (lon, lat) = self.last_cursor_lon_lat
-                self.update_labels_for_mouse_hover(lat=lat, lon=lon)
-                self.ax.figure.canvas.draw()
+                (lon, lat) = cls.last_cursor_lon_lat
+                cls.update_labels_for_mouse_hover(lat=lat, lon=lon)
+                cls.redraw_fig_canvas(stale_bg=True)
 
-    def init_rvor_contour_dict(self):
-        self.overlay_rvor_contour_dict = defaultdict(dict)
-        # noinspection PyTypeChecker
-        self.overlay_rvor_contour_dict['ids'] = set()
-        # noinspection PyTypeChecker
-        self.overlay_rvor_contour_dict['renderable_ids'] = set()
-        self.overlay_rvor_contour_dict['contour_span_lons'] = {}
-        self.overlay_rvor_contour_dict['contour_span_lats'] = {}
-        self.overlay_rvor_contour_dict['contour_objs'] = defaultdict(dict)
-        self.overlay_rvor_contour_dict['label_objs'] = defaultdict(dict)
+    @classmethod
+    def init(cls, root):
+        cls.root = root
+        cls.root.title("tcviewer")
+        cls.root.attributes('-fullscreen', True)
+        cls.root.configure(bg="black")
+        # bind main app keys
+        cls.root.bind("p", cls.take_screenshot)
+        cls.root.bind("l", cls.toggle_rvor_labels)
+        cls.root.bind("v", cls.toggle_rvor_contours)
+        # cls.root.bind("v", cls.toggle_rvor_contours)
+        cls.root.bind("V", cls.show_rvor_dialog)
 
-    def latest_genesis_cycle(self):
-        self.update_genesis_data_staleness()
+        cls.root.bind("a", cls.show_analysis_dialog)
+
+        cls.root.bind('z', cls.zoom_to_basin_dialog)
+        cls.root.bind('b', cls.select_basin_dialog)
+
+        cls.adeck_selected = tk.StringVar()
+        cls.genesis_selected = tk.StringVar()
+
+        # settings
+        cls.load_settings()
+
+        cls.init_rvor_contour_dict()
+
+        # setup widges
+        cls.create_widgets()
+        # setup tools
+        cls.measure_tool = MeasureTool()
+
+        # display initial map
+        cls.display_map()
+
+    @classmethod
+    def init_rvor_contour_dict(cls):
+        cls.overlay_rvor_contour_dict = defaultdict(dict)
+        # noinspection PyTypeChecker
+        cls.overlay_rvor_contour_dict['ids'] = set()
+        # noinspection PyTypeChecker
+        cls.overlay_rvor_contour_dict['renderable_ids'] = set()
+        cls.overlay_rvor_contour_dict['contour_span_lons'] = {}
+        cls.overlay_rvor_contour_dict['contour_span_lats'] = {}
+        cls.overlay_rvor_contour_dict['contour_objs'] = defaultdict(dict)
+        cls.overlay_rvor_contour_dict['label_objs'] = defaultdict(dict)
+
+    @classmethod
+    def latest_genesis_cycle(cls):
+        cls.update_genesis_data_staleness()
         model_cycles = get_tc_model_init_times_relative_to(datetime.now())
         if model_cycles['next'] is None:
             model_cycle = model_cycles['at']
@@ -7168,7 +7248,7 @@ class App:
 
         if model_cycle:
             # clear map
-            self.redraw_map_with_data(model_cycle=model_cycle)
+            cls.redraw_map_with_data(model_cycle=model_cycle)
 
     @staticmethod
     def load_settings():
@@ -7208,24 +7288,27 @@ class App:
         except FileNotFoundError:
             pass
 
-    def on_analysis_dialog_close(self, dialog):
-        self.analysis_dialog_open = False
+    @classmethod
+    def on_analysis_dialog_close(cls, dialog):
+        cls.analysis_dialog_open = False
         dialog.destroy()
         # focus back on app
-        self.set_focus_on_map()
+        cls.set_focus_on_map()
 
-    def on_rvor_dialog_close(self, dialog):
-        self.rvor_dialog_open = False
+    @classmethod
+    def on_rvor_dialog_close(cls, dialog):
+        cls.rvor_dialog_open = False
         dialog.destroy()
         # focus back on app
-        self.set_focus_on_map()
+        cls.set_focus_on_map()
 
-    def next_genesis_cycle(self):
-        nav_time = self.genesis_model_cycle_time_navigate
-        self.update_genesis_data_staleness()
-        if self.genesis_model_cycle_time is None:
-            self.genesis_model_cycle_time = datetime.now()
-            model_cycles = get_tc_model_init_times_relative_to(self.genesis_model_cycle_time)
+    @classmethod
+    def next_genesis_cycle(cls):
+        nav_time = cls.genesis_model_cycle_time_navigate
+        cls.update_genesis_data_staleness()
+        if cls.genesis_model_cycle_time is None:
+            cls.genesis_model_cycle_time = datetime.now()
+            model_cycles = get_tc_model_init_times_relative_to(cls.genesis_model_cycle_time)
             if model_cycles['next'] is None:
                 model_cycle = model_cycles['at']
             else:
@@ -7238,96 +7321,101 @@ class App:
             model_cycle = model_cycles['next']
 
         if model_cycle:
-            if model_cycle != self.genesis_model_cycle_time:
-                self.genesis_model_cycle_time_navigate = model_cycle
-                self.redraw_map_with_data(model_cycle=model_cycle)
+            if model_cycle != cls.genesis_model_cycle_time:
+                cls.genesis_model_cycle_time_navigate = model_cycle
+                cls.redraw_map_with_data(model_cycle=model_cycle)
 
-    def on_key_press(self, event):
-        if not self.zoom_selection_box:
-            self.measure_tool.on_key_press(event)
+    @classmethod
+    def on_key_press(cls, event):
+        if not cls.zoom_selection_box:
+            cls.measure_tool.on_key_press(event)
 
         if event.key == 'escape':
             # abort a zoom
-            if self.zoom_selection_box is not None:
-                self.zoom_selection_box.destroy()
-                self.zoom_selection_box = None
-            # self.fig.canvas.draw()
+            if cls.zoom_selection_box is not None:
+                cls.zoom_selection_box.destroy()
+                cls.zoom_selection_box = None
+            # cls.fig.canvas.draw()
+            cls.blit_circle_patch()
 
         if event.key == '0':
-            self.zoom_out(max_zoom=True)
+            cls.zoom_out(max_zoom=True)
 
         if event.key == '-':
-            self.zoom_out(step_zoom=True)
+            cls.zoom_out(step_zoom=True)
 
         if event.key == '=':
-            self.zoom_in(step_zoom=True)
+            cls.zoom_in(step_zoom=True)
 
         if event.key == 'n':
-            self.cycle_to_next_overlapped_point()
+            cls.cycle_to_next_overlapped_point()
 
         if event.key == 's':
-            self.toggle_selection_loop_mode()
+            cls.toggle_selection_loop_mode()
 
         if event.key == 'h':
-            if self.selection_loop_mode:
+            if cls.selection_loop_mode:
                 SelectionLoops.toggle_visible()
             else:
-                self.hide_tc_candidate()
+                cls.hide_tc_candidate()
 
         if event.key == 'x':
             # annotate storm extrema
-            self.annotate_storm_extrema()
+            cls.annotate_storm_extrema()
 
         if event.key == 'c':
-            if self.selection_loop_mode:
+            if cls.selection_loop_mode:
                 SelectionLoops.clear()
-                self.update_selection_info_label()
+                cls.update_selection_info_label()
             # clear storm extrema annotation(s)
             # check if any annotations has focus
-            elif self.annotated_circle_objects:
-                any_has_focus = False
-                for internal_id, annotated_circles in self.annotated_circle_objects.items():
+            elif cls.annotated_circle_objects:
+                removed_any = False
+                # find a track to clear if any has focus
+                for internal_id, point_index_circles in cls.annotated_circle_objects.items():
                     removed_circle = None
-                    if not annotated_circles:
-                        continue
-                    try:
-                        for annotated_circle in annotated_circles:
-                            if annotated_circle:
-                                if annotated_circle.annotation_has_focus(event):
-                                    any_has_focus = True
-                                    # we can't let annotation object pick it up,
-                                    #  since this causes a race condition since we are removing it
-                                    removed_circle = annotated_circle
-                                    any_has_focus = True
-                                    annotated_circle.remove()
-                                    break
-                    except:
-                        traceback.print_exc()
-                    self.ax.set_yscale('linear')
-                    if any_has_focus:
-                        annotated_circles.remove(removed_circle)
-                        if len(annotated_circles) == 0:
-                            del (self.annotated_circle_objects[internal_id])
-                        else:
-                            self.annotated_circle_objects[internal_id] = annotated_circles
-                        break
-                    self.ax.set_yscale('linear')
+                    removed_point_index = None
+                    for point_index, annotated_circle in list(point_index_circles.items()):
+                        if not annotated_circle:
+                            continue
+                        try:
+                            if annotated_circle.annotation_has_focus(event):
+                                removed_any = True
+                                # we can't let annotation object pick it up,
+                                #  since this causes a race condition since we are removing it
+                                removed_point_index = point_index
+                        except:
+                            traceback.print_exc()
 
-                if not any_has_focus:
-                    self.clear_storm_extrema_annotations()
+                        if removed_point_index is not None:
+                            del point_index_circles[removed_point_index]
+                            removed_point_index = None
+                            if len(point_index_circles) == 0:
+                                del cls.annotated_circle_objects[internal_id]
+
+                            annotated_circle.remove()
+
+                if not removed_any:
+                    cls.clear_storm_extrema_annotations()
+                
+                cls.ax.set_yscale('linear')
             else:
-                self.clear_storm_extrema_annotations()
-            self.ax.figure.canvas.draw()
+                cls.clear_storm_extrema_annotations()
 
-    def on_key_release(self, event):
-        if not self.zoom_selection_box:
-            self.measure_tool.on_key_release(event)
+            cls.redraw_fig_canvas(stale_bg=True)
+            cls.blit_circle_patch()
 
-    def on_click(self, event):
-        xlim = self.ax.get_xlim()
-        ylim = self.ax.get_ylim()
+    @classmethod
+    def on_key_release(cls, event):
+        if not cls.zoom_selection_box:
+            cls.measure_tool.on_key_release(event)
 
-        if event.inaxes == self.ax:
+    @classmethod
+    def on_click(cls, event):
+        xlim = cls.ax.get_xlim()
+        ylim = cls.ax.get_ylim()
+
+        if event.inaxes == cls.ax:
             # Check if mouse coordinates are within figure bounds
             try:
                 inbound = (xlim[0] <= event.xdata <= xlim[1] and ylim[0] <= event.ydata <= ylim[1])
@@ -7335,13 +7423,13 @@ class App:
                 inbound = False
 
             if inbound:
-                if self.selection_loop_mode:
+                if cls.selection_loop_mode:
                     SelectionLoops.on_click(event)
                     if event.button == 3:
-                        self.update_selection_info_label()
+                        cls.update_selection_info_label()
                     return
                 try:
-                    do_measure = self.measure_tool.on_click(event)
+                    do_measure = cls.measure_tool.on_click(event)
                 except:
                     # start measurement
                     do_measure = False
@@ -7361,9 +7449,9 @@ class App:
                         changed_opacity_index = 0
                         # the time_step legend is ordered bottom up (furthest valid time first)
                         new_opacity = 1.0
-                        if self.time_step_legend_objects:
+                        if cls.time_step_legend_objects:
 
-                            for i, time_step_legend_object in list(enumerate(reversed(self.time_step_legend_objects))):
+                            for i, time_step_legend_object in list(enumerate(reversed(cls.time_step_legend_objects))):
                                 bbox = time_step_legend_object.get_window_extent()
                                 if bbox.contains(event.x, event.y):
                                     changed_opacity = True
@@ -7373,14 +7461,14 @@ class App:
                                     #   1.0:    all visible
                                     #   0.6:    hide all storms tracks with start valid_time later than selected
                                     #   0.3:    hide all points beyond valid_time later than selected
-                                    next_opacity_index = min(changed_opacity_index + 1, len(self.time_step_opacity) - 1)
-                                    if self.time_step_opacity[i] != 1.0:
+                                    next_opacity_index = min(changed_opacity_index + 1, len(cls.time_step_opacity) - 1)
+                                    if cls.time_step_opacity[i] != 1.0:
                                         # not cycling
                                         new_opacity = 0.6
                                     else:
-                                        if self.time_step_opacity[next_opacity_index] == 1.0:
+                                        if cls.time_step_opacity[next_opacity_index] == 1.0:
                                             new_opacity = 0.6
-                                        elif self.time_step_opacity[next_opacity_index] == 0.6:
+                                        elif cls.time_step_opacity[next_opacity_index] == 0.6:
                                             new_opacity = 0.3
                                         else:
                                             new_opacity = 1.0
@@ -7388,39 +7476,40 @@ class App:
 
                             if changed_opacity:
                                 for i, time_step_legend_object in list(
-                                        enumerate(reversed(self.time_step_legend_objects))):
+                                        enumerate(reversed(cls.time_step_legend_objects))):
                                     if i > changed_opacity_index:
-                                        self.time_step_opacity[i] = new_opacity
+                                        cls.time_step_opacity[i] = new_opacity
                                     else:
-                                        self.time_step_opacity[i] = 1.0
+                                        cls.time_step_opacity[i] = 1.0
 
                         if changed_opacity:
                             # update map as we have changed what is visible
                             model_cycle = None
-                            if self.mode == "GENESIS":
-                                model_cycle = self.genesis_model_cycle_time
+                            if cls.mode == "GENESIS":
+                                model_cycle = cls.genesis_model_cycle_time
 
-                            self.redraw_map_with_data(model_cycle=model_cycle)
+                            cls.redraw_map_with_data(model_cycle=model_cycle)
 
                         else:
                             # zooming
                             try:
-                                self.zoom_selection_box = SelectionBox(self.ax)
+                                cls.zoom_selection_box = SelectionBox()
                                 # handle case we are not blocking (something other action is blocking)
-                                self.zoom_selection_box.update_box(event.xdata, event.ydata, event.xdata, event.ydata)
+                                cls.zoom_selection_box.update_box(event.xdata, event.ydata, event.xdata, event.ydata)
                             except:
                                 # some other action is blocking
                                 pass
                                 traceback.print_exc()
 
                     elif event.button == 3:  # Right click
-                        self.zoom_out(step_zoom=True)
+                        cls.zoom_out(step_zoom=True)
 
-    def on_motion(self, event):
-        xlim = self.ax.get_xlim()
-        ylim = self.ax.get_ylim()
+    @classmethod
+    def on_motion(cls, event):
+        xlim = cls.ax.get_xlim()
+        ylim = cls.ax.get_ylim()
 
-        if event.inaxes == self.ax:
+        if event.inaxes == cls.ax:
             # Check if mouse coordinates are within figure bounds
             try:
                 inbound = (xlim[0] <= event.xdata <= xlim[1] and ylim[0] <= event.ydata <= ylim[1])
@@ -7429,33 +7518,34 @@ class App:
 
             lon = event.xdata
             lat = event.ydata
-            self.last_cursor_lon_lat = (lon, lat)
-            self.update_labels_for_mouse_hover(lat=lat, lon=lon)
+            cls.last_cursor_lon_lat = (lon, lat)
+            cls.update_labels_for_mouse_hover(lat=lat, lon=lon)
 
-            if self.selection_loop_mode:
+            if cls.selection_loop_mode:
                 if inbound:
                     SelectionLoops.on_motion(event)
                 return
-            elif self.zoom_selection_box:
-                x0 = self.zoom_selection_box.lon1
-                y0 = self.zoom_selection_box.lat1
+            elif cls.zoom_selection_box:
+                x0 = cls.zoom_selection_box.lon1
+                y0 = cls.zoom_selection_box.lat1
                 if inbound:
                     x1, y1 = event.xdata, event.ydata
                 else:
                     # out of bound motion
                     return
                 if type(x0) == type(x1) == type(y0) == type(y1):
-                    if self.zoom_selection_box is not None:
-                        self.zoom_selection_box.update_box(x0, y0, x1, y1)
+                    if cls.zoom_selection_box is not None:
+                        cls.zoom_selection_box.update_box(x0, y0, x1, y1)
 
                     # blitting object will redraw using cached buffer
-                    # self.fig.canvas.draw_idle()
+                    # cls.fig.canvas.draw_idle()
             else:
-                self.measure_tool.on_motion(event, inbound)
+                cls.measure_tool.on_motion(event, inbound)
 
-    def on_release(self, event):
-        xlim = self.ax.get_xlim()
-        ylim = self.ax.get_ylim()
+    @classmethod
+    def on_release(cls, event):
+        xlim = cls.ax.get_xlim()
+        ylim = cls.ax.get_ylim()
 
         # Check if mouse coordinates are within figure bounds
         try:
@@ -7463,32 +7553,33 @@ class App:
         except:
             inbound = False
 
-        if self.selection_loop_mode:
+        if cls.selection_loop_mode:
             SelectionLoops.on_release(event)
-            self.update_selection_info_label()
+            cls.update_selection_info_label()
             return
 
-        doing_measurement = self.measure_tool.in_measure_mode()
+        doing_measurement = cls.measure_tool.in_measure_mode()
         if doing_measurement:
             pass
         else:
-            if event.button == 1 and self.zoom_selection_box:  # Left click release
+            if event.button == 1 and cls.zoom_selection_box:  # Left click release
                 if event.xdata is None or event.ydata is None or not inbound:
-                    if not self.zoom_selection_box.is_2d():
-                        self.zoom_selection_box.destroy()
-                        self.zoom_selection_box = None
+                    if not cls.zoom_selection_box.is_2d():
+                        cls.zoom_selection_box.destroy()
+                        cls.zoom_selection_box = None
                         return
 
-                self.zoom_in()
+                cls.zoom_in()
 
-    def prev_genesis_cycle(self):
-        self.update_genesis_data_staleness()
-        nav_time = self.genesis_model_cycle_time_navigate
+    @classmethod
+    def prev_genesis_cycle(cls):
+        cls.update_genesis_data_staleness()
+        nav_time = cls.genesis_model_cycle_time_navigate
         if not nav_time:
-            nav_time = self.genesis_model_cycle_time
-        if self.genesis_model_cycle_time is None:
-            self.genesis_model_cycle_time = datetime.now()
-            model_cycles = get_tc_model_init_times_relative_to(self.genesis_model_cycle_time)
+            nav_time = cls.genesis_model_cycle_time
+        if cls.genesis_model_cycle_time is None:
+            cls.genesis_model_cycle_time = datetime.now()
+            model_cycles = get_tc_model_init_times_relative_to(cls.genesis_model_cycle_time)
             if model_cycles['previous'] is None:
                 model_cycle = model_cycles['at']
             else:
@@ -7501,26 +7592,39 @@ class App:
             model_cycle = model_cycles['previous']
 
         if model_cycle:
-            if model_cycle != self.genesis_model_cycle_time:
-                self.genesis_model_cycle_time_navigate = model_cycle
-                self.redraw_map_with_data(model_cycle=model_cycle)
+            if model_cycle != cls.genesis_model_cycle_time:
+                cls.genesis_model_cycle_time_navigate = model_cycle
+                cls.redraw_map_with_data(model_cycle=model_cycle)
 
-    def redraw_map_with_data(self, model_cycle=None):
+    @classmethod
+    def redraw_app_canvas(cls):
+        cls.canvas.draw()
+        cls.blit_circle_patch()
+
+    @classmethod
+    def redraw_fig_canvas(cls, stale_bg=False):
+        cls.ax.figure.canvas.draw()
+
+        cls.blit_circle_patch(stale_bg=stale_bg)
+
+    @classmethod
+    def redraw_map_with_data(cls, model_cycle=None):
         App.hidden_tc_candidates = set()
-        self.display_map()
-        if self.mode == "GENESIS" and model_cycle:
-            self.display_genesis_data(model_cycle)
-        elif self.mode == "ADECK":
-            self.display_deck_data()
+        cls.display_map()
+        if cls.mode == "GENESIS" and model_cycle:
+            cls.display_genesis_data(model_cycle)
+        elif cls.mode == "ADECK":
+            cls.display_deck_data()
 
-    def reload(self):
-        if self.mode == "ADECK":
-            self.update_deck_data()
-            self.redraw_map_with_data()
-        elif self.mode == "GENESIS":
-            self.display_map()
-            self.update_genesis_data_staleness()
-            model_cycle = self.genesis_model_cycle_time
+    @classmethod
+    def reload(cls):
+        if cls.mode == "ADECK":
+            cls.update_deck_data()
+            cls.redraw_map_with_data()
+        elif cls.mode == "GENESIS":
+            cls.display_map()
+            cls.update_genesis_data_staleness()
+            model_cycle = cls.genesis_model_cycle_time
             if model_cycle is None:
                 model_cycles = get_tc_model_init_times_relative_to(datetime.now())
                 if model_cycles['next'] is None:
@@ -7529,43 +7633,46 @@ class App:
                     model_cycle = model_cycles['next']
             if model_cycle:
                 # clear map
-                self.redraw_map_with_data(model_cycle=model_cycle)
+                cls.redraw_map_with_data(model_cycle=model_cycle)
 
-    def reload_adeck(self):
-        if self.deck_timer_id is not None:
-            self.root.after_cancel(self.deck_timer_id)
-        self.deck_timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_deck_data)
+    @classmethod
+    def reload_adeck(cls):
+        if cls.deck_timer_id is not None:
+            cls.root.after_cancel(cls.deck_timer_id)
+        cls.deck_timer_id = cls.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, cls.check_for_stale_deck_data)
 
-        self.reload()
-        self.set_focus_on_map()
+        cls.reload()
+        cls.set_focus_on_map()
 
-    def reload_genesis(self):
-        if self.genesis_timer_id is not None:
-            self.root.after_cancel(self.genesis_timer_id)
-        self.genesis_timer_id = self.root.after(LOCAL_TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_genesis_data)
+    @classmethod
+    def reload_genesis(cls):
+        if cls.genesis_timer_id is not None:
+            cls.root.after_cancel(cls.genesis_timer_id)
+        cls.genesis_timer_id = cls.root.after(LOCAL_TIMER_INTERVAL_MINUTES * 60 * 1000, cls.check_for_stale_genesis_data)
 
-        self.reload()
-        self.set_focus_on_map()
+        cls.reload()
+        cls.set_focus_on_map()
 
-    def rvor_labels_new_extent(self):
-        self.update_rvor_contour_renderable_after_zoom()
-        extent = self.ax.get_extent(ccrs.PlateCarree())
-        contour_visible = self.overlay_rvor_contour_visible
+    @classmethod
+    def rvor_labels_new_extent(cls):
+        cls.update_rvor_contour_renderable_after_zoom()
+        extent = cls.ax.get_extent(ccrs.PlateCarree())
+        contour_visible = cls.overlay_rvor_contour_visible
         not_at_global_extent = not (
-                extent[0] == self.global_extent[0] and
-                extent[1] == self.global_extent[1] and
-                extent[2] == self.global_extent[2] and
-                extent[3] == self.global_extent[3]
+                extent[0] == cls.global_extent[0] and
+                extent[1] == cls.global_extent[1] and
+                extent[2] == cls.global_extent[2] and
+                extent[3] == cls.global_extent[3]
         )
-        label_visible = contour_visible and self.overlay_rvor_label_visible and not_at_global_extent
+        label_visible = contour_visible and cls.overlay_rvor_label_visible and not_at_global_extent
         if label_visible:
             alpha_label_visible = 1.0
         else:
             alpha_label_visible = 0.0
-        # if self.overlay_rvor_label_last_alpha != alpha_label_visible:
+        # if cls.overlay_rvor_label_last_alpha != alpha_label_visible:
         try:
-            renderable_ids = self.overlay_rvor_contour_dict['renderable_ids']
-            for contour_id, obj_list in self.overlay_rvor_contour_dict['label_objs'].items():
+            renderable_ids = cls.overlay_rvor_contour_dict['renderable_ids']
+            for contour_id, obj_list in cls.overlay_rvor_contour_dict['label_objs'].items():
                 # limit detail for labels based on zoom extent
                 is_renderable = (contour_id in renderable_ids)
                 is_visible = label_visible and is_renderable
@@ -7575,7 +7682,7 @@ class App:
             traceback.print_exc()
             pass
 
-        self.overlay_rvor_label_last_alpha = alpha_label_visible
+        cls.overlay_rvor_label_last_alpha = alpha_label_visible
 
     @classmethod
     def save_analysis_tz(cls, duration, tz):
@@ -7589,10 +7696,11 @@ class App:
                 with open('settings_tcviewer.json', 'w') as f:
                     json.dump(settings, f, indent=4)
 
-    def select_basin_dialog(self, event=None):
-        dialog = tk.Toplevel(self.root)
+    @classmethod
+    def select_basin_dialog(cls, event=None):
+        dialog = tk.Toplevel(cls.root)
         dialog.title('Select Basin')
-        dialog.geometry(f"300x200+{int(self.root.winfo_width()/2-150)}+{int(self.root.winfo_height()/2-100)}")
+        dialog.geometry(f"300x200+{int(cls.root.winfo_width()/2-150)}+{int(cls.root.winfo_height()/2-100)}")
 
         listbox = tk.Listbox(dialog, bg=default_bg, fg=default_fg)
         for basin_name in sorted(basin_extents.keys(), key=lambda x: ['N', 'E', 'W', 'I', 'S'].index(x[0])):
@@ -7609,7 +7717,7 @@ class App:
         def select_basin(event):
             selected_basin = listbox.get(listbox.curselection())
             SelectionLoops.add_poly(basin_polys[selected_basin])
-            self.update_selection_info_label()
+            cls.update_selection_info_label()
             cancel()
 
         listbox.bind('<Return>', select_basin)
@@ -7619,33 +7727,37 @@ class App:
         ttk.Button(dialog, text='OK', command=select_basin, style='TButton').pack(side=tk.LEFT, padx=5, pady=5)
         ttk.Button(dialog, text='Cancel', command=cancel, style='TButton').pack(side=tk.LEFT, padx=5, pady=5)
 
-    def set_focus_on_map(self):
-        self.canvas.get_tk_widget().focus_set()
+    @classmethod
+    def set_focus_on_map(cls):
+        cls.canvas.get_tk_widget().focus_set()
 
-    def show_analysis_dialog(self, event=None):
-        if not self.analysis_dialog_open:
-            self.analysis_dialog_open = True
+    @classmethod
+    def show_analysis_dialog(cls, event=None):
+        if not cls.analysis_dialog_open:
+            cls.analysis_dialog_open = True
         else:
             return
 
-        root_width = self.root.winfo_screenwidth()
-        root_height = self.root.winfo_screenheight()
-        if self.mode == "ADECK":
-            previous_selected_combo = self.adeck_previous_selected
+        root_width = cls.root.winfo_screenwidth()
+        root_height = cls.root.winfo_screenheight()
+        if cls.mode == "ADECK":
+            previous_selected_combo = cls.adeck_previous_selected
         else:
-            previous_selected_combo = self.genesis_previous_selected
-        dialog = AnalysisDialog(self.root, self.plotted_tc_candidates, root_width, root_height, previous_selected_combo)
+            previous_selected_combo = cls.genesis_previous_selected
+        dialog = AnalysisDialog(cls.root, cls.plotted_tc_candidates, root_width, root_height, previous_selected_combo)
 
         # fix focus back to map
-        self.set_focus_on_map()
+        cls.set_focus_on_map()
 
-        self.analysis_dialog_open = False
+        cls.analysis_dialog_open = False
 
-    def show_config_adeck_dialog(self):
-        self.show_config_dialog()
-        self.set_focus_on_map()
+    @classmethod
+    def show_config_adeck_dialog(cls):
+        cls.show_config_dialog()
+        cls.set_focus_on_map()
 
-    def show_config_dialog(self):
+    @classmethod
+    def show_config_dialog(cls):
         global displayed_functional_annotation_options
         global ANNOTATE_COLOR_LEVELS
         global RVOR_CYCLONIC_CONTOURS
@@ -7681,10 +7793,10 @@ class App:
             'ANNOTATE_VMAX_COLOR': tk.StringVar(value=ANNOTATE_VMAX_COLOR),
             'ANALYSIS_TZ': tk.StringVar(value=ANALYSIS_TZ)
         }
-        root_width = self.root.winfo_screenwidth()
-        root_height = self.root.winfo_screenheight()
+        root_width = cls.root.winfo_screenwidth()
+        root_height = cls.root.winfo_screenheight()
 
-        dialog = ConfigDialog(self.root, displayed_functional_annotation_options, DISPLAYED_FUNCTIONAL_ANNOTATIONS,
+        dialog = ConfigDialog(cls.root, displayed_functional_annotation_options, DISPLAYED_FUNCTIONAL_ANNOTATIONS,
                               settings, root_width, root_height)
         if dialog.result:
             result = dialog.result
@@ -7713,21 +7825,23 @@ class App:
                 json.dump(result, f, indent=4)
 
         # fix focus back to map
-        self.set_focus_on_map()
+        cls.set_focus_on_map()
 
-    def show_config_genesis_dialog(self):
-        self.show_config_dialog()
-        self.set_focus_on_map()
+    @classmethod
+    def show_config_genesis_dialog(cls):
+        cls.show_config_dialog()
+        cls.set_focus_on_map()
 
-    def show_rvor_dialog(self, event=None):
-        if not self.rvor_dialog_open:
-            self.rvor_dialog_open = True
+    @classmethod
+    def show_rvor_dialog(cls, event=None):
+        if not cls.rvor_dialog_open:
+            cls.rvor_dialog_open = True
         else:
             return
         # Create the toplevel dialog
         global SELECTED_PRESSURE_LEVELS
-        dialog = tk.Toplevel(self.root, bg="#000000")
-        dialog.protocol("WM_DELETE_WINDOW", lambda: self.on_rvor_dialog_close(dialog))
+        dialog = tk.Toplevel(cls.root, bg="#000000")
+        dialog.protocol("WM_DELETE_WINDOW", lambda: cls.on_rvor_dialog_close(dialog))
         dialog.title("Selected RVOR levels:")
         height = 275
         width = 240
@@ -7742,7 +7856,7 @@ class App:
         frame.grid()
 
         # Create the checkboxes and their corresponding variables
-        self.level_vars = {}
+        cls.level_vars = {}
         chk_first = None
         for i, level in enumerate([925, 850, 700, 500, 200], start=1):
             val = 1 if level in SELECTED_PRESSURE_LEVELS else 0
@@ -7756,7 +7870,7 @@ class App:
             # Center the labels
             frame.columnconfigure(0, weight=1)
             chk.columnconfigure(0, weight=1)
-            self.level_vars[level] = var
+            cls.level_vars[level] = var
 
         for i in range(9):
             frame.grid_columnconfigure(i, pad=15)
@@ -7769,7 +7883,7 @@ class App:
 
         # OK button
         ok_btn = ttk.Button(dialog, text="OK",
-                           command=lambda: [self.update_rvor_levels(), self.on_rvor_dialog_close(dialog)], style='TButton')
+                           command=lambda: [cls.update_rvor_levels(), cls.on_rvor_dialog_close(dialog)], style='TButton')
         ok_btn.grid(row=8, column=0)
 
         # Cancel button
@@ -7777,15 +7891,17 @@ class App:
         cancel_btn.config(width=ok_btn.cget("width"))  # Set the width of the Cancel button to match the OK button
         cancel_btn.grid(row=8, column=1)
 
-        dialog.bind("<Return>", lambda e: [self.update_rvor_levels(), self.on_rvor_dialog_close(dialog)])
-        dialog.bind("<Escape>", lambda e: self.on_rvor_dialog_close(dialog))
+        dialog.bind("<Return>", lambda e: [cls.update_rvor_levels(), cls.on_rvor_dialog_close(dialog)])
+        dialog.bind("<Escape>", lambda e: cls.on_rvor_dialog_close(dialog))
 
-    def switch_mode(self):
-        self.mode = "GENESIS" if self.mode == "ADECK" else "ADECK"
-        self.update_mode()
-        self.set_focus_on_map()
+    @classmethod
+    def switch_mode(cls):
+        cls.mode = "GENESIS" if cls.mode == "ADECK" else "ADECK"
+        cls.update_mode()
+        cls.set_focus_on_map()
 
-    def take_screenshot(self, *args):
+    @classmethod
+    def take_screenshot(cls, *args):
         # Get the current UTC date and time
         current_time = datetime_utcnow().strftime("%Y-%m-%d-%H-%M-%S")
 
@@ -7800,7 +7916,7 @@ class App:
         screenshot.save(f"screenshots/{current_time}.png")
 
         # Create a custom dialog window
-        dialog = tk.Toplevel(self.root, bg="#000000")
+        dialog = tk.Toplevel(cls.root, bg="#000000")
         dialog.title("tcviewer")
         dialog.geometry("200x100")  # Set the dialog size
 
@@ -7825,19 +7941,20 @@ class App:
         # Bind the FocusOut event to the dialog's destroy method
         dialog.bind("<FocusOut>", lambda event: dialog.destroy())
 
-    def toggle_rvor_contours(self, *args):
-        new_vis = not self.overlay_rvor_contour_visible
+    @classmethod
+    def toggle_rvor_contours(cls, *args):
+        new_vis = not cls.overlay_rvor_contour_visible
         try:
-            renderable_ids = self.overlay_rvor_contour_dict['renderable_ids']
-            for contour_id, objs_list in self.overlay_rvor_contour_dict['contour_objs'].items():
+            renderable_ids = cls.overlay_rvor_contour_dict['renderable_ids']
+            for contour_id, objs_list in cls.overlay_rvor_contour_dict['contour_objs'].items():
                 # is_renderable = (contour_id in renderable_ids)
                 # is_visible = new_vis and is_renderable
                 # don't limit contour detail by extent (only limit labels)
                 is_visible = new_vis
                 for obj in objs_list:
                     obj.set_visible(is_visible)
-            self.overlay_rvor_label_visible = new_vis
-            for contour_id, objs_list in self.overlay_rvor_contour_dict['label_objs'].items():
+            cls.overlay_rvor_label_visible = new_vis
+            for contour_id, objs_list in cls.overlay_rvor_contour_dict['label_objs'].items():
                 is_renderable = (contour_id in renderable_ids)
                 is_visible = new_vis and is_renderable
                 for obj in objs_list:
@@ -7845,19 +7962,20 @@ class App:
         except:
             traceback.print_exc()
             pass
-        self.overlay_rvor_contour_visible = new_vis
-        self.ax.set_yscale('linear')
-        self.ax.figure.canvas.draw()
+        cls.overlay_rvor_contour_visible = new_vis
+        cls.ax.set_yscale('linear')
+        cls.redraw_fig_canvas(stale_bg=True)
 
-    def toggle_rvor_labels(self, *args):
-        new_vis = not self.overlay_rvor_label_visible
+    @classmethod
+    def toggle_rvor_labels(cls, *args):
+        new_vis = not cls.overlay_rvor_label_visible
         if new_vis:
             new_alpha = 1.0
         else:
             new_alpha = 0.0
         try:
-            renderable_ids = self.overlay_rvor_contour_dict['renderable_ids']
-            for contour_id, obj_list in self.overlay_rvor_contour_dict['label_objs'].items():
+            renderable_ids = cls.overlay_rvor_contour_dict['renderable_ids']
+            for contour_id, obj_list in cls.overlay_rvor_contour_dict['label_objs'].items():
                 is_renderable = (contour_id in renderable_ids)
                 is_visible = new_vis and is_renderable
                 for obj in obj_list:
@@ -7865,19 +7983,21 @@ class App:
         except:
             traceback.print_exc()
             pass
-        self.overlay_rvor_label_last_alpha = new_alpha
-        self.overlay_rvor_label_visible = new_vis
+        cls.overlay_rvor_label_last_alpha = new_alpha
+        cls.overlay_rvor_label_visible = new_vis
         # fixes bug in matplotlib after modifying many artists (especially test boxes)
-        self.ax.set_yscale('linear')
-        self.ax.figure.canvas.draw()
+        cls.ax.set_yscale('linear')
+        cls.redraw_fig_canvas(stale_bg=True)
 
-    def toggle_selection_loop_mode(self):
-        self.selection_loop_mode = not (self.selection_loop_mode)
-        self.update_toggle_selection_loop_button_color()
-        self.set_focus_on_map()
+    @classmethod
+    def toggle_selection_loop_mode(cls):
+        cls.selection_loop_mode = not (cls.selection_loop_mode)
+        cls.update_toggle_selection_loop_button_color()
+        cls.set_focus_on_map()
 
-    def update_axes(self):
-        gl = self.lastgl
+    @classmethod
+    def update_axes(cls):
+        gl = cls.lastgl
 
         if gl:
             gl.top_labels = False
@@ -7893,15 +8013,15 @@ class App:
                     pass
 
             try:
-                self.ax._gridliners.remove(gl)
+                cls.ax._gridliners.remove(gl)
             except:
                 pass
-        self.ax.set_yscale('linear')
+        cls.ax.set_yscale('linear')
 
-        gl = self.ax.gridlines(draw_labels=["bottom", "left"], x_inline=False, y_inline=False, auto_inline=False,
+        gl = cls.ax.gridlines(draw_labels=["bottom", "left"], x_inline=False, y_inline=False, auto_inline=False,
                                color='white', alpha=0.5, linestyle='--')
         # Move axis labels inside the subplot
-        self.ax.tick_params(axis='both', direction='in', labelsize=16)
+        cls.ax.tick_params(axis='both', direction='in', labelsize=16)
         # https://github.com/SciTools/cartopy/issues/1642
         gl.xpadding = -10  # Ideally, this would move labels inside the map, but results in hidden labels
         gl.ypadding = -10  # Ideally, this would move labels inside the map, but results in hidden labels
@@ -7910,9 +8030,9 @@ class App:
         gl.ylabel_style = {'color': 'orange'}
 
         # in pixels
-        window_extent = self.ax.get_window_extent()
+        window_extent = cls.ax.get_window_extent()
         # in degrees
-        extent = self.ax.get_extent()
+        extent = cls.ax.get_extent()
 
         lon_pixels = window_extent.width
         lat_pixels = window_extent.height
@@ -7943,35 +8063,47 @@ class App:
         gl.xlocator = plt.MultipleLocator(fitted_grid_line_degrees)
         gl.ylocator = plt.MultipleLocator(fitted_grid_line_degrees)
 
-        self.lastgl = gl
+        cls.lastgl = gl
 
         # gl.xformatter = LONGITUDE_FORMATTER
         # gl.yformatter = LATITUDE_FORMATTER
         lat_formatter = LatitudeFormatter(direction_label=True)
         lon_formatter = LongitudeFormatter(direction_label=True)
-        self.ax.xaxis.set_major_formatter(lon_formatter)
-        self.ax.yaxis.set_major_formatter(lat_formatter)
+        cls.ax.xaxis.set_major_formatter(lon_formatter)
+        cls.ax.yaxis.set_major_formatter(lat_formatter)
 
-    def update_circle_patch(self, lon=None, lat=None):
-        if self.last_circle_lon == lon and self.last_circle_lat == lat:
+    @classmethod
+    def update_circle_patch(cls, lon=None, lat=None):
+        if cls.last_circle_lon == lon and cls.last_circle_lat == lat:
             return
 
-        if self.circle_handle:
-            self.circle_handle.remove()
+        if cls.circle_handle:
+            # restore region
+            if cls.background_for_blit:
+                cls.ax.figure.canvas.restore_region(cls.background_for_blit)
+                App.ax.figure.canvas.blit(App.ax.bbox)
 
-        self.ax.set_yscale('linear')
+            # cls.circle_handle.remove()
 
-        self.circle_handle = Circle((lon, lat), radius=self.calculate_radius_pixels(),
+        # cls.ax.set_yscale('linear')
+
+        cls.circle_handle = Circle((lon, lat), radius=cls.calculate_radius_pixels(),
                                     color=DEFAULT_ANNOTATE_MARKER_COLOR, fill=False, linestyle='dotted', linewidth=2,
                                     alpha=0.8,
                                     transform=ccrs.PlateCarree())
-        self.ax.add_patch(self.circle_handle)
-        self.ax.figure.canvas.draw()
+        
+        # as we are not using cartopy's Circle patches we have to update axes ourself
+        cls.circle_handle.axes = App.ax
+        #cls.ax.add_patch(cls.circle_handle)
+        #cls.redraw_fig_canvas()
 
-        self.last_circle_lon = lon
-        self.last_circle_lat = lat
+        cls.last_circle_lon = lon
+        cls.last_circle_lat = lat
 
-    def update_deck_data(self):
+        cls.blit_circle_patch()
+
+    @classmethod
+    def update_deck_data(cls):
         # track which data is stale (tc vitals, adeck, bdeck)
         # unfortunately we need to get all each type (vitals, adeck, bdeck) from both mirrors, since
         # it's unknown which mirror actually has most up-to-date data from the modification date alone
@@ -7981,81 +8113,83 @@ class App:
 
         # logic for updating classes
         do_update_tcvitals = do_update_adeck = do_update_bdeck = False
-        if not self.have_deck_data:
+        if not cls.have_deck_data:
             # first fetch of data
             do_update_tcvitals = do_update_adeck = do_update_bdeck = True
-            if self.deck_timer_id is not None:
-                self.root.after_cancel(self.deck_timer_id)
-            self.deck_timer_id = self.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_deck_data)
+            if cls.deck_timer_id is not None:
+                cls.root.after_cancel(cls.deck_timer_id)
+            cls.deck_timer_id = cls.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, cls.check_for_stale_deck_data)
         else:
             # refresh status of stale data one more time since the user has requested a reload
-            self.check_for_stale_deck_data()
-            if self.dt_mods_tcvitals and self.stale_urls['tcvitals']:
+            cls.check_for_stale_deck_data()
+            if cls.dt_mods_tcvitals and cls.stale_urls['tcvitals']:
                 do_update_tcvitals = True
-            if self.dt_mods_adeck and self.stale_urls['adeck']:
+            if cls.dt_mods_adeck and cls.stale_urls['adeck']:
                 do_update_adeck = True
-            if self.dt_mods_bdeck and self.stale_urls['bdeck']:
+            if cls.dt_mods_bdeck and cls.stale_urls['bdeck']:
                 do_update_bdeck = True
 
         # Get recent storms (tcvitals)
         if do_update_tcvitals:
             new_dt_mods_tcvitals, new_recent_storms = get_recent_storms(tcvitals_urls)
             if new_dt_mods_tcvitals:
-                old_dt_mods = copy.deepcopy(self.dt_mods_tcvitals)
-                self.dt_mods_tcvitals.update(new_dt_mods_tcvitals)
-                updated_urls_tcvitals = diff_dicts(old_dt_mods, self.dt_mods_tcvitals)
+                old_dt_mods = copy.deepcopy(cls.dt_mods_tcvitals)
+                cls.dt_mods_tcvitals.update(new_dt_mods_tcvitals)
+                updated_urls_tcvitals = diff_dicts(old_dt_mods, cls.dt_mods_tcvitals)
                 if updated_urls_tcvitals:
-                    self.recent_storms = new_recent_storms
+                    cls.recent_storms = new_recent_storms
         # Get A-Deck and B-Deck files
         if do_update_adeck or do_update_bdeck:
-            new_dt_mods_adeck, new_dt_mods_bdeck, new_adeck, new_bdeck = get_deck_files(self.recent_storms, adeck_urls,
+            new_dt_mods_adeck, new_dt_mods_bdeck, new_adeck, new_bdeck = get_deck_files(cls.recent_storms, adeck_urls,
                                                                                         bdeck_urls, do_update_adeck,
                                                                                         do_update_bdeck)
             if new_dt_mods_adeck and do_update_adeck:
-                old_dt_mods = copy.deepcopy(self.dt_mods_adeck)
-                self.dt_mods_adeck.update(new_dt_mods_adeck)
-                updated_urls_adeck = diff_dicts(old_dt_mods, self.dt_mods_adeck)
+                old_dt_mods = copy.deepcopy(cls.dt_mods_adeck)
+                cls.dt_mods_adeck.update(new_dt_mods_adeck)
+                updated_urls_adeck = diff_dicts(old_dt_mods, cls.dt_mods_adeck)
                 if updated_urls_adeck:
-                    self.adeck = new_adeck
+                    cls.adeck = new_adeck
             if new_dt_mods_bdeck and do_update_bdeck:
-                old_dt_mods = copy.deepcopy(self.dt_mods_bdeck)
-                self.dt_mods_bdeck.update(new_dt_mods_bdeck)
-                updated_urls_bdeck = diff_dicts(old_dt_mods, self.dt_mods_bdeck)
+                old_dt_mods = copy.deepcopy(cls.dt_mods_bdeck)
+                cls.dt_mods_bdeck.update(new_dt_mods_bdeck)
+                updated_urls_bdeck = diff_dicts(old_dt_mods, cls.dt_mods_bdeck)
                 if updated_urls_bdeck:
-                    self.bdeck = new_bdeck
+                    cls.bdeck = new_bdeck
 
-        if self.dt_mods_tcvitals or self.dt_mods_adeck or self.dt_mods_bdeck:
+        if cls.dt_mods_tcvitals or cls.dt_mods_adeck or cls.dt_mods_bdeck:
             # at least something was downloaded
-            self.have_deck_data = True
+            cls.have_deck_data = True
 
-        self.stale_urls['tcvitals'] = self.stale_urls['tcvitals'] - set(updated_urls_tcvitals)
-        self.stale_urls['adeck'] = self.stale_urls['adeck'] - set(updated_urls_adeck)
-        self.stale_urls['bdeck'] = self.stale_urls['bdeck'] - set(updated_urls_bdeck)
-        self.update_reload_button_color_for_deck()
+        cls.stale_urls['tcvitals'] = cls.stale_urls['tcvitals'] - set(updated_urls_tcvitals)
+        cls.stale_urls['adeck'] = cls.stale_urls['adeck'] - set(updated_urls_adeck)
+        cls.stale_urls['bdeck'] = cls.stale_urls['bdeck'] - set(updated_urls_bdeck)
+        cls.update_reload_button_color_for_deck()
 
-    def update_genesis_data_staleness(self):
+    @classmethod
+    def update_genesis_data_staleness(cls):
         # track which data is stale (global-det or all-tcgen)
         # this is mainly a simple clearing of staleness (doesn't keep track of which set the user views)
-        if self.genesis_timer_id is not None:
-            self.root.after_cancel(self.genesis_timer_id)
-        self.genesis_timer_id = self.root.after(LOCAL_TIMER_INTERVAL_MINUTES * 60 * 1000, self.check_for_stale_genesis_data)
+        if cls.genesis_timer_id is not None:
+            cls.root.after_cancel(cls.genesis_timer_id)
+        cls.genesis_timer_id = cls.root.after(LOCAL_TIMER_INTERVAL_MINUTES * 60 * 1000, cls.check_for_stale_genesis_data)
 
-        self.stale_genesis_data['global-det'] = []
-        self.stale_genesis_data['tcgen'] = []
+        cls.stale_genesis_data['global-det'] = []
+        cls.stale_genesis_data['tcgen'] = []
 
-        if ('global-det' in self.dt_mods_genesis and self.dt_mods_genesis['global-det']) or \
-                ('tcgen' in self.dt_mods_genesis and self.dt_mods_genesis['tcgen']):
+        if ('global-det' in cls.dt_mods_genesis and cls.dt_mods_genesis['global-det']) or \
+                ('tcgen' in cls.dt_mods_genesis and cls.dt_mods_genesis['tcgen']):
             # at least we have some data
-            self.have_genesis_data = True
+            cls.have_genesis_data = True
 
-        self.update_reload_button_color_for_genesis()
+        cls.update_reload_button_color_for_genesis()
 
-    def update_labels_for_mouse_hover(self, lat=None, lon=None):
+    @classmethod
+    def update_labels_for_mouse_hover(cls, lat=None, lon=None):
         if not (lat) or not (lon):
             return
 
         # Update label for mouse cursor position on map first
-        self.label_mouse_coords.config(text=f"({lat:>8.4f}, {lon:>9.4f})")
+        cls.label_mouse_coords.config(text=f"({lat:>8.4f}, {lon:>9.4f})")
 
         if EventManager.get_blocking_purpose():
             # blocking for zoom, measure
@@ -8067,23 +8201,23 @@ class App:
         bounding_box = (lon - buffer, lat - buffer, lon + buffer, lat + buffer)
 
         # Query the R-tree for points within the bounding box
-        possible_matches = list(self.rtree_idx.intersection(bounding_box, objects=True))
+        possible_matches = list(cls.rtree_idx.intersection(bounding_box, objects=True))
 
         # Calculate the geodesic distance and find the nearest point (nearest_point_index)
         min_distance = float('inf')
         # a sorted cyclic dict that has the item number enumerated
         # has a get() the next enumerated number and the key (the point_index tuple) in a cycle (sorted by value, which will be a datetime)
-        self.nearest_point_indices_overlapped = SortedCyclicEnumDict()
+        cls.nearest_point_indices_overlapped = SortedCyclicEnumDict()
         for item in possible_matches:
             unmapped_point_index = item.id
-            internal_id, tc_index, point_index = self.rtree_tuple_index_mapping[unmapped_point_index]
-            point = self.plotted_tc_candidates[tc_index][1][point_index]
+            internal_id, tc_index, point_index = cls.rtree_tuple_index_mapping[unmapped_point_index]
+            point = cls.plotted_tc_candidates[tc_index][1][point_index]
             item_is_overlapping = False
             if internal_id in App.hidden_tc_candidates:
                 continue
-            if len(self.nearest_point_indices_overlapped):
-                overlapping_internal_id, overlapping_tc_index, overlapping_point_index = self.nearest_point_indices_overlapped.get_first_key()
-                possible_overlapping_point = self.plotted_tc_candidates[overlapping_tc_index][1][
+            if len(cls.nearest_point_indices_overlapped):
+                overlapping_internal_id, overlapping_tc_index, overlapping_point_index = cls.nearest_point_indices_overlapped.get_first_key()
+                possible_overlapping_point = cls.plotted_tc_candidates[overlapping_tc_index][1][
                     overlapping_point_index]
                 lon_diff = round(abs(possible_overlapping_point['lon'] - point['lon']), 3)
                 lat_diff = round(abs(possible_overlapping_point['lat'] - point['lat']), 3)
@@ -8093,100 +8227,106 @@ class App:
             # check to see if it is an almost exact match (~3 decimals in degrees) to approximate whether it is an overlapped point
             if item_is_overlapping:
                 # this will likely be an overlapped point in the grid
-                self.nearest_point_indices_overlapped[(internal_id, tc_index, point_index)] = point['valid_time']
+                cls.nearest_point_indices_overlapped[(internal_id, tc_index, point_index)] = point['valid_time']
                 # min distance should not significantly change (we are using the first point as reference for overlapping)
             else:
-                distance = self.calculate_distance((lon, lat), (point['lon'], point['lat']))
+                distance = cls.calculate_distance((lon, lat), (point['lon'], point['lat']))
                 if distance < min_distance:
                     # not an overlapping point but still closer to cursor, so update
                     # first clear any other points since this candidate is closer and does not have an overlapping point
-                    self.nearest_point_indices_overlapped = SortedCyclicEnumDict()
-                    self.nearest_point_indices_overlapped[(internal_id, tc_index, point_index)] = point['valid_time']
+                    cls.nearest_point_indices_overlapped = SortedCyclicEnumDict()
+                    cls.nearest_point_indices_overlapped[(internal_id, tc_index, point_index)] = point['valid_time']
                     min_distance = distance
 
         # Update the labels if a nearest point is found within the threshold
-        total_num_overlapped_points = len(self.nearest_point_indices_overlapped)
+        total_num_overlapped_points = len(cls.nearest_point_indices_overlapped)
         if total_num_overlapped_points > 0:
-            overlapped_point_num, nearest_point_index = self.nearest_point_indices_overlapped.next_enum_key_tuple()
+            overlapped_point_num, nearest_point_index = cls.nearest_point_indices_overlapped.next_enum_key_tuple()
             internal_id, tc_index, point_index = nearest_point_index
-            self.update_tc_status_labels(tc_index, point_index, overlapped_point_num, total_num_overlapped_points)
+            cls.update_tc_status_labels(tc_index, point_index, overlapped_point_num, total_num_overlapped_points)
             # get the nearest_point
-            point = self.plotted_tc_candidates[tc_index][1][point_index]
+            point = cls.plotted_tc_candidates[tc_index][1][point_index]
             lon = point['lon']
             lat = point['lat']
-            self.update_circle_patch(lon=lon, lat=lat)
+            cls.update_circle_patch(lon=lon, lat=lat)
         else:
             # clear the label if no point is found? No.
             #   Not only will this prevent the constant reconfiguring of labels, it allows the user more flexibility
-            # self.update_tc_status_labels()
+            # cls.update_tc_status_labels()
             # Do clear the circle though as it might be obtrusive
-            self.clear_circle_patch()
+            cls.clear_circle_patch()
 
-    def update_mode(self):
-        if self.mode == "ADECK":
-            self.genesis_mode_frame.pack_forget()
-            self.adeck_mode_frame.pack(side=tk.TOP, fill=tk.X)
+    @classmethod
+    def update_mode(cls):
+        if cls.mode == "ADECK":
+            cls.genesis_mode_frame.pack_forget()
+            cls.adeck_mode_frame.pack(side=tk.TOP, fill=tk.X)
         else:
-            self.adeck_mode_frame.pack_forget()
-            self.genesis_mode_frame.pack(side=tk.TOP, fill=tk.X)
+            cls.adeck_mode_frame.pack_forget()
+            cls.genesis_mode_frame.pack(side=tk.TOP, fill=tk.X)
 
-    def update_plotted_list(self, internal_id, tc_candidate):
+    @classmethod
+    def update_plotted_list(cls, internal_id, tc_candidate):
         # zero indexed
-        tc_index = len(self.plotted_tc_candidates)
+        tc_index = len(cls.plotted_tc_candidates)
         for point_index, point in enumerate(tc_candidate):  # Iterate over each point in the track
             lat, lon = point['lat'], point['lon']
             # Can't use a tuple (tc_index, point_index) as the index so use a mapped index
-            self.rtree_idx.insert(self.rtree_tuple_point_id, (lon, lat, lon, lat))
-            self.rtree_tuple_index_mapping[self.rtree_tuple_point_id] = (internal_id, tc_index, point_index)
-            self.rtree_tuple_point_id += 1
+            cls.rtree_idx.insert(cls.rtree_tuple_point_id, (lon, lat, lon, lat))
+            cls.rtree_tuple_index_mapping[cls.rtree_tuple_point_id] = (internal_id, tc_index, point_index)
+            cls.rtree_tuple_point_id += 1
 
-        self.plotted_tc_candidates.append((internal_id, tc_candidate))
+        cls.plotted_tc_candidates.append((internal_id, tc_candidate))
 
-    def update_reload_button_color_for_deck(self):
-        if self.stale_urls['adeck']:
-            self.reload_button_adeck.configure(style='Red.TButton')
-        elif self.stale_urls['bdeck']:
-            self.reload_button_adeck.configure(style='Orange.TButton')
-        elif self.stale_urls['tcvitals']:
-            self.reload_button_adeck.configure(style='Yellow.TButton')
+    @classmethod
+    def update_reload_button_color_for_deck(cls):
+        if cls.stale_urls['adeck']:
+            cls.reload_button_adeck.configure(style='Red.TButton')
+        elif cls.stale_urls['bdeck']:
+            cls.reload_button_adeck.configure(style='Orange.TButton')
+        elif cls.stale_urls['tcvitals']:
+            cls.reload_button_adeck.configure(style='Yellow.TButton')
         else:
-            self.reload_button_adeck.configure(style='White.TButton')
+            cls.reload_button_adeck.configure(style='White.TButton')
 
-    def update_reload_button_color_for_genesis(self):
-        if self.stale_genesis_data['global-det']:
-            self.reload_button_genesis.configure(style='Red.TButton')
-        elif self.stale_genesis_data['tcgen']:
-            self.reload_button_genesis.configure(style='Orange.TButton')
+    @classmethod
+    def update_reload_button_color_for_genesis(cls):
+        if cls.stale_genesis_data['global-det']:
+            cls.reload_button_genesis.configure(style='Red.TButton')
+        elif cls.stale_genesis_data['tcgen']:
+            cls.reload_button_genesis.configure(style='Orange.TButton')
         else:
-            self.reload_button_genesis.configure(style='White.TButton')
+            cls.reload_button_genesis.configure(style='White.TButton')
 
-    def update_rvor_contour_renderable_after_zoom(self):
-        if self.overlay_rvor_contour_dict and 'ids' in self.overlay_rvor_contour_dict:
-            extent, min_span_lat_deg, min_span_lon_deg = self.get_contour_min_span_deg()
+    @classmethod
+    def update_rvor_contour_renderable_after_zoom(cls):
+        if cls.overlay_rvor_contour_dict and 'ids' in cls.overlay_rvor_contour_dict:
+            extent, min_span_lat_deg, min_span_lon_deg = cls.get_contour_min_span_deg()
             renderable_ids = set()
-            span_lons = self.overlay_rvor_contour_dict['contour_span_lons']
-            span_lats = self.overlay_rvor_contour_dict['contour_span_lats']
-            for contour_id in self.overlay_rvor_contour_dict['ids']:
+            span_lons = cls.overlay_rvor_contour_dict['contour_span_lons']
+            span_lats = cls.overlay_rvor_contour_dict['contour_span_lats']
+            for contour_id in cls.overlay_rvor_contour_dict['ids']:
                 span_lon = span_lons[contour_id]
                 span_lat = span_lats[contour_id]
                 if span_lon >= min_span_lon_deg and span_lat >= min_span_lat_deg:
                     renderable_ids.add(contour_id)
-            self.overlay_rvor_contour_dict['renderable_ids'] = renderable_ids
+            cls.overlay_rvor_contour_dict['renderable_ids'] = renderable_ids
 
     # Update rvor levels
-    def update_rvor_levels(self):
+    @classmethod
+    def update_rvor_levels(cls):
         # Update the global variable with the new values
         global SELECTED_PRESSURE_LEVELS
 
-        new_SELECTED_PRESSURE_LEVELS = [level for level, var in self.level_vars.items() if var.get()]
+        new_SELECTED_PRESSURE_LEVELS = [level for level, var in cls.level_vars.items() if var.get()]
 
         if SELECTED_PRESSURE_LEVELS == new_SELECTED_PRESSURE_LEVELS:
             return
 
         SELECTED_PRESSURE_LEVELS = new_SELECTED_PRESSURE_LEVELS
 
-        contours = self.overlay_rvor_contour_dict['contour_objs']
-        labels = self.overlay_rvor_contour_dict['label_objs']
+        contours = cls.overlay_rvor_contour_dict['contour_objs']
+        labels = cls.overlay_rvor_contour_dict['label_objs']
         for objs_dict in [contours, labels]:
             for _, obj_list in objs_dict.items():
                 # for obj in obj_list:
@@ -8195,12 +8335,13 @@ class App:
                     obj_list[0].remove()
                 except:
                     traceback.print_exc()
-        self.ax.set_yscale('linear')
-        self.display_custom_overlay()
-        self.ax.figure.canvas.draw()
+        cls.ax.set_yscale('linear')
+        cls.display_custom_overlay()
+        cls.redraw_fig_canvas(stale_bg=True)
 
-    def update_selection_info_label(self):
-        # self.genesis_selection_info_label.config(text="---.- kt")
+    @classmethod
+    def update_selection_info_label(cls):
+        # cls.genesis_selection_info_label.config(text="---.- kt")
         internal_ids = App.get_selected_internal_storm_ids()
         num_tracks = 0
         if internal_ids:
@@ -8208,7 +8349,7 @@ class App:
         num_tracks_str = ""
         if num_tracks > 0:
             num_tracks_str=f"# Selected: Tracks: {num_tracks}"
-            filtered_candidates = [(iid, tc) for iid, tc in self.plotted_tc_candidates if
+            filtered_candidates = [(iid, tc) for iid, tc in cls.plotted_tc_candidates if
                                    iid in internal_ids]
             selected_model_names = set()
             for internal_id, tc in filtered_candidates:
@@ -8216,26 +8357,27 @@ class App:
                     selected_model_names.add(tc[0]['model_name'])
             num_selected_model_names = len(selected_model_names)
             num_tracks_str += f", Models: {num_selected_model_names}"
-        if self.mode == "GENESIS":
-            self.genesis_selection_info_label.config(text=num_tracks_str)
-        elif self.mode == "ADECK":
-            self.adeck_selection_info_label.config(text=num_tracks_str)
+        if cls.mode == "GENESIS":
+            cls.genesis_selection_info_label.config(text=num_tracks_str)
+        elif cls.mode == "ADECK":
+            cls.adeck_selection_info_label.config(text=num_tracks_str)
 
-    def update_tc_status_labels(self,tc_index=None, tc_point_index=None, overlapped_point_num=0, total_num_overlapped_points=0):
+    @classmethod
+    def update_tc_status_labels(cls,tc_index=None, tc_point_index=None, overlapped_point_num=0, total_num_overlapped_points=0):
         # may not have init interface yet
         try:
-            if tc_index is None or tc_point_index is None or len(self.plotted_tc_candidates) == 0:
-                self.label_mouse_hover_matches.config(text="0  ", style="FixedWidthWhite.TLabel")
-                self.label_mouse_hover_info_coords.config(text="(-tt.tttt, -nnn.nnnn)")
-                self.label_mouse_hover_info_valid_time.config(text="YYYY-MM-DD hhZ")
-                self.label_mouse_hover_info_model_init.config(text="YYYY-MM-DD hhZ")
-                self.label_mouse_hover_info_vmax10m.config(text="---.- kt")
-                self.label_mouse_hover_info_mslp.config(text="----.- hPa")
-                self.label_mouse_hover_info_roci.config(text="---- km")
-                self.label_mouse_hover_info_isobar_delta.config(text="--- hPa")
+            if tc_index is None or tc_point_index is None or len(cls.plotted_tc_candidates) == 0:
+                cls.label_mouse_hover_matches.config(text="0  ", style="FixedWidthWhite.TLabel")
+                cls.label_mouse_hover_info_coords.config(text="(-tt.tttt, -nnn.nnnn)")
+                cls.label_mouse_hover_info_valid_time.config(text="YYYY-MM-DD hhZ")
+                cls.label_mouse_hover_info_model_init.config(text="YYYY-MM-DD hhZ")
+                cls.label_mouse_hover_info_vmax10m.config(text="---.- kt")
+                cls.label_mouse_hover_info_mslp.config(text="----.- hPa")
+                cls.label_mouse_hover_info_roci.config(text="---- km")
+                cls.label_mouse_hover_info_isobar_delta.config(text="--- hPa")
             else:
                 # list of dicts (points in time) for tc candidate
-                internal_id, tc_candidate = self.plotted_tc_candidates[tc_index]
+                internal_id, tc_candidate = cls.plotted_tc_candidates[tc_index]
                 # dict at a point in time for tc candidate
                 tc_candidate_point = tc_candidate[tc_point_index]
                 model_name = tc_candidate_point['model_name']
@@ -8260,52 +8402,54 @@ class App:
                 if 'closed_isobar_delta' in tc_candidate_point:
                     isobar_delta = tc_candidate_point['closed_isobar_delta']
 
-                self.label_mouse_hover_matches.config(text=f"{overlapped_point_num}/{total_num_overlapped_points}")
+                cls.label_mouse_hover_matches.config(text=f"{overlapped_point_num}/{total_num_overlapped_points}")
                 if total_num_overlapped_points > 1:
-                    self.label_mouse_hover_matches.config(style="FixedWidthRed.TLabel")
+                    cls.label_mouse_hover_matches.config(style="FixedWidthRed.TLabel")
                 else:
-                    self.label_mouse_hover_matches.config(style="FixedWidthWhite.TLabel")
-                self.label_mouse_hover_info_coords.config(text=f"({lat:>8.4f}, {lon:>9.4f})")
+                    cls.label_mouse_hover_matches.config(style="FixedWidthWhite.TLabel")
+                cls.label_mouse_hover_info_coords.config(text=f"({lat:>8.4f}, {lon:>9.4f})")
                 if valid_time:
-                    self.label_mouse_hover_info_valid_time.config(text=valid_time)
+                    cls.label_mouse_hover_info_valid_time.config(text=valid_time)
                 else:
-                    self.label_mouse_hover_info_valid_time.config(text="YYYY-MM-DD hhZ")
+                    cls.label_mouse_hover_info_valid_time.config(text="YYYY-MM-DD hhZ")
                 if init_time:
-                    self.label_mouse_hover_info_model_init.config(text=f"{model_name:>4} {init_time}")
+                    cls.label_mouse_hover_info_model_init.config(text=f"{model_name:>4} {init_time}")
                 else:
                     if model_name == "TCVITALS" and valid_time:
-                        self.label_mouse_hover_info_model_init.config(text=f"{model_name:>4} {valid_time}")
+                        cls.label_mouse_hover_info_model_init.config(text=f"{model_name:>4} {valid_time}")
                     else:
-                        self.label_mouse_hover_info_model_init.config(text="YYYY-MM-DD hhZ")
+                        cls.label_mouse_hover_info_model_init.config(text="YYYY-MM-DD hhZ")
                 if vmax10m:
-                    self.label_mouse_hover_info_vmax10m.config(text=f"{vmax10m:>5.1f} kt")
+                    cls.label_mouse_hover_info_vmax10m.config(text=f"{vmax10m:>5.1f} kt")
                 else:
-                    self.label_mouse_hover_info_vmax10m.config(text="---.- kt")
+                    cls.label_mouse_hover_info_vmax10m.config(text="---.- kt")
                 if mslp:
-                    self.label_mouse_hover_info_mslp.config(text=f"{mslp:>6.1f} hPa")
+                    cls.label_mouse_hover_info_mslp.config(text=f"{mslp:>6.1f} hPa")
                 else:
-                    self.label_mouse_hover_info_mslp.config(text="----.- hPa")
+                    cls.label_mouse_hover_info_mslp.config(text="----.- hPa")
                 if roci:
-                    self.label_mouse_hover_info_roci.config(text=f"{roci:>4.0f} km")
+                    cls.label_mouse_hover_info_roci.config(text=f"{roci:>4.0f} km")
                 else:
-                    self.label_mouse_hover_info_roci.config(text="---- km")
+                    cls.label_mouse_hover_info_roci.config(text="---- km")
                 if isobar_delta:
-                    self.label_mouse_hover_info_isobar_delta.config(text=f"{isobar_delta:>3.0f} hPa")
+                    cls.label_mouse_hover_info_isobar_delta.config(text=f"{isobar_delta:>3.0f} hPa")
                 else:
-                    self.label_mouse_hover_info_isobar_delta.config(text="--- hPa")
+                    cls.label_mouse_hover_info_isobar_delta.config(text="--- hPa")
         except:
             traceback.print_exc()
             pass
 
-    def update_toggle_selection_loop_button_color(self):
-        if self.selection_loop_mode:
-            self.toggle_selection_loop_button.configure(style='YellowAndBorder.TButton')
+    @classmethod
+    def update_toggle_selection_loop_button_color(cls):
+        if cls.selection_loop_mode:
+            cls.toggle_selection_loop_button.configure(style='YellowAndBorder.TButton')
         else:
-            self.toggle_selection_loop_button.configure(style='WhiteAndBorder.TButton')
+            cls.toggle_selection_loop_button.configure(style='WhiteAndBorder.TButton')
 
-    def zoom_in(self, step_zoom=False, extents=None):
+    @classmethod
+    def zoom_in(cls, step_zoom=False, extents=None):
         if extents:
-            self.ax.set_extent([extents[0], extents[1], extents[2], extents[3]], crs=ccrs.PlateCarree())
+            cls.ax.set_extent([extents[0], extents[1], extents[2], extents[3]], crs=ccrs.PlateCarree())
             x0 = extents[0]
             y0 = extents[1]
             x1 = extents[2]
@@ -8317,8 +8461,8 @@ class App:
             zoom_aspect_ratio = (extent[3] - extent[2]) / (extent[1] - extent[0])
 
             # Calculate the aspect ratio of the canvas frame
-            frame_width_pixels = self.canvas_frame.winfo_width()
-            frame_height_pixels = self.canvas_frame.winfo_height()
+            frame_width_pixels = cls.canvas_frame.winfo_width()
+            frame_height_pixels = cls.canvas_frame.winfo_height()
             frame_aspect_ratio = frame_height_pixels / frame_width_pixels
 
             # Determine the dimension to set the extent and the dimension to expand
@@ -8353,24 +8497,23 @@ class App:
                     lon_max = lon_center + (lon_width / 2)
                 lon_extent = [lon_min, lon_max]
 
-            self.ax.set_extent([lon_extent[0], lon_extent[1], lat_extent[0], lat_extent[1]], crs=ccrs.PlateCarree())
+            cls.ax.set_extent([lon_extent[0], lon_extent[1], lat_extent[0], lat_extent[1]], crs=ccrs.PlateCarree())
 
-            self.clear_storm_extrema_annotations()
-            self.update_axes()
-            AnnotatedCircles.changed_extent(self.ax)
-            SelectionLoops.changed_extent(self.ax)
-            self.update_selection_info_label()
-            self.measure_tool.changed_extent(self.ax)
-            self.ax.figure.canvas.draw()
-            self.rvor_labels_new_extent()
-            self.ax.figure.canvas.draw()
-
+            cls.clear_storm_extrema_annotations()
+            cls.update_axes()
+            AnnotatedCircles.changed_extent()
+            SelectionLoops.changed_extent()
+            cls.update_selection_info_label()
+            cls.measure_tool.changed_extent()
+            cls.redraw_fig_canvas()
+            cls.rvor_labels_new_extent()
+            cls.redraw_fig_canvas()
 
         elif step_zoom:
-            extent = self.ax.get_extent()
+            extent = cls.ax.get_extent()
             lon_diff = extent[1] - extent[0]
             lat_diff = extent[3] - extent[2]
-            lon_center, lat_center = self.last_cursor_lon_lat
+            lon_center, lat_center = cls.last_cursor_lon_lat
             target_width = lon_diff / ZOOM_IN_STEP_FACTOR
             target_height = lat_diff / ZOOM_IN_STEP_FACTOR
             x0 = lon_center - (target_width / 2.0)
@@ -8398,32 +8541,32 @@ class App:
                 y1,
             ]
 
-            self.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
-            self.clear_storm_extrema_annotations()
-            self.update_axes()
-            AnnotatedCircles.changed_extent(self.ax)
-            SelectionLoops.changed_extent(self.ax)
-            self.update_selection_info_label()
-            self.measure_tool.changed_extent(self.ax)
-            self.ax.figure.canvas.draw()
-            self.rvor_labels_new_extent()
-            self.ax.figure.canvas.draw()
+            cls.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
+            cls.clear_storm_extrema_annotations()
+            cls.update_axes()
+            AnnotatedCircles.changed_extent()
+            SelectionLoops.changed_extent()
+            cls.update_selection_info_label()
+            cls.measure_tool.changed_extent()
+            cls.redraw_fig_canvas()
+            cls.rvor_labels_new_extent()
+            cls.redraw_fig_canvas()
 
-        # elif self.zoom_rect and (None not in self.zoom_rect) and len(self.zoom_rect) == 4:
+        # elif cls.zoom_rect and (None not in cls.zoom_rect) and len(cls.zoom_rect) == 4:
         # 2d checks if valid rect and that x's aren't close and y's aren't close
-        elif self.zoom_selection_box:
-            if not self.zoom_selection_box.is_2d():
-                self.zoom_selection_box.destroy()
-                self.zoom_selection_box = None
+        elif cls.zoom_selection_box:
+            if not cls.zoom_selection_box.is_2d():
+                cls.zoom_selection_box.destroy()
+                cls.zoom_selection_box = None
                 return
 
-            x0 = self.zoom_selection_box.lon1
-            y0 = self.zoom_selection_box.lat1
-            x1 = self.zoom_selection_box.lon2
-            y1 = self.zoom_selection_box.lat2
+            x0 = cls.zoom_selection_box.lon1
+            y0 = cls.zoom_selection_box.lat1
+            x1 = cls.zoom_selection_box.lon2
+            y1 = cls.zoom_selection_box.lat2
 
-            self.zoom_selection_box.destroy()
-            self.zoom_selection_box = None
+            cls.zoom_selection_box.destroy()
+            cls.zoom_selection_box = None
 
             extent = [min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)]
 
@@ -8431,8 +8574,8 @@ class App:
             zoom_aspect_ratio = (extent[3] - extent[2]) / (extent[1] - extent[0])
 
             # Calculate the aspect ratio of the canvas frame
-            frame_width_pixels = self.canvas_frame.winfo_width()
-            frame_height_pixels = self.canvas_frame.winfo_height()
+            frame_width_pixels = cls.canvas_frame.winfo_width()
+            frame_height_pixels = cls.canvas_frame.winfo_height()
             frame_aspect_ratio = frame_height_pixels / frame_width_pixels
 
             # Determine the dimension to set the extent and the dimension to expand
@@ -8467,20 +8610,21 @@ class App:
                     lon_max = lon_center + (lon_width / 2)
                 lon_extent = [lon_min, lon_max]
 
-            self.ax.set_extent([lon_extent[0], lon_extent[1], lat_extent[0], lat_extent[1]], crs=ccrs.PlateCarree())
+            cls.ax.set_extent([lon_extent[0], lon_extent[1], lat_extent[0], lat_extent[1]], crs=ccrs.PlateCarree())
 
-            self.clear_storm_extrema_annotations()
-            self.update_axes()
-            AnnotatedCircles.changed_extent(self.ax)
-            SelectionLoops.changed_extent(self.ax)
-            self.update_selection_info_label()
-            self.measure_tool.changed_extent(self.ax)
-            self.ax.figure.canvas.draw()
-            self.rvor_labels_new_extent()
-            self.ax.figure.canvas.draw()
+            cls.clear_storm_extrema_annotations()
+            cls.update_axes()
+            AnnotatedCircles.changed_extent()
+            SelectionLoops.changed_extent()
+            cls.update_selection_info_label()
+            cls.measure_tool.changed_extent()
+            cls.redraw_fig_canvas()
+            cls.rvor_labels_new_extent()
+            cls.redraw_fig_canvas()
 
-    def zoom_out(self, max_zoom=False, step_zoom=False):
-        extent = self.ax.get_extent()
+    @classmethod
+    def zoom_out(cls, max_zoom=False, step_zoom=False):
+        extent = cls.ax.get_extent()
         lon_diff = extent[1] - extent[0]
         lat_diff = extent[3] - extent[2]
 
@@ -8527,16 +8671,16 @@ class App:
             ]
 
             if x1 - x0 <= max_lon_diff and y1 - y0 <= max_lat_diff:
-                self.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
-                self.clear_storm_extrema_annotations()
-                self.update_axes()
-                AnnotatedCircles.changed_extent(self.ax)
-                SelectionLoops.changed_extent(self.ax)
-                self.update_selection_info_label()
-                self.measure_tool.changed_extent(self.ax)
-                self.ax.figure.canvas.draw()
-                self.rvor_labels_new_extent()
-                self.ax.figure.canvas.draw()
+                cls.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
+                cls.clear_storm_extrema_annotations()
+                cls.update_axes()
+                AnnotatedCircles.changed_extent()
+                SelectionLoops.changed_extent()
+                cls.update_selection_info_label()
+                cls.measure_tool.changed_extent()
+                cls.redraw_fig_canvas()
+                cls.rvor_labels_new_extent()
+                cls.redraw_fig_canvas()
 
         else:
             # Define zoom factor or step size
@@ -8563,22 +8707,23 @@ class App:
 
             # Ensure the zoom doesn't exceed maximum extents
             if new_lon_max - new_lon_min <= max_lon_diff and new_lat_max - new_lat_min <= max_lat_diff:
-                self.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
-                self.clear_storm_extrema_annotations()
-                self.update_axes()
-                AnnotatedCircles.changed_extent(self.ax)
-                SelectionLoops.changed_extent(self.ax)
-                self.update_selection_info_label()
+                cls.ax.set_extent(new_extent, crs=ccrs.PlateCarree())
+                cls.clear_storm_extrema_annotations()
+                cls.update_axes()
+                AnnotatedCircles.changed_extent()
+                SelectionLoops.changed_extent()
+                cls.update_selection_info_label()
                 # do measure last as we are going to remove and redraw it
-                self.measure_tool.changed_extent(self.ax)
-                self.ax.figure.canvas.draw()
-                self.rvor_labels_new_extent()
-                self.ax.figure.canvas.draw()
+                cls.measure_tool.changed_extent()
+                cls.redraw_fig_canvas()
+                cls.rvor_labels_new_extent()
+                cls.redraw_fig_canvas()
 
-    def zoom_to_basin_dialog(self, event=None):
-        dialog = tk.Toplevel(self.root)
+    @classmethod
+    def zoom_to_basin_dialog(cls, event=None):
+        dialog = tk.Toplevel(cls.root)
         dialog.title('Zoom to Basin')
-        dialog.geometry(f"300x200+{int(self.root.winfo_width()/2-150)}+{int(self.root.winfo_height()/2-100)}")
+        dialog.geometry(f"300x200+{int(cls.root.winfo_width()/2-150)}+{int(cls.root.winfo_height()/2-100)}")
 
         listbox = tk.Listbox(dialog, bg=default_bg, fg=default_fg)
         # show in order (first letter)
@@ -8596,7 +8741,7 @@ class App:
         def select_basin(event):
             selected_basin = listbox.get(listbox.curselection())
             cancel()
-            self.zoom_in(extents=basin_extents[selected_basin])
+            cls.zoom_in(extents=basin_extents[selected_basin])
 
         listbox.bind('<Return>', select_basin)
         listbox.bind('<Up>', lambda event: listbox.select_set(0))
@@ -8673,6 +8818,6 @@ if __name__ == "__main__":
     tk_root.option_add('*background', '#000000')
     tk_root.option_add('*foreground', '#FFFFFF')
 
-    app = App(tk_root)
+    app = App.init(tk_root)
 
     tk_root.mainloop()
