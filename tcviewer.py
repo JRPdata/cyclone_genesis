@@ -1128,13 +1128,16 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
     completed_ensembles = {}
     # earliest init time in most recent ensemble
     earliest_recent_ensemble_init_times = {}
+    latest_ensemble_init_time = {}
 
+    tcgen_ensemble = False
     ensemble_names = []
     if genesis_previous_selected == 'GLOBAL-DET':
         db_file_path = tc_candidates_db_file_path
         # filter out all model_names from tcgen and keep all models from own tracker
         model_names = [model_name for model_name in model_names if model_name[-5:] != 'TCGEN']
     else:
+        tcgen_ensemble = True
         db_file_path = tc_candidates_tcgen_db_file_path
         if genesis_previous_selected == 'ALL-TCGEN':
             # filter out all model_names from own tracker and keep all tcgen models
@@ -1222,8 +1225,50 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
             if num_init_time_ens_is_complete == 1 and len(ensemble_init_times) == 1:
                 completed_ensembles[ensemble_name] = ensemble_completed_times[ensemble_name][0]
                 earliest_recent_ensemble_init_times[ensemble_name] = ensemble_init_time
-            else:
+                latest_ensemble_init_time[ensemble_name] = ensemble_init_time
+            elif num_init_time_ens_is_complete > 1 and len(ensemble_init_times) > 1:
+                # old members of the ensemble in data, yet complete ensemble (to be pruned)
+                completed_ensembles[ensemble_name] = max(ensemble_completed_times[ensemble_name])
+                # disregard earlier members as they will be pruned
                 earliest_recent_ensemble_init_times[ensemble_name] = max(init_complete_times)
+                latest_ensemble_init_time[ensemble_name] = max(init_complete_times)
+            else:
+                # incomplete ensemble?
+                earliest_recent_ensemble_init_times[ensemble_name] = min(init_complete_times)
+                latest_ensemble_init_time[ensemble_name] = max(init_complete_times)
+
+            # if a tcgen ensemble, we need to mark any candidates that don't belong to this init time to drop them
+            # otherwise we will get models from a previous run if they have no predictions this run
+            if tcgen_ensemble:
+                # first mark ensemble names for models
+                max_ens_init_time = latest_ensemble_init_time[ensemble_name]
+                for i, tc_candidate in enumerate(all_retrieved_data):
+                    model_name = tc_candidate['model_name']
+                    model_ens_name = None
+                    if 'ensemble_name' in tc_candidate:
+                        model_ens_name = tc_candidate['ensemble_name']
+                    elif model_name in model_name_to_ensemble_name:
+                        model_ens_name = model_name_to_ensemble_name[model_name]
+                        all_retrieved_data[i]['ensemble_name'] = model_ens_name
+
+                    if model_ens_name and model_ens_name == ensemble_name:
+                        if model_ens_name in completed_ensembles:
+                            all_retrieved_data[i]['in_complete_ensemble'] = True
+                        if tc_candidate['model_timestamp'] != max_ens_init_time:
+                            all_retrieved_data[i]['old_ensemble_member'] = True
+                        else:
+                            all_retrieved_data[i]['old_ensemble_member'] = False
+
+        if tcgen_ensemble:
+            # drop old ensemble members in complete ensembles
+            pruned_all_retrieved_data = []
+            for tc_candidate in all_retrieved_data:
+                if 'old_ensemble_member' in tc_candidate and 'in_complete_ensemble' in tc_candidate and tc_candidate['old_ensemble_member']:
+                    # prune this old member in a complete ensemble (no predictions for the tcgen member in this complete run)
+                    continue
+                pruned_all_retrieved_data.append(tc_candidate)
+
+            all_retrieved_data = pruned_all_retrieved_data
 
     except sqlite3.Error as e:
         print(f"SQLite error (get_tc_candidates_from_valid_time): {e}")
