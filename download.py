@@ -1,4 +1,4 @@
-# Auto Downloads Global Model Data and TC Genesis Data
+# Auto Downloads Global Model Data, TC Genesis Data, and Ensemble ATCF data
 # See url_folder_by_model for sources
 # Genesis data is from NCEP (GEFS, GEPS, FNMOC), ECMWF genesis trackers
 # Downloads are threaded PER server source (see model_names_to_download_thread_groupings)
@@ -49,7 +49,7 @@ disturbances_db_file_path = '/home/db/Documents/JRPdata/cyclone-genesis/disturba
 
 # GFS and NAV are in the same thread as they use the same server
 # These are the models that are downloaded
-model_names_to_download_thread_groupings = [['EPS-TCGEN'], ['GEFS-TCGEN', 'GEPS-TCGEN', 'FNMOC-TCGEN', 'GFS', 'NAV'], ['CMC'], ['ECM']]
+model_names_to_download_thread_groupings = [['EPS-TCGEN'], ['GEFS-TCGEN', 'GEPS-TCGEN', 'FNMOC-TCGEN', 'GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF', 'GFS', 'NAV'], ['CMC'], ['ECM']]
 
 # use this to download individual grib files for NAVGEM so we can split them with grib_copy
 tmp_download_dir = '/tmp'
@@ -62,6 +62,9 @@ min_space_bytes = {
     'GEFS-TCGEN': '50000000',
     'GEPS-TCGEN': '50000000',
     'FNMOC-TCGEN': '50000000',
+    'GEFS-ATCF': '50000000',
+    'GEPS-ATCF': '50000000',
+    'FNMOC-ATCF': '50000000',
     'GFS': '100000000',
     'ECM': '100000000',
     'CMC': '100000000',
@@ -73,6 +76,9 @@ model_data_folders_by_model_name = {
     'GEFS-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/gefs-tcgen',
     'GEPS-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/geps-tcgen',
     'FNMOC-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/fnmoc-tcgen',
+    'GEFS-ATCF': '/home/db/metview/JRPdata/globalmodeldata/gefs-atcf',
+    'GEPS-ATCF': '/home/db/metview/JRPdata/globalmodeldata/geps-atcf',
+    'FNMOC-ATCF': '/home/db/metview/JRPdata/globalmodeldata/fnmoc-atcf',
     'GFS': '/home/db/metview/JRPdata/globalmodeldata/gfs',
     'ECM': '/home/db/metview/JRPdata/globalmodeldata/ecm',
     'CMC': '/home/db/metview/JRPdata/globalmodeldata/cmc',
@@ -84,6 +90,9 @@ url_folder_by_model = {
     'GEFS-TCGEN': 'https://nomads.ncep.noaa.gov/pub/data/nccf/com/ens_tracker/prod',
     'GEPS-TCGEN': 'https://nomads.ncep.noaa.gov/pub/data/nccf/com/ens_tracker/prod',
     'FNMOC-TCGEN': 'https://nomads.ncep.noaa.gov/pub/data/nccf/com/ens_tracker/prod',
+    'GEFS-ATCF': 'https://nomads.ncep.noaa.gov/pub/data/nccf/com/ens_tracker/prod',
+    'GEPS-ATCF': 'https://nomads.ncep.noaa.gov/pub/data/nccf/com/ens_tracker/prod',
+    'FNMOC-ATCF': 'https://nomads.ncep.noaa.gov/pub/data/nccf/com/ens_tracker/prod',
     'GFS': 'https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod',
     'ECM': 'https://data.ecmwf.int/forecasts',
     'CMC': 'http://hpfx.collab.science.gc.ca',
@@ -116,6 +125,20 @@ total_model_time_steps = {
         '12': 22
     },
     'FNMOC-TCGEN': {
+        '00': 22,
+        '12': 22
+    },
+    'GEFS-ATCF': {
+        '00': 32,
+        '06': 32,
+        '12': 32,
+        '18': 32
+    },
+    'GEPS-ATCF': {
+        '00': 22,
+        '12': 22
+    },
+    'FNMOC-ATCF': {
         '00': 22,
         '12': 22
     },
@@ -161,6 +184,20 @@ all_time_steps_by_model = {
         '00': ['ngx', 'nc00', 'np01', 'np02', 'np03', 'np04', 'np05', 'np06', 'np07', 'np08', 'np09', 'np10', 'np11', 'np12', 'np13', 'np14', 'np15', 'np16', 'np17', 'np18', 'np19', 'np20'],
         '12': ['ngx', 'nc00', 'np01', 'np02', 'np03', 'np04', 'np05', 'np06', 'np07', 'np08', 'np09', 'np10', 'np11', 'np12', 'np13', 'np14', 'np15', 'np16', 'np17', 'np18', 'np19', 'np20']
     },
+    'GEFS-ATCF': {
+        '00': ['avnx', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30'],
+        '06': ['avnx', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30'],
+        '12': ['avnx', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30'],
+        '18': ['avnx', 'ac00', 'ap01', 'ap02', 'ap03', 'ap04', 'ap05', 'ap06', 'ap07', 'ap08', 'ap09', 'ap10', 'ap11', 'ap12', 'ap13', 'ap14', 'ap15', 'ap16', 'ap17', 'ap18', 'ap19', 'ap20', 'ap21', 'ap22', 'ap23', 'ap24', 'ap25', 'ap26', 'ap27', 'ap28', 'ap29', 'ap30']
+    },
+    'GEPS-ATCF': {
+        '00': ['cmc', 'cc00', 'cp01', 'cp02', 'cp03', 'cp04', 'cp05', 'cp06', 'cp07', 'cp08', 'cp09', 'cp10', 'cp11', 'cp12', 'cp13', 'cp14', 'cp15', 'cp16', 'cp17', 'cp18', 'cp19', 'cp20'],
+        '12': ['cmc', 'cc00', 'cp01', 'cp02', 'cp03', 'cp04', 'cp05', 'cp06', 'cp07', 'cp08', 'cp09', 'cp10', 'cp11', 'cp12', 'cp13', 'cp14', 'cp15', 'cp16', 'cp17', 'cp18', 'cp19', 'cp20']
+    },
+    'FNMOC-ATCF': {
+        '00': ['ngx', 'nc00', 'np01', 'np02', 'np03', 'np04', 'np05', 'np06', 'np07', 'np08', 'np09', 'np10', 'np11', 'np12', 'np13', 'np14', 'np15', 'np16', 'np17', 'np18', 'np19', 'np20'],
+        '12': ['ngx', 'nc00', 'np01', 'np02', 'np03', 'np04', 'np05', 'np06', 'np07', 'np08', 'np09', 'np10', 'np11', 'np12', 'np13', 'np14', 'np15', 'np16', 'np17', 'np18', 'np19', 'np20']
+    },
     'GFS': {
         '00': [0, 6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 78, 84, 90, 96, 102, 108, 114, 120, 126, 132, 138, 144, 150, 156, 162, 168, 174, 180, 186, 192, 198, 204, 210, 216, 222, 228, 234, 240, 246, 252, 258, 264, 270, 276, 282, 288, 294, 300, 306, 312, 318, 324, 330, 336, 342, 348, 354, 360, 366, 372, 378, 384],
         '06': [0, 6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 78, 84, 90, 96, 102, 108, 114, 120, 126, 132, 138, 144, 150, 156, 162, 168, 174, 180, 186, 192, 198, 204, 210, 216, 222, 228, 234, 240, 246, 252, 258, 264, 270, 276, 282, 288, 294, 300, 306, 312, 318, 324, 330, 336, 342, 348, 354, 360, 366, 372, 378, 384],
@@ -189,6 +226,9 @@ expected_num_grib_files_by_model_name = {
     'GEFS-TCGEN': 1,
     'GEPS-TCGEN': 1,
     'FNMOC-TCGEN': 1,
+    'GEFS-ATCF': 1,
+    'GEPS-ATCF': 1,
+    'FNMOC-ATCF': 1,
     'GFS': 9,
     'CMC': 9,
     'ECM': 9,
@@ -211,6 +251,9 @@ model_interval_hours = {
     'GEFS-TCGEN': 6,
     'GEPS-TCGEN': 12,
     'FNMOC-TCGEN': 12,
+    'GEFS-ATCF': 6,
+    'GEPS-ATCF': 12,
+    'FNMOC-ATCF': 12,
     'GFS': 6,
     'ECM': 12,
     'CMC': 12,
@@ -224,6 +267,9 @@ time_step_re_str_by_model_name = {
     'GEFS-TCGEN': r'.*?storms\.(?P<time_step>[a-z0-9]+)\.',
     'GEPS-TCGEN': r'.*?storms\.(?P<time_step>[a-z0-9]+)\.',
     'FNMOC-TCGEN': r'.*?storms\.(?P<time_step>[a-z0-9]+)\.',
+    'GEFS-ATCF': r'(?P<time_step>[a-z0-9]+)\.',
+    'GEPS-ATCF': r'(?P<time_step>[a-z0-9]+)\.',
+    'FNMOC-ATCF': r'(?P<time_step>[a-z0-9]+)\.',
     'GFS': r'.*?\.f(?P<time_step>\d\d\d)_',
     'ECM': r'.*?-(?P<time_step>\d+)h-oper-fc',
     'CMC': r'.*?\d+_P(?P<time_step>\d+)',
@@ -318,10 +364,10 @@ def have_enough_disk_space():
 def get_calculated_and_missing_time_steps(model_name, model_timestamp):
     model_hour = f'{model_timestamp.hour:02}'
     # remove from this the calculated timesteps
-    #   this is the time steps missing, or the members for tcgen ensembles (just the file name prefix for EPS)
+    #   this is the time steps missing, or the members for tcgen/atcf ensembles (just the file name prefix for EPS)
     model_time_steps_missing = set(all_time_steps_by_model[model_name][model_hour])
 
-    if "TCGEN" not in model_name:
+    if "TCGEN" not in model_name and "ATCF" not in model_name:
         disturbance_candidates = get_disturbances_from_db(model_name, model_timestamp)
         time_steps_calculated = set()
         if disturbance_candidates:
@@ -814,7 +860,7 @@ def generate_curl_commands_gfdl(timestamp_prefix, url_folder, url_base_file_name
 # the full timestep string as used in the file names we are parsing from the model data
 # include any leading zeros up that make sense (only up to what the model covers)
 def convert_model_time_step_to_str(model_name, model_time_step_int):
-    if "TCGEN" not in model_name:
+    if "TCGEN" not in model_name and "ATCF" not in model_name:
         str_format = model_time_step_str_format[model_name]
         return f'{model_time_step_int:{str_format}}'
     else:
@@ -834,7 +880,7 @@ def get_completed_and_missing_downloaded_model_steps(model_name, model_timestamp
     model_hour = datetime.strftime(model_timestamp, '%H')
     model_time_step_re = re.compile(time_step_re_str_by_model_name[model_name])
     if not os.path.exists(model_dir):
-        if "TCGEN" not in model_name:
+        if "TCGEN" not in model_name and "ATCF" not in model_name:
             model_time_steps_int = [int(x) for x in model_time_steps]
             return [], model_time_steps_int
         else:
@@ -848,7 +894,7 @@ def get_completed_and_missing_downloaded_model_steps(model_name, model_timestamp
     steps_missing = []
 
     expected_num_grib_files_per_step = expected_num_grib_files_by_model_name[model_name]
-    # replace step for member for tcgen ensembles
+    # replace step for member for tcgen/atcf ensembles
     for model_time_step in model_time_steps:
         model_time_step_str = convert_model_time_step_to_str(model_name, model_time_step)
 
@@ -880,7 +926,7 @@ def get_completed_and_missing_downloaded_model_steps(model_name, model_timestamp
         num_grib_files_in_step = len(grib_files)
 
         if expected_num_grib_files_per_step != 9999:
-            if "TCGEN" not in model_name:
+            if "TCGEN" not in model_name and "ATCF" not in model_name:
                 if num_grib_files_in_step >= expected_num_grib_files_per_step:
                     steps_downloaded.append(int(model_time_step_str))
                 else:
@@ -900,7 +946,7 @@ def get_completed_and_missing_downloaded_model_steps(model_name, model_timestamp
 # returns complete (boolean), downloaded steps (int list), missing steps (int list)
 def model_run_steps_downloaded_info(model_name, model_timestamp):
     model_hour = datetime.strftime(model_timestamp, '%H')
-    # number of expected steps, or members for tcgen ensembles (-1 for EPS)
+    # number of expected steps, or members for tcgen/atcf ensembles (-1 for EPS)
     expected_num_total_steps = total_model_time_steps[model_name][model_hour]
     steps_downloaded, steps_missing = get_completed_and_missing_downloaded_model_steps(model_name, model_timestamp)
 
@@ -909,7 +955,7 @@ def model_run_steps_downloaded_info(model_name, model_timestamp):
 def download_step(model_name, model_timestamp, time_step_int):
     model_date = datetime.strftime(model_timestamp, '%Y%m%d')
     model_hour = datetime.strftime(model_timestamp, '%H')
-    # time_step_int is the member name for tcgen ensembles (a file name prefix for EPS)
+    # time_step_int is the member name for tcgen/atcf ensembles (a file name prefix for EPS)
     time_step = convert_model_time_step_to_str(model_name, time_step_int)
 
     output_dir = model_data_folders_by_model_name[model_name]
@@ -918,7 +964,7 @@ def download_step(model_name, model_timestamp, time_step_int):
     # todo generalize:
 
     timestamp_prefix = f'{model_date}{model_hour}'
-    if "TCGEN" not in model_name:
+    if "TCGEN" not in model_name and "ATCF" not in model_name:
         params = params_by_model_name[model_name]
 
     if model_name == 'EPS-TCGEN':
@@ -944,6 +990,19 @@ def download_step(model_name, model_timestamp, time_step_int):
         url_folder = f'{model_url_folder}/{prefix}.{model_date}/{model_hour}/genesis/'
         # atcf gfdl file
         url_base_file_name = f'storms.{member_name}.atcf_gen.altg.{model_date}{model_hour}'
+        r = generate_curl_commands_gfdl(timestamp_prefix, url_folder, url_base_file_name, output_dir)
+    elif model_name in ['GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF']:
+        member_name = time_step
+        prefix = ''
+        if model_name == 'GEFS-ATCF':
+            prefix = 'gefs'
+        elif model_name == 'GEPS-ATCF':
+            prefix = 'cmce'
+        elif model_name == 'FNMOC-ATCF':
+            prefix = 'fens'
+        url_folder = f'{model_url_folder}/{prefix}.{model_date}/{model_hour}/tctrack/'
+        # track atcf unix file
+        url_base_file_name = f'{member_name}.t{model_hour}z.cyclone.trackatcfunix'
         r = generate_curl_commands_gfdl(timestamp_prefix, url_folder, url_base_file_name, output_dir)
     elif model_name == 'GFS':
         url_folder = f'{model_url_folder}/gfs.{model_date}/{model_hour}/atmos/'
@@ -985,7 +1044,7 @@ def download_model_run(model_name, model_timestamp):
     none_could_download = False
     r = 0
     if steps_missing:
-        # time_step_int is a str for tcgen ensembles
+        # time_step_int is a str for tcgen/atcf ensembles
         for time_step_int in steps_missing:
             if not have_enough_disk_space():
                 print_level(1, "Fatal error: Exiting since disk space is below the minimum set.")
@@ -1043,7 +1102,7 @@ def download_thread(model_names):
                         # get the next one after backing off
                         if model_timestamp not in complete_model_runs[model_name]:
                             complete_model_runs[model_name].append(model_timestamp)
-                        if model_name in ['GEFS-TCGEN', 'GEPS-TCGEN', 'FNMOC-TCGEN']:
+                        if model_name in ['GEFS-TCGEN', 'GEPS-TCGEN', 'FNMOC-TCGEN', 'GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF']:
                             # create the flag directory 'COMPLETE' for completed folders in TCGEN (NON EPS)
                             model_date = datetime.strftime(model_timestamp, '%Y%m%d')
                             model_hour = datetime.strftime(model_timestamp, '%H')
