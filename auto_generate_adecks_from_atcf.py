@@ -105,7 +105,7 @@ def process_atcf_data_from_trackers():
     print(f"{dt_str} UTC : Updating adecks.")
     for atcf_id, deck_str in decks_by_atcf_id_sorted.items():
         try:
-            file_path = os.path.join(adeck_folder, f'{atcf_id.lower()}.dat')
+            file_path = os.path.join(adeck_folder, f'a{atcf_id.lower()}.dat')
             mod_create_or_update = 'Updated'
             created = False
             if not os.path.exists(file_path):
