@@ -487,7 +487,10 @@ model_data_folders_by_model_name = {
     'EPS-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/eps-tcgen',
     'GEFS-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/gefs-tcgen',
     'GEPS-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/geps-tcgen',
-    'FNMOC-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/fnmoc-tcgen'
+    'FNMOC-TCGEN': '/home/db/metview/JRPdata/globalmodeldata/fnmoc-tcgen',
+    'GEFS-ATCF': '/home/db/metview/JRPdata/globalmodeldata/gefs-atcf',
+    'GEPS-ATCF': '/home/db/metview/JRPdata/globalmodeldata/geps-atcf',
+    'FNMOC-ATCF': '/home/db/metview/JRPdata/globalmodeldata/fnmoc-atcf',
 }
 
 intensity_models = {
@@ -526,12 +529,34 @@ intensity_models = {
     'AP30',
     'AVNI',
     'AVNO',
+    'AVNX',
+    "CC00",
     'CEM2',
     'CEMI',
     'CEMN',
     'CMC',
     'CMC2',
     'CMCI',
+    "CP01",
+    "CP02",
+    "CP03",
+    "CP04",
+    "CP05",
+    "CP06",
+    "CP07",
+    "CP08",
+    "CP09",
+    "CP10",
+    "CP11",
+    "CP12",
+    "CP13",
+    "CP14",
+    "CP15",
+    "CP16",
+    "CP17",
+    "CP18",
+    "CP19",
+    "CP20"
     'DRCL',
     'DSHP',
     'ECM2',
@@ -558,11 +583,32 @@ intensity_models = {
     'ICON',
     'IVCN',
     'LGEM',
+    "NC00",
     'NGX',
     'NGX2',
     'NGXI',
     'NNIB',
     'NNIC',
+    "NP01",
+    "NP02",
+    "NP03",
+    "NP04",
+    "NP05",
+    "NP06",
+    "NP07",
+    "NP08",
+    "NP09",
+    "NP10",
+    "NP11",
+    "NP12",
+    "NP13",
+    "NP14",
+    "NP15",
+    "NP16",
+    "NP17",
+    "NP18",
+    "NP19",
+    "NP20",
     'NVG2',
     'NVGI',
     'NVGM',
@@ -708,6 +754,116 @@ regional_models = ['HFSA', 'HFSB', 'HFAI', 'HFA2', 'HFBI', 'HFB2',
 official_models = ['OFCI', 'OFCL', 'BEST', 'TCVITALS']
 consensus_models = ['ICON', 'IVCN', 'RVCN', 'NNIC', 'NNIB', 'BEST', 'TCVITALS']
 
+# atcf models (don't include tcvitals, best track as that messes with statistics)
+gefs_atcf_members = [
+    'AVNX',
+    'AC00',
+    'AP01',
+    'AP02',
+    'AP03',
+    'AP04',
+    'AP05',
+    'AP06',
+    'AP07',
+    'AP08',
+    'AP09',
+    'AP10',
+    'AP11',
+    'AP12',
+    'AP13',
+    'AP14',
+    'AP15',
+    'AP16',
+    'AP17',
+    'AP18',
+    'AP19',
+    'AP20',
+    'AP21',
+    'AP22',
+    'AP23',
+    'AP24',
+    'AP25',
+    'AP26',
+    'AP27',
+    'AP28',
+    'AP29',
+    'AP30'
+]
+
+geps_atcf_members = [
+    "CMC",
+    "CC00",
+    "CP01",
+    "CP02",
+    "CP03",
+    "CP04",
+    "CP05",
+    "CP06",
+    "CP07",
+    "CP08",
+    "CP09",
+    "CP10",
+    "CP11",
+    "CP12",
+    "CP13",
+    "CP14",
+    "CP15",
+    "CP16",
+    "CP17",
+    "CP18",
+    "CP19",
+    "CP20"
+]
+
+fnmoc_atcf_members = [
+    "NGX",
+    "NC00",
+    "NP01",
+    "NP02",
+    "NP03",
+    "NP04",
+    "NP05",
+    "NP06",
+    "NP07",
+    "NP08",
+    "NP09",
+    "NP10",
+    "NP11",
+    "NP12",
+    "NP13",
+    "NP14",
+    "NP15",
+    "NP16",
+    "NP17",
+    "NP18",
+    "NP19",
+    "NP20"
+]
+all_atcf_ens_members = gefs_atcf_members + geps_atcf_members + fnmoc_atcf_members
+
+atcf_ens_models_by_ensemble = {
+    'GEFS-ATCF': gefs_atcf_members,
+    'GEPS-ATCF': geps_atcf_members,
+    'FNMOC-ATCF': fnmoc_atcf_members,
+    'ALL-ATCF': all_atcf_ens_members
+}
+atcf_ens_num_models_by_ensemble = {
+    'GEFS-ATCF': len(gefs_atcf_members),
+    'GEPS-ATCF': len(geps_atcf_members),
+    'FNMOC-ATCF': len(fnmoc_atcf_members),
+    'ALL-ATCF': len(all_atcf_ens_members)
+}
+atcf_ens_names_in_all = ['GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF']
+
+# Create a dictionary to map model names to ensemble names
+atcf_ens_model_name_to_ensemble_name = {}
+for list_name, lst in zip(['GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF'], [gefs_atcf_members, geps_atcf_members, fnmoc_atcf_members]):
+    for model_name in lst:
+        atcf_ens_model_name_to_ensemble_name[model_name] = list_name
+
+# where the atcf ens (unofficial) adeck files are (from auto_generate_adecks_from_atcf.py)
+adeck_folder = '/home/db/metview/JRPdata/globalmodeldata/adeck-ens-atcf'
+
 # tcgen models
 # Deterministic, control and perturbation members of the ensembles
 gefs_members = ['GFSO', 'AC00', 'AP01', 'AP02', 'AP03', 'AP04', 'AP05', 'AP06', 'AP07', 'AP08', 'AP09', 'AP10', 'AP11', 'AP12', 'AP13', 'AP14', 'AP15', 'AP16', 'AP17', 'AP18', 'AP19', 'AP20', 'AP21', 'AP22', 'AP23', 'AP24', 'AP25', 'AP26', 'AP27', 'AP28', 'AP29', 'AP30']
@@ -715,6 +871,7 @@ geps_members = ['CMC', 'CC00', 'CP01', 'CP02', 'CP03', 'CP04', 'CP05', 'CP06', '
 eps_members = ['ECHR', 'ECME', 'EE01', 'EE02', 'EE03', 'EE04', 'EE05', 'EE06', 'EE07', 'EE08', 'EE09', 'EE10', 'EE11', 'EE12', 'EE13', 'EE14', 'EE15', 'EE16', 'EE17', 'EE18', 'EE19', 'EE20', 'EE21', 'EE22', 'EE23', 'EE24', 'EE25', 'EE26', 'EE27', 'EE28', 'EE29', 'EE30', 'EE31', 'EE32', 'EE33', 'EE34', 'EE35', 'EE36', 'EE37', 'EE38', 'EE39', 'EE40', 'EE41', 'EE42', 'EE43', 'EE44', 'EE45', 'EE46', 'EE47', 'EE48', 'EE49', 'EE50']
 fnmoc_members = ['NGX', 'NC00', 'NP01', 'NP02', 'NP03', 'NP04', 'NP05', 'NP06', 'NP07', 'NP08', 'NP09', 'NP10', 'NP11', 'NP12', 'NP13', 'NP14', 'NP15', 'NP16', 'NP17', 'NP18', 'NP19', 'NP20']
 all_tcgen_members = gefs_members + geps_members + eps_members + fnmoc_members
+
 tcgen_models_by_ensemble = {
     'GEFS-TCGEN': gefs_members,
     'GEPS-TCGEN': geps_members,
@@ -917,13 +1074,15 @@ def download_file(url, local_filename):
     return dt_mod
 
 # Function to get the corresponding A-Deck and B-Deck files for the identified storms
-def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_bdeck):
+# adeck2 is the unofficial adeck from auto_generate_adecks_from_atcf
+def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do_update_bdeck):
     adeck = defaultdict(dict)
     bdeck = defaultdict(dict)
     year = datetime_utcnow().year
     most_recent_model_dates = defaultdict(lambda: datetime.min)
     most_recent_bdeck_dates = defaultdict(lambda: datetime.min)
     dt_mods_adeck = {}
+    dt_mods_adeck2 = {}
     dt_mods_bdeck = {}
 
     for storm_id in storms.keys():
@@ -1010,6 +1169,79 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_bdeck):
                 except Exception as e:
                     traceback.print_exc()
                     print(f"Failed to download {file_url}: {e}")
+        if do_update_adeck2:
+            storm_id = f"{basin_id}{storm_number}{year}"
+            global adeck_folder
+            local_filename = os.path.join(adeck_folder, f"a{storm_id.lower()}.dat")
+            try:
+                if not os.path.exists(local_filename):
+                    continue
+
+                dt_mod = os.path.getmtime(local_filename)
+                if not dt_mod:
+                    # no mtime (should not happen)
+                    print(f"Warning: Could not get modification time for: {local_filename}, skipping")
+                    continue
+
+                lines = []
+                with open(local_filename, 'r') as f:
+                    lines = f.readlines()
+
+                if lines is None or len(lines) == 0:
+                    continue
+
+                latest_date = datetime.min
+
+                # see if it is latest first before decoding
+                for line in lines:
+                    parts = line.split(',')
+                    if len(parts) > 4 and parts[3].strip() == '03':  # Model identifier '03'
+                        date_str = parts[2].strip()
+                        model_date = datetime.strptime(date_str, '%Y%m%d%H')
+                        if model_date > latest_date:
+                            latest_date = model_date
+
+                # now we know if we have data to update from source
+                if latest_date > most_recent_model_dates[storm_id]:
+                    most_recent_model_dates[storm_id] = latest_date
+                    for line in lines:
+                        parts = line.split(',')
+                        if len(parts) > 4 and parts[3].strip() == '03':  # TECH '03' are forecast models
+                            date_str = parts[2].strip()
+                            model_date = datetime.strptime(date_str, '%Y%m%d%H')
+                            if model_date == latest_date:
+                                ab_deck_line_dict = ab_deck_line_to_dict(line)
+                                model_id = ab_deck_line_dict['TECH']
+                                valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
+                                if storm_id not in adeck.keys():
+                                    adeck[storm_id] = {}
+                                if model_id not in adeck[storm_id].keys():
+                                    adeck[storm_id][model_id] = {}
+                                ab_deck_line_dict['basin'] = basin_id.upper()
+                                adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
+                            elif model_date >= (latest_date - timedelta(hours=6)):
+                                # GEPS/EPS/FNMOC members ATCF are usually later than GEFS (allow up to 6 hours late)
+                                ab_deck_line_dict = ab_deck_line_to_dict(line)
+                                model_id = ab_deck_line_dict['TECH']
+                                # allow late members
+                                valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
+                                if storm_id not in adeck.keys():
+                                    adeck[storm_id] = {}
+                                if model_id not in adeck[storm_id].keys():
+                                    adeck[storm_id][model_id] = {}
+                                ab_deck_line_dict['basin'] = basin_id.upper()
+                                adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
+
+                dt_mods_adeck2[local_filename] = dt_mod
+            except OSError as e:
+                traceback.print_exc()
+                print(f"OSError opening/reading file: {e}")
+            except UnicodeDecodeError as e:
+                traceback.print_exc()
+                print(f"UnicodeDecodeError: {e}")
+            except Exception as e:
+                traceback.print_exc()
+                print(f"Failed to read from {adeck_folder}: {e}")
         if do_update_bdeck:
             # Download B-Deck files
             for url in urls_b:
@@ -1058,7 +1290,7 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_bdeck):
                 except Exception as e:
                     traceback.print_exc()
                     print(f"Failed to download {file_url}: {e}")
-    return dt_mods_adeck, dt_mods_bdeck, adeck, bdeck
+    return dt_mods_adeck, dt_mods_adeck2, dt_mods_bdeck, adeck, bdeck
 
 def get_modification_date_from_header(response_headers):
     try:
@@ -1623,6 +1855,10 @@ class AnalysisDialog(tk.Toplevel):
             model_names = model_data_folders_by_model_name.keys()
             model_names = [model_name for model_name in model_names if model_name[-5:] != 'TCGEN']
             self.total_models = len(model_names)
+            self.ensemble_type = 'GLOBAL-DET'
+            self.lookup_model_name_ensemble_name = model_name_to_ensemble_name
+            # this won't work but is for redundancy, needs fixing
+            self.lookup_num_models_by_ensemble_name = tcgen_num_models_by_ensemble
         elif self.previous_selected_combo[-5:] == 'TCGEN':
             self.possible_ensemble = True
             self.total_models = len(tcgen_models_by_ensemble[self.previous_selected_combo])
@@ -1631,10 +1867,31 @@ class AnalysisDialog(tk.Toplevel):
                 self.total_ensembles = len(tcgen_models_by_ensemble.keys()) - 1
             else:
                 self.total_ensembles = 1
+
+            self.ensemble_type = 'TCGEN'
+            self.lookup_model_name_ensemble_name = model_name_to_ensemble_name
+            self.lookup_num_models_by_ensemble_name = tcgen_num_models_by_ensemble
+        elif self.previous_selected_combo[-4:] in 'ATCF':
+            # unofficial adeck (GEFS, GEPS, FNMOC)
+            # not handling "GEFS-MEMBERS" (no official a-track gefs members as no guarantee which members are present?)
+            self.possible_ensemble = True
+            self.total_models = len(atcf_ens_models_by_ensemble[self.previous_selected_combo])
+            if self.previous_selected_combo == 'ALL-ATCF':
+                # Should be 3 (FNMOC, GEFS, GEPS; don't count ALL)
+                self.total_ensembles = len(atcf_ens_num_models_by_ensemble.keys()) - 1
+            else:
+                self.total_ensembles = 1
+
+            self.ensemble_type = 'ATCF'
+            self.lookup_model_name_ensemble_name = atcf_ens_model_name_to_ensemble_name
+            self.lookup_num_models_by_ensemble_name = atcf_ens_num_models_by_ensemble
         else:
             # TODO: for now don't count ensembles for adeck data as we don't have a complete list of member names
             self.total_ensembles = 0
             self.possible_ensemble = False
+            self.ensemble_type = 'UNKNOWN'
+            # won't work for now until fixed in code
+            self.lookup_model_name_ensemble_name = model_name_to_ensemble_name
 
         self.basin_presets = ['EP', 'NA']
         self.basin_selected_preset = tk.StringVar()
@@ -2267,8 +2524,7 @@ class AnalysisDialog(tk.Toplevel):
 
         return colors_rgb
 
-    @staticmethod
-    def generate_freq_analysis_series(first=True, model_series_freq=None,
+    def generate_freq_analysis_series(self, first=True, model_series_freq=None,
                                       num_ensembles=0, pdf=False, cdf=False):
         # generate the pdf/cdf series for each ensemble
         # for the ALL-TCGEN case, equally weight the ensembles
@@ -2303,6 +2559,10 @@ class AnalysisDialog(tk.Toplevel):
                         if y_val > 0:
                             counts[model_name][x_val] += y_val
                             all_x.append(x_val)
+
+            if not all_x:
+                # no data
+                return [], [], []
 
             # aggregate model members
             counts_total_ens = {}
@@ -2394,11 +2654,15 @@ class AnalysisDialog(tk.Toplevel):
                             counts[model_name][x_val] += y_val
                             all_x.append(x_val)
 
+            if not all_x:
+                # no data
+                return [], [], []
+
             # aggregate model members
             counts_total_ens = {}
             for model_name, xy_dict in counts.items():
-                if model_name in model_name_to_ensemble_name:
-                    ens_names.add(model_name_to_ensemble_name[model_name])
+                if model_name in self.lookup_model_name_ensemble_name:
+                    ens_names.add(self.lookup_model_name_ensemble_name[model_name])
                 for x_val in sorted(xy_dict.keys()):
                     y_val = xy_dict[x_val]
                     if x_val not in counts_total_ens:
@@ -2412,9 +2676,10 @@ class AnalysisDialog(tk.Toplevel):
             if ens_names and len(ens_names) == 1:
                 ens_name = ens_names[0]
                 total_ens_name = ens_names[0]
-                total_num_models_in_ensemble = tcgen_num_models_by_ensemble[ens_name]
+                total_num_models_in_ensemble = self.lookup_num_models_by_ensemble_name[ens_name]
             else:
-                print("Error (bug): Wrong number of ensembles in analysis calculation")
+                print(ens_names)
+                print("Error (bug): Wrong number of ensembles in analysis calculation (expected 1)")
                 return [], [], []
 
             counts[total_ens_name] = counts_total_ens
@@ -2499,11 +2764,15 @@ class AnalysisDialog(tk.Toplevel):
                             counts[model_name][x_val] += y_val
                             all_x.append(x_val)
 
+            if not all_x:
+                # no data
+                return [], [], []
+
             ens_counts = {}
             # aggregate counts by ensemble
             for model_name, xy_dict in counts.items():
-                if model_name in model_name_to_ensemble_name:
-                    ens_name = model_name_to_ensemble_name[model_name]
+                if model_name in self.lookup_model_name_ensemble_name:
+                    ens_name = self.lookup_model_name_ensemble_name[model_name]
                     ens_names.add(ens_name)
                     if ens_name not in ens_counts:
                         ens_counts[ens_name] = {}
@@ -2516,10 +2785,23 @@ class AnalysisDialog(tk.Toplevel):
 
             if ens_names and len(ens_names) > 1:
                 # TODO: HARDCODED. FIX IF CHANGING ANALYSIS FROM ENSEMBLES OTHER THAN TCGEN
-                total_ens_name = 'ALL-TCGEN'
+                if self.ensemble_type == 'ATCF':
+                    total_ens_name = 'ALL-ATCF'
+                elif self.ensemble_type == 'TCGEN':
+                    total_ens_name = 'ALL-TCGEN'
+                else:
+                    total_ens_name = 'ALL'
+
             else:
-                print("Error (bug): Wrong number of ensembles in analysis calculation")
-                return [], [], []
+                # case when some ensembles in the super ensemble don't have data fitting the criteria
+                if self.ensemble_type == 'ATCF':
+                    total_ens_name = 'ALL-ATCF'
+                elif self.ensemble_type == 'TCGEN':
+                    total_ens_name = 'ALL-TCGEN'
+                else:
+                    print(ens_names)
+                    print("Error (bug): Wrong number of ensembles in analysis calculation (expected >1)")
+                    return [], [], []
 
             # first do pdf
             # now we need the pdf at each point (normalize)
@@ -2527,7 +2809,7 @@ class AnalysisDialog(tk.Toplevel):
 
             model_y_vals = set()
             for ens_name, xy_dict in ens_counts.items():
-                norm_by_num_models = tcgen_num_models_by_ensemble[ens_name]
+                norm_by_num_models = self.lookup_num_models_by_ensemble_name[ens_name]
                 x_vals = []
                 y_vals = []
                 for x_val in sorted(xy_dict.keys()):
@@ -2635,19 +2917,18 @@ class AnalysisDialog(tk.Toplevel):
         # Return the time series data as a tuple (x, y)
         return (model_name, datetimes, values,)
 
-    @staticmethod
     # get color index, num_ensembles, and num represented ensemble members
-    def get_color_index_by_model_name(model_names_set):
+    def get_color_index_by_model_name(self, model_names_set):
         ensemble_names = set()
         num_represented = {}
         for model_name in model_names_set:
-            if model_name[-5:] == 'TCGEN' or model_name == 'GLOBAL-DET':
+            if model_name[-5:] == 'TCGEN' or model_name == 'GLOBAL-DET' or model_name[-4:] == 'ATCF':
                 ensemble_name = model_name
-            elif model_name not in model_name_to_ensemble_name:
+            elif model_name not in self.lookup_model_name_ensemble_name:
                 # TODO: for now don't count ensembles for adeck data as we don't have a complete list of member names
                 continue
             else:
-                ensemble_name = model_name_to_ensemble_name[model_name]
+                ensemble_name = self.lookup_model_name_ensemble_name[model_name]
             ensemble_names.add(ensemble_name)
             if ensemble_name not in num_represented:
                 num_represented[ensemble_name] = 0
@@ -2666,8 +2947,8 @@ class AnalysisDialog(tk.Toplevel):
         model_color_indices = {}
         # Must sort since model_names_set is not sorted and the series/legend will be in sorted order
         for model_name in sorted(model_names_set):
-            if model_name not in model_name_to_ensemble_name:
-                if model_name[-5:] == 'TCGEN':
+            if model_name not in self.lookup_model_name_ensemble_name:
+                if model_name[-5:] == 'TCGEN' or model_name[-4:] == 'ATCF':
                     # PDF/CDF case with only 1 ensemble
                     last_i += 1
                     model_color_indices[model_name] = last_i
@@ -2678,7 +2959,7 @@ class AnalysisDialog(tk.Toplevel):
                     # TODO: for now don't count ensembles for adeck data as we don't have a complete list of member names
                     model_color_indices[model_name] = 0
             else:
-                model_color_indices[model_name] = ensemble_to_enum[model_name_to_ensemble_name[model_name]]
+                model_color_indices[model_name] = ensemble_to_enum[self.lookup_model_name_ensemble_name[model_name]]
 
         return model_color_indices, num_ensembles, num_represented
 
@@ -2885,8 +3166,11 @@ class AnalysisDialog(tk.Toplevel):
                                                                      model_series_freq=model_series_data,
                                                                      num_ensembles=1, cdf=True)
                     ens_names = [s[0] for s in series_data]
-                    ens_name = ens_names[-1]
-                    total_num_models_in_ensemble = tcgen_num_models_by_ensemble[ens_name]
+                    if self.ensemble_type == 'TCGEN' or self.ensemble_type == 'ATCF':
+                        ens_name = self.previous_selected_combo
+                    else:
+                        ens_name = ens_names[-1]
+                    total_num_models_in_ensemble = self.lookup_num_models_by_ensemble_name[ens_name]
                     ensemble_model_count_str = f'{self.total_ensembles} Ensemble ({total_num_models_in_ensemble} total members)'
                 else:
                     # ALL-TCGEN case? (HARCODED) CHANGE IF ENSEMBLE SOURCES CHANGE
@@ -2895,7 +3179,10 @@ class AnalysisDialog(tk.Toplevel):
                                                                                    num_ensembles=self.total_ensembles,
                                                                                    cdf=True)
                     ens_names = [s[0] for s in series_data]
-                    ens_name = ens_names[-1]
+                    if self.ensemble_type == 'TCGEN' or self.ensemble_type == 'ATCF':
+                        ens_name = self.previous_selected_combo
+                    else:
+                        ens_name = ens_names[-1]
                     # Don't include member count in super ensemble as this is misleading since we are equally weighting by ensemble
                     ensemble_model_count_str = f'{self.total_ensembles} total Ensembles'
             else:
@@ -2912,6 +3199,10 @@ class AnalysisDialog(tk.Toplevel):
             distinct_colors = self.generate_distinct_colors(num_colors)
             color_index_by_model_name, num_ensembles, num_represented = self.get_color_index_by_model_name(ens_names)
 
+            if not all_x:
+                # no data
+                return
+
             x_min = min(all_x)
             x_max = max(all_x)
 
@@ -2923,7 +3214,7 @@ class AnalysisDialog(tk.Toplevel):
                 else:
                     if not simplify_colors:
                         color_index = i
-                    elif model_name == 'ALL-TCGEN':
+                    elif model_name == 'ALL-TCGEN' or model_name == 'ALL-ATCF':
                         color_index = 0
                     else:
                         # all members of the ensemble get the same color
@@ -3079,8 +3370,11 @@ class AnalysisDialog(tk.Toplevel):
                                                                      model_series_freq=model_series_data,
                                                                      num_ensembles=1, pdf=True)
                     ens_names = [s[0] for s in series_data]
-                    ens_name = ens_names[-1]
-                    total_num_models_in_ensemble = tcgen_num_models_by_ensemble[ens_name]
+                    if self.ensemble_type == 'TCGEN' or self.ensemble_type == 'ATCF':
+                        ens_name = self.previous_selected_combo
+                    else:
+                        ens_name = ens_names[-1]
+                    total_num_models_in_ensemble = self.lookup_num_models_by_ensemble_name[ens_name]
                     ensemble_model_count_str = f'{self.total_ensembles} Ensemble ({total_num_models_in_ensemble} total members)'
                 else:
                     # ALL-TCGEN case? (HARCODED) CHANGE IF ENSEMBLE SOURCES CHANGE
@@ -3088,7 +3382,10 @@ class AnalysisDialog(tk.Toplevel):
                                                                      model_series_freq=model_series_data,
                                                                      num_ensembles=self.total_ensembles, pdf=True)
                     ens_names = [s[0] for s in series_data]
-                    ens_name = ens_names[-1]
+                    if self.ensemble_type == 'TCGEN' or self.ensemble_type == 'ATCF':
+                        ens_name = self.previous_selected_combo
+                    else:
+                        ens_name = ens_names[-1]
                     # Don't include member count in super ensemble as this is misleading since we are equally weighting by ensemble
                     ensemble_model_count_str = f'{self.total_ensembles} total Ensembles'
             else:
@@ -3103,6 +3400,10 @@ class AnalysisDialog(tk.Toplevel):
             num_colors = len(ens_names)
             distinct_colors = self.generate_distinct_colors(num_colors)
             color_index_by_model_name, num_ensembles, num_represented = self.get_color_index_by_model_name(ens_names)
+
+            if not all_x:
+                # no data
+                return
 
             x_min = min(all_x)
             x_max = max(all_x)
@@ -3183,7 +3484,7 @@ class AnalysisDialog(tk.Toplevel):
                 else:
                     if not simplify_colors:
                         color_index = i
-                    elif model_name == 'ALL-TCGEN':
+                    elif model_name == 'ALL-TCGEN' or model_name == 'ALL-ATCF':
                         color_index = 0
                     else:
                         # all members of the ensemble get the same color
@@ -5354,12 +5655,14 @@ class App:
     stale_urls['tcvitals'] = set()
     stale_urls['adeck'] = set()
     stale_urls['bdeck'] = set()
+    stale_adeck2 = False
     stale_genesis_data = dict()
     stale_genesis_data['global-det'] = []
     stale_genesis_data['tcgen'] = []
     # keys are the urls we will check for if it is stale, values are datetime objects
     dt_mods_tcvitals = {}
     dt_mods_adeck = {}
+    dt_mods_adeck2 = {}
     dt_mods_bdeck = {}
     # keys are the type of genesis data we will check for if data is stale ('global-det' or 'tcgen'), values are datetime objects
     dt_mods_genesis = {}
@@ -5692,6 +5995,12 @@ class App:
                 if new_dt_mod:
                     if new_dt_mod > old_dt_mod:
                         cls.stale_urls['adeck'] = cls.stale_urls['adeck'] | {url}
+        if cls.dt_mods_adeck2:
+            for local_filename, old_dt_mod in cls.dt_mods_adeck2.items():
+                new_dt_mod = os.path.getmtime(local_filename)
+                if new_dt_mod:
+                    if new_dt_mod > old_dt_mod:
+                        cls.stale_adeck2 = True
         if cls.dt_mods_bdeck:
             for url, old_dt_mod in cls.dt_mods_bdeck.items():
                 new_dt_mod = http_get_modification_date(url)
@@ -5844,12 +6153,12 @@ class App:
         cls.label_adeck_mode.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.adeck_selected_combobox = ttk.Combobox(cls.adeck_mode_frame, width=14, textvariable=cls.adeck_selected,
-                                                    state='readonly', style='Black.TCombobox')
+                                                    state='readonly', style='Black.TCombobox', height=20)
         cls.adeck_selected_combobox.pack(side=tk.LEFT, padx=5, pady=5)
         cls.adeck_selected_combobox['state'] = 'readonly'  # Set the state according to configure colors
         cls.adeck_selected_combobox['values'] = (
-        'ALL', 'STATISTICAL', 'GLOBAL', 'GEFS-MEMBERS', 'REGIONAL', 'CONSENSUS', 'OFFICIAL')
-        cls.adeck_selected_combobox.current(6)
+        'ALL', 'STATISTICAL', 'GLOBAL', 'GEFS-MEMBERS', 'GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF', 'ALL-ATCF', 'REGIONAL', 'CONSENSUS', 'OFFICIAL')
+        cls.adeck_selected_combobox.current(10)
         cls.adeck_previous_selected = cls.adeck_selected.get()
 
         cls.adeck_selected_combobox.bind("<<ComboboxSelected>>", cls.adeck_combo_selected_models_event)
@@ -7049,27 +7358,14 @@ class App:
             return global_models
         elif selected_text == 'GEFS-MEMBERS':
             return gefs_members_models
-        elif selected_text == 'STATISTICAL':
-            return statistical_models
-        elif selected_text == 'REGIONAL':
-            return regional_models
-        elif selected_text == 'CONSENSUS':
-            return consensus_models
-        elif selected_text == 'OFFICIAL':
-            return official_models
-        else:
-            # sanity check
-            return official_models
-
-    @classmethod
-    def get_selected_genesis_model_list(cls):
-        selected_text = cls.adeck_selected.get()
-        if selected_text == 'ALL':
-            return included_intensity_models
-        elif selected_text == 'GLOBAL':
-            return global_models
-        elif selected_text == 'GEFS-MEMBERS':
-            return gefs_members_models
+        elif selected_text == 'GEFS-ATCF':
+            return gefs_atcf_members
+        elif selected_text == 'GEPS-ATCF':
+            return geps_atcf_members
+        elif selected_text == 'FNMOC-ATCF':
+            return fnmoc_atcf_members
+        elif selected_text == 'ALL-ATCF':
+            return all_atcf_ens_members
         elif selected_text == 'STATISTICAL':
             return statistical_models
         elif selected_text == 'REGIONAL':
@@ -8112,10 +8408,10 @@ class App:
         updated_urls_bdeck = set()
 
         # logic for updating classes
-        do_update_tcvitals = do_update_adeck = do_update_bdeck = False
+        do_update_tcvitals = do_update_adeck = do_update_adeck2 = do_update_bdeck = False
         if not cls.have_deck_data:
             # first fetch of data
-            do_update_tcvitals = do_update_adeck = do_update_bdeck = True
+            do_update_tcvitals = do_update_adeck = do_update_adeck2 = do_update_bdeck = True
             if cls.deck_timer_id is not None:
                 cls.root.after_cancel(cls.deck_timer_id)
             cls.deck_timer_id = cls.root.after(TIMER_INTERVAL_MINUTES * 60 * 1000, cls.check_for_stale_deck_data)
@@ -8126,6 +8422,8 @@ class App:
                 do_update_tcvitals = True
             if cls.dt_mods_adeck and cls.stale_urls['adeck']:
                 do_update_adeck = True
+            if cls.dt_mods_adeck2 and cls.stale_adeck2:
+                do_update_adeck2 = True
             if cls.dt_mods_bdeck and cls.stale_urls['bdeck']:
                 do_update_bdeck = True
 
@@ -8140,15 +8438,25 @@ class App:
                     cls.recent_storms = new_recent_storms
         # Get A-Deck and B-Deck files
         if do_update_adeck or do_update_bdeck:
-            new_dt_mods_adeck, new_dt_mods_bdeck, new_adeck, new_bdeck = get_deck_files(cls.recent_storms, adeck_urls,
-                                                                                        bdeck_urls, do_update_adeck,
-                                                                                        do_update_bdeck)
+
+            new_dt_mods_adeck, new_dt_mods_adeck2, new_dt_mods_bdeck, new_adeck, new_bdeck = get_deck_files(
+                cls.recent_storms, adeck_urls, bdeck_urls, do_update_adeck, do_update_adeck2, do_update_bdeck)
+
             if new_dt_mods_adeck and do_update_adeck:
                 old_dt_mods = copy.deepcopy(cls.dt_mods_adeck)
                 cls.dt_mods_adeck.update(new_dt_mods_adeck)
                 updated_urls_adeck = diff_dicts(old_dt_mods, cls.dt_mods_adeck)
                 if updated_urls_adeck:
                     cls.adeck = new_adeck
+
+            if new_dt_mods_adeck2 and do_update_adeck2:
+                old_dt_mods = copy.deepcopy(cls.dt_mods_adeck2)
+                cls.dt_mods_adeck2.update(new_dt_mods_adeck2)
+                updated_files_adeck2 = diff_dicts(old_dt_mods, cls.dt_mods_adeck2)
+                if updated_files_adeck2:
+                    # the official adeck and unofficial adeck are combined so this if fine
+                    cls.adeck = new_adeck
+
             if new_dt_mods_bdeck and do_update_bdeck:
                 old_dt_mods = copy.deepcopy(cls.dt_mods_bdeck)
                 cls.dt_mods_bdeck.update(new_dt_mods_bdeck)
@@ -8156,13 +8464,14 @@ class App:
                 if updated_urls_bdeck:
                     cls.bdeck = new_bdeck
 
-        if cls.dt_mods_tcvitals or cls.dt_mods_adeck or cls.dt_mods_bdeck:
+        if cls.dt_mods_tcvitals or cls.dt_mods_adeck or dt_mods_adeck2 or cls.dt_mods_bdeck:
             # at least something was downloaded
             cls.have_deck_data = True
 
         cls.stale_urls['tcvitals'] = cls.stale_urls['tcvitals'] - set(updated_urls_tcvitals)
         cls.stale_urls['adeck'] = cls.stale_urls['adeck'] - set(updated_urls_adeck)
         cls.stale_urls['bdeck'] = cls.stale_urls['bdeck'] - set(updated_urls_bdeck)
+        cls.stale_adeck2 = False
         cls.update_reload_button_color_for_deck()
 
     @classmethod
@@ -8505,9 +8814,9 @@ class App:
             SelectionLoops.changed_extent()
             cls.update_selection_info_label()
             cls.measure_tool.changed_extent()
-            cls.redraw_fig_canvas()
+            cls.redraw_fig_canvas(stale_bg=True)
             cls.rvor_labels_new_extent()
-            cls.redraw_fig_canvas()
+            cls.redraw_fig_canvas(stale_bg=True)
 
         elif step_zoom:
             extent = cls.ax.get_extent()
@@ -8548,9 +8857,9 @@ class App:
             SelectionLoops.changed_extent()
             cls.update_selection_info_label()
             cls.measure_tool.changed_extent()
-            cls.redraw_fig_canvas()
+            cls.redraw_fig_canvas(stale_bg=True)
             cls.rvor_labels_new_extent()
-            cls.redraw_fig_canvas()
+            cls.redraw_fig_canvas(stale_bg=True)
 
         # elif cls.zoom_rect and (None not in cls.zoom_rect) and len(cls.zoom_rect) == 4:
         # 2d checks if valid rect and that x's aren't close and y's aren't close
@@ -8618,9 +8927,9 @@ class App:
             SelectionLoops.changed_extent()
             cls.update_selection_info_label()
             cls.measure_tool.changed_extent()
-            cls.redraw_fig_canvas()
+            cls.redraw_fig_canvas(stale_bg=True)
             cls.rvor_labels_new_extent()
-            cls.redraw_fig_canvas()
+            cls.redraw_fig_canvas(stale_bg=True)
 
     @classmethod
     def zoom_out(cls, max_zoom=False, step_zoom=False):
@@ -8678,9 +8987,9 @@ class App:
                 SelectionLoops.changed_extent()
                 cls.update_selection_info_label()
                 cls.measure_tool.changed_extent()
-                cls.redraw_fig_canvas()
+                cls.redraw_fig_canvas(stale_bg=True)
                 cls.rvor_labels_new_extent()
-                cls.redraw_fig_canvas()
+                cls.redraw_fig_canvas(stale_bg=True)
 
         else:
             # Define zoom factor or step size
@@ -8715,9 +9024,9 @@ class App:
                 cls.update_selection_info_label()
                 # do measure last as we are going to remove and redraw it
                 cls.measure_tool.changed_extent()
-                cls.redraw_fig_canvas()
+                cls.redraw_fig_canvas(stale_bg=True)
                 cls.rvor_labels_new_extent()
-                cls.redraw_fig_canvas()
+                cls.redraw_fig_canvas(stale_bg=True)
 
     @classmethod
     def zoom_to_basin_dialog(cls, event=None):
