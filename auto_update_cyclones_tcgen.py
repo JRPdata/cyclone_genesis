@@ -45,7 +45,9 @@ gfdl_basin_to_atcf_basin = {
 }
 
 # GFDL data has a warm core flag; this prunes any disturbances (points) BEFORE the time criteria is considered
-prune_disturbances_without_warm_core = True
+# If set, this should exclude tracking of points belonging to subtropical cyclones (and possibly cyclones with points only hovering between tropical and subtropical)
+# If not set, we will use the CPS parameters to determine if it is subtropical to allow its inclusion (GFDL only, not EPS which doesn't have the CPS params)
+prune_disturbances_without_warm_core = False
 
 # Cache size for get_basin_name_from_lat_lon (use a power of 2)
 # It is number of entries, not bytes; this may need to be made smaller if run out of memory
@@ -1220,6 +1222,8 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
                     'cps_b': float(np.nan),
                     'cps_vtl': float(np.nan),
                     'cps_vtu': float(np.nan),
+                    'tropical': 'Unknown',
+                    'subtropical': 'Unknown',
                     'warm_core': 'Unknown',
                     'storm_direction': float(np.nan),
                     'storm_speed': float(np.nan),
@@ -1251,14 +1255,35 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
                 else:
                     closed_isobar_delta = float(np.nan)
 
+                subtropical = 'Unknown'
+                tropical = 'Unknown'
+                cps_b = float(row['Phase_Space_Parameter_B'])
+                cps_vtl = float(row['Thermal_Wind_Lower_Troposphere'])
+                cps_vtu = float(row['Thermal_Wind_Upper_Troposphere'])
+
+                if cps_b < 10 and cps_vtl > 0 and cps_vtu <= 0:
+                    subtropical = 'True'
+                else:
+                    subtropical = 'False'
+                if cps_b < 10 and cps_vtl > 0 and cps_vtu > 0:
+                    tropical = 'True'
+                else:
+                    tropical = 'False'
+
                 warm_core = 'Unknown'
+
                 if row['Warm_Core_Presence']:
                     if row['Warm_Core_Presence'] == 'Y':
                         warm_core = 'True'
                     elif row['Warm_Core_Presence'] == 'N':
                         warm_core = 'False'
+
                         if prune_disturbances_without_warm_core:
                             criteria = False
+                        else:
+                            # check if it is a subtropical point
+                            if subtropical == 'False':
+                                criteria = False
 
                 # Prune disturbances by warm core and MSLP
                 # For MSLP ave to have at least 2 hPa difference between storm MSLP and POUTER
@@ -1304,8 +1329,10 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
                     'rmw': float(np.round(row['Radius_Max_Wind'], 0)),
                     'cps_b': float(np.round(row['Phase_Space_Parameter_B'], round_float_places)),
                     'cps_vtl': float(np.round(row['Thermal_Wind_Lower_Troposphere'], round_float_places)),
-                    'cps_vtu': float(np.round(row['Thermal_Wind_Lower_Troposphere'], round_float_places)),
+                    'cps_vtu': float(np.round(row['Thermal_Wind_Upper_Troposphere'], round_float_places)),
                     'warm_core': warm_core,
+                    'tropical' : tropical,
+                    'subtropical': subtropical,
                     'storm_direction': float(np.round(row['Storm_Moving_Direction'], round_float_places)),
                     'storm_speed': float(np.round(row['Storm_Moving_Speed'], round_float_places)),
                     wind_radii_col_name: wind_radii,
