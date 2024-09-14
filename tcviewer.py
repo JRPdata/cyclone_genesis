@@ -1432,6 +1432,23 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
             if not ensemble_init_times:
                 continue
 
+            # for tcgen case, handle case when no predictions from a member but have a complete ensemble
+            if tcgen_ensemble:
+                cursor.execute(
+                    f'SELECT init_date FROM ens_status WHERE ensemble_name = ? AND completed = 1 ORDER BY init_date DESC LIMIT 1',
+                    (ensemble_name, ))
+                results = cursor.fetchall()
+                ens_is_completed = 0
+                if results:
+                    for row in results:
+                        ens_init_date = row[0]
+                        if ens_init_date:
+                            if ens_init_date not in ensemble_init_times:
+                                if ens_init_date > max(ensemble_init_times):
+                                    # latest complete ensemble has no predictions from a member
+                                    # add the latest date so we can prune the old models for it eventually below
+                                    ensemble_init_times.add(ens_init_date)
+
             num_init_time_ens_is_complete = 0
             init_complete_times = set()
             for ensemble_init_time in ensemble_init_times:
@@ -1447,11 +1464,13 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
                 if ens_is_completed:
                     init_complete_times.add(ensemble_init_time)
 
-                ensemble_completed_time = max(ensemble_completed_times_by_init_date[ensemble_init_time])
                 if ensemble_name not in ensemble_completed_times:
                     ensemble_completed_times[ensemble_name] = []
 
-                ensemble_completed_times[ensemble_name].append(ensemble_completed_time)
+                if ensemble_init_time in ensemble_completed_times_by_init_date:
+                    ensemble_completed_time = max(ensemble_completed_times_by_init_date[ensemble_init_time])
+                    ensemble_completed_times[ensemble_name].append(ensemble_completed_time)
+
                 num_init_time_ens_is_complete += int(ens_is_completed)
 
             if num_init_time_ens_is_complete == 1 and len(ensemble_init_times) == 1:
@@ -1486,6 +1505,7 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
                     if model_ens_name and model_ens_name == ensemble_name:
                         if model_ens_name in completed_ensembles:
                             all_retrieved_data[i]['in_complete_ensemble'] = True
+                        # max ens init time not set right for no prediction ensemble (FNMOC)
                         if tc_candidate['model_timestamp'] != max_ens_init_time:
                             all_retrieved_data[i]['old_ensemble_member'] = True
                         else:
@@ -1509,7 +1529,7 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
             conn.close()
 
     # completed times are datetimes while init times are strings
-    # earliest_recent_ensemble_init_times denotes the earliest member init time among all most recent members' init times
+    # earliest_recent_ensemble_init_times denotes the earliest member init time among all most recent members' init times (or if its an empty ensemble last complete run time)
     return model_init_times, earliest_recent_ensemble_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, all_retrieved_data
 
 # get list of completed TC candidates
@@ -1966,6 +1986,11 @@ class AnalysisDialog(tk.Toplevel):
 
             self.min_max_presets_by_preset_and_basin_and_analysis[intensity_range_name] = basin_dicts
 
+        self.warm_core_selected = tk.StringVar()
+        self.warm_core_previous_selected = None
+        self.tc_phase_selected = tk.StringVar()
+        self.tc_phase_previous_selected = None
+
         self.cdf_selected_analysis = tk.StringVar()
         self.cdf_previous_selected = None
         self.cdf_preset_selected = tk.StringVar()
@@ -2166,10 +2191,48 @@ class AnalysisDialog(tk.Toplevel):
         self.tz_combobox.bind("<<ComboboxSelected>>", self.combo_selected_tz_event)
         self.tz_combobox.grid(row=r, column=1)
 
+        indent = "     "
+        # Flags on which include points to include (based on warm core flag, CPS paramaters)
+        # Always include 'Unknown' as EPS does not have these params)
+        r += 1
+        c = 0
+        ttk.Label(self.opt_frame, text="Include Points (All charts):", style='TLabel').grid(row=r, column=c, sticky='w')
+
+        r += 1
+        c = 0
+        ttk.Label(self.opt_frame, text=f"{indent}300-500 hPa, 1 K warm core contour:", style='TLabel').grid(row=r, column=c, sticky='w')
+        c += 1
+        self.warm_core_combobox = ttk.Combobox(self.opt_frame, textvariable=self.warm_core_selected,
+                                              values=['Any', 'Warm Core', 'Cold Core'],
+                                              width=15, state='readonly', style="Black.TCombobox")
+        # DEFAULT: Any
+        self.warm_core_combobox.current(0)
+        self.warm_core_previous_selected = self.warm_core_selected.get()
+        self.warm_core_combobox.bind("<<ComboboxSelected>>", self.combo_selected_warm_core_event)
+        self.warm_core_combobox.grid(row=r, column=c, sticky='w')
+        c += 1
+
+        r += 1
+        c = 0
+        ttk.Label(self.opt_frame, text=f"{indent}Phase (CPS):", style='TLabel').grid(row=r, column=c, sticky='w')
+        c += 1
+        self.tc_phase_combobox = ttk.Combobox(self.opt_frame, textvariable=self.tc_phase_selected,
+                                           values=['Any', 'Tropical/Subtropical', 'Tropical', 'Subtropical'],
+                                           width=25, state='readonly', style="Black.TCombobox")
+        # DEFAULT: Any
+        self.tc_phase_combobox.current(0)
+        self.tc_phase_previous_selected = self.tc_phase_selected.get()
+        self.tc_phase_combobox.bind("<<ComboboxSelected>>", self.combo_selected_tc_phase_event)
+        self.tc_phase_combobox.grid(row=r, column=c, sticky='w')
+
+        r += 1
+        c = 0
+        ttk.Label(self.opt_frame, text="Include Points (PDF/CDF charts):", style='TLabel').grid(row=r, column=c, sticky='w')
+
         # Preset that controls PDF/CDF Min/Min Combobox Preset values
         r += 1
         c = 0
-        ttk.Label(self.opt_frame, text="Basin Preset:", style='TLabel').grid(row=r, column=c, sticky='w')
+        ttk.Label(self.opt_frame, text=f"{indent}Basin Preset:", style='TLabel').grid(row=r, column=c, sticky='w')
         self.basin_combobox = ttk.Combobox(self.opt_frame, textvariable=self.basin_selected_preset,
                                          values=self.basin_presets,
                                          width=5, state='readonly', style="Black.TCombobox")
@@ -2182,7 +2245,7 @@ class AnalysisDialog(tk.Toplevel):
         # PDF Options
         r += 1
         c = 0
-        ttk.Label(self.opt_frame, text="PDF Analysis:", style='TLabel').grid(row=r, column=c, sticky='w')
+        ttk.Label(self.opt_frame, text=f"{indent}PDF Analysis:", style='TLabel').grid(row=r, column=c, sticky='w')
         self.pdf_combobox = ttk.Combobox(self.opt_frame, textvariable=self.pdf_selected_analysis, values=self.pdf_analyses,
                                         width=50, state='readonly', style="Black.TCombobox")
         c += 1
@@ -2193,7 +2256,7 @@ class AnalysisDialog(tk.Toplevel):
 
         r += 1
         c = 0
-        ttk.Label(self.opt_frame, text="PDF Min/Max Preset:", style='TLabel').grid(row=r, column=c, sticky='w')
+        ttk.Label(self.opt_frame, text=f"{indent}PDF Min/Max Preset:", style='TLabel').grid(row=r, column=c, sticky='w')
         self.pdf_preset_combobox = ttk.Combobox(self.opt_frame, textvariable=self.pdf_preset_selected,
                                          values=self.intensity_preset_names,
                                          width=10, state='readonly', style="Black.TCombobox")
@@ -2214,7 +2277,7 @@ class AnalysisDialog(tk.Toplevel):
         # CDF Options
         r += 1
         c = 0
-        ttk.Label(self.opt_frame, text="CDF Analysis:", style='TLabel').grid(row=r, column=c, sticky='w')
+        ttk.Label(self.opt_frame, text=f"{indent}CDF Analysis:", style='TLabel').grid(row=r, column=c, sticky='w')
         self.cdf_combobox = ttk.Combobox(self.opt_frame, textvariable=self.cdf_selected_analysis,
                                          values=self.cdf_analyses,
                                          width=50, state='readonly', style="Black.TCombobox")
@@ -2226,7 +2289,7 @@ class AnalysisDialog(tk.Toplevel):
 
         r += 1
         c = 0
-        ttk.Label(self.opt_frame, text="CDF Min/Max Preset:", style='TLabel').grid(row=r, column=c, sticky='w')
+        ttk.Label(self.opt_frame, text=f"{indent}CDF Min/Max Preset:", style='TLabel').grid(row=r, column=c, sticky='w')
         self.cdf_preset_combobox = ttk.Combobox(self.opt_frame, textvariable=self.cdf_preset_selected,
                                                 values=self.intensity_preset_names,
                                                 width=10, state='readonly', style="Black.TCombobox")
@@ -2386,12 +2449,6 @@ class AnalysisDialog(tk.Toplevel):
         self.update_idletasks()  # Force update after centering
         self.parent.update_idletasks()  # Force update after centering
 
-    def combo_selected_tz_event(self, event):
-        current_value = self.tz_combobox.get()
-        if current_value != self.tz_previous_selected:
-            self.tz_previous_selected = current_value
-            self.update_all_charts()
-
     def combo_selected_basin_event(self, event):
         current_value = self.basin_combobox.get()
         if current_value != self.basin_previous_selected:
@@ -2425,6 +2482,24 @@ class AnalysisDialog(tk.Toplevel):
         if current_value != self.pdf_preset_previous_selected:
             self.pdf_preset_previous_selected = current_value
             self.update_opt_preset_min_max(pdf=True)
+
+    def combo_selected_tc_phase_event(self, event):
+        current_value = self.tc_phase_combobox.get()
+        if current_value != self.tc_phase_previous_selected:
+            self.tc_phase_previous_selected = current_value
+            self.update_all_charts()
+
+    def combo_selected_tz_event(self, event):
+        current_value = self.tz_combobox.get()
+        if current_value != self.tz_previous_selected:
+            self.tz_previous_selected = current_value
+            self.update_all_charts()
+
+    def combo_selected_warm_core_event(self, event):
+        current_value = self.warm_core_combobox.get()
+        if current_value != self.warm_core_previous_selected:
+            self.warm_core_previous_selected = current_value
+            self.update_all_charts()
 
     # convert it to native (strip tz) for easier charting
     def convert_to_selected_timezone(self, dt, timezone_str):
@@ -2889,6 +2964,36 @@ class AnalysisDialog(tk.Toplevel):
         if tc_candidate is None:
             return None
 
+        # exclude points based on inclusion options
+        exclusively_include_any_warm_or_cold_core = False
+        exclusively_include_warm_core = False
+        exclusively_include_cold_core = False
+        if self.warm_core_previous_selected == 'Any':
+            exclusively_include_any_warm_or_cold_core = True
+        elif self.warm_core_previous_selected == 'Warm Core':
+            exclusively_include_warm_core = True
+        elif self.warm_core_previous_selected == 'Cold Core':
+            exclusively_include_cold_core = True
+
+        # Any would also include extratropical/frontal/etc... ?
+        exclusively_include_any_cps = False
+        exclusively_include_tropical_or_subtropical = False
+        exclusively_include_tropical = False
+        exclusively_include_subtropical = False
+        if self.tc_phase_previous_selected == 'Any':
+            exclusively_include_any_cps = True
+        elif self.tc_phase_previous_selected == 'Tropical/Subtropical':
+            exclusively_include_tropical_or_subtropical = True
+        elif self.tc_phase_previous_selected == 'Tropical':
+            exclusively_include_tropical = True
+        elif self.tc_phase_previous_selected == 'Subtropical':
+            exclusively_include_subtropical = True
+
+        if exclusively_include_any_warm_or_cold_core and exclusively_include_any_cps:
+            filter_by_phase = False
+        else:
+            filter_by_phase = True
+
         # Extract and convert datetimes
         datetimes = [
             self.convert_to_selected_timezone(tc['valid_time'], self.tz_previous_selected) for
@@ -2898,19 +3003,85 @@ class AnalysisDialog(tk.Toplevel):
 
         # Extract dependent variable values
         try:
-            values = [tc[dependent_variable] for tc in tc_candidate]
-        except:
-            values = None
+            filtered_values = []
+            filtered_datetimes = []
+            for tc, dt in zip(tc_candidate, datetimes):
+                exclude = False
+                if filter_by_phase:
+                    # for Unknowns we skip the exclusion
 
-        if values is not None:
-            filtered_values = [val for val, dt in zip(values, datetimes) if val is not None]
-            filtered_datetimes = [dt for val, dt in zip(values, datetimes) if val is not None]
+                    if 'warm_core' not in tc or tc['warm_core'] == 'Unknown':
+                        skip_exclusion_by_warm_core = True
+                    else:
+                        skip_exclusion_by_warm_core = False
+
+                    if 'tropical' not in tc or 'subtropical' not in tc or \
+                        tc['tropical'] == 'Unknown' or tc['subtropical'] == 'Unknown':
+                        skip_exclusion_by_cps = True
+                    else:
+                        skip_exclusion_by_cps = False
+
+                    warm_core = False
+                    tropical = False
+                    subtropical = False
+
+                    if not skip_exclusion_by_warm_core and not exclusively_include_any_warm_or_cold_core:
+                        # 'Unknown' cases for EPS handled by skip_exclusion_* vars
+                        if tc['warm_core'] == 'True':
+                            warm_core = True
+                        else:
+                            warm_core = False
+                        if tc['tropical'] == 'True':
+                            tropical = True
+                        else:
+                            tropical = False
+
+                    if not skip_exclusion_by_warm_core and not exclusively_include_any_warm_or_cold_core:
+                        print("check warm")
+                        if exclusively_include_warm_core:
+                            print("warm", warm_core)
+                            if not warm_core:
+                                exclude = True
+                        elif exclusively_include_cold_core:
+                            print("cold", warm_core)
+                            if warm_core:
+                                exclude = True
+
+                    if not skip_exclusion_by_cps and not exclusively_include_any_cps:
+                        print("check tropi")
+                        if tc['tropical'] == 'True':
+                            tropical = True
+                        else:
+                            tropical = False
+                        if tc['subtropical'] == 'True':
+                            subtropical = True
+                        else:
+                            subtropical = False
+
+                    if not skip_exclusion_by_cps and not exclusively_include_any_cps:
+                        print("check sub")
+                        if exclusively_include_tropical_or_subtropical:
+                            if not (tropical or subtropical):
+                                exclude = True
+                        elif exclusively_include_tropical:
+                            if not tropical:
+                                exclude = True
+                        elif exclusively_include_subtropical:
+                            if not subtropical:
+                                exclude = True
+
+                if not exclude and dependent_variable in tc and tc[dependent_variable] is not None:
+                    filtered_values.append(tc[dependent_variable])
+                    filtered_datetimes.append(dt)
+
             if len(filtered_values) == 0:
-                filtered_values = None
-                filtered_datetimes = None
-            datetimes = filtered_datetimes
-            values = filtered_values
-        else:
+                values = None
+                datetimes = None
+            else:
+                values = filtered_values
+                datetimes = filtered_datetimes
+        except:
+            traceback.print_exc()
             values = None
             datetimes = None
 
@@ -6714,6 +6885,10 @@ class App:
 
         if cls.genesis_previous_selected != 'GLOBAL-DET':
             is_ensemble = True
+            if cls.genesis_previous_selected != 'ALL-TCGEN':
+                is_all_tcgen = False
+            else:
+                is_all_tcgen = True
         else:
             is_ensemble = False
 
@@ -6779,9 +6954,27 @@ class App:
                     if genesis_source_type != 'GLOBAL-DET':
                         model_dates[model_name] = model_timestamp.strftime('%d/%HZ')
 
+        # need to handle GLOBAL-DET case and TCGEN case
         # should match model cycle
-        most_recent_model_cycle = max(most_recent_model_timestamps.values())
-        oldest_model_cycle = min(most_recent_model_timestamps.values())
+        if is_ensemble:
+            # tcgen case
+            if is_all_tcgen:
+                most_recent_model_cycle = datetime.min
+                oldest_model_cycle = datetime.max
+                for ens_name, ens_init_time_str in earliest_recent_ensemble_init_times.items():
+                    ens_init_time = datetime.fromisoformat(ens_init_time_str)
+                    most_recent_model_cycle = max(most_recent_model_cycle, ens_init_time)
+                    oldest_model_cycle = min(oldest_model_cycle, ens_init_time)
+            else:
+                tcgen_ensemble = cls.genesis_previous_selected
+                ens_init_time_str = earliest_recent_ensemble_init_times[tcgen_ensemble]
+                ens_init_time = datetime.fromisoformat(ens_init_time_str)
+                most_recent_model_cycle = ens_init_time
+                oldest_model_cycle = ens_init_time
+        else:
+            most_recent_model_cycle = max(most_recent_model_timestamps.values())
+            oldest_model_cycle = min(most_recent_model_timestamps.values())
+
         start_of_day = oldest_model_cycle.replace(hour=0, minute=0, second=0, microsecond=0)
         valid_day = start_of_day.isoformat()
         # model_init_times, tc_candidates = get_tc_candidates_from_valid_time(now.isoformat())
@@ -6870,6 +7063,21 @@ class App:
                         candidate_info['closed_isobar_delta'] = candidate['closed_isobar_delta']
                     else:
                         candidate_info['closed_isobar_delta'] = None
+
+                    if 'warm_core' in candidate:
+                        candidate_info['warm_core'] = candidate['warm_core']
+                    else:
+                        candidate_info['warm_core'] = 'Unknown'
+
+                    if 'tropical' in candidate:
+                        candidate_info['tropical'] = candidate['tropical']
+                    else:
+                        candidate_info['tropical'] = 'Unknown'
+
+                    if 'subtropical' in candidate:
+                        candidate_info['subtropical'] = candidate['subtropical']
+                    else:
+                        candidate_info['subtropical'] = 'Unknown'
 
                     if prev_lon:
                         prev_lon_f = float(prev_lon)
