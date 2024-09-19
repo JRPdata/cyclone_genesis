@@ -8165,49 +8165,6 @@ class App:
             # sanity check
             return official_models
 
-    # print track stats to terminal for hovered track
-    @classmethod
-    def print_track_stats(cls):
-        if len(cls.plotted_tc_candidates) == 0:
-            return
-
-        # note: point_index is a tuple of tc_index, tc_point_index
-        if len(cls.nearest_point_indices_overlapped) != 0:
-            # annotate storm extrema of previously selected
-            num, cursor_point_index = cls.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
-            if cursor_point_index is not None:
-                cursor_internal_id, tc_index, tc_point_index = cursor_point_index
-                internal_id, lat_lon_with_time_step_list = cls.plotted_tc_candidates[tc_index]
-                # print out statistics for track
-                storm_ace = 0.0
-                storm_vmax10m = 0.0
-                storm_vmax_time_earliest = None
-                disturbance_start_time = None
-                disturbance_end_time = None
-                earliest_named_time = None
-                for candidate_info in lat_lon_with_time_step_list:
-                    if disturbance_start_time is None:
-                        disturbance_start_time = candidate_info['valid_time']
-
-                    disturbance_end_time = candidate_info['valid_time']
-                    if 'vmax10m' in candidate_info:
-                        point_vmax = candidate_info['vmax10m']
-                        if point_vmax >= 34.0:
-                            storm_ace += pow(10, -4) * np.power(point_vmax, 2)
-                            if earliest_named_time is None:
-                                earliest_named_time = candidate_info['valid_time']
-                        if point_vmax > storm_vmax10m:
-                            storm_vmax_time_earliest = candidate_info['valid_time']
-                            storm_vmax10m = point_vmax
-
-                print(f"Disturbance (Internal ID: {internal_id}) (Model Track stats):")
-                print(f'    ACE (10^-4): {storm_ace:0.1f}')
-                print(f'    Peak VMax @ 10m: {storm_vmax10m:0.1f} kt')
-                print(f'    Disturbance start: {disturbance_start_time}')
-                print(f'    Disturbance end: {disturbance_end_time}')
-                if earliest_named_time is not None:
-                    print(f'    Earliest Named time: {earliest_named_time}')
-
     # hide selected, or show all if none selected
     @classmethod
     def hide_tc_candidate(cls):
@@ -8725,6 +8682,49 @@ class App:
             if model_cycle != cls.genesis_model_cycle_time:
                 cls.genesis_model_cycle_time_navigate = model_cycle
                 cls.redraw_map_with_data(model_cycle=model_cycle)
+
+    # print track stats to terminal for hovered track
+    @classmethod
+    def print_track_stats(cls):
+        if len(cls.plotted_tc_candidates) == 0:
+            return
+
+        # note: point_index is a tuple of tc_index, tc_point_index
+        if len(cls.nearest_point_indices_overlapped) != 0:
+            # annotate storm extrema of previously selected
+            num, cursor_point_index = cls.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
+            if cursor_point_index is not None:
+                cursor_internal_id, tc_index, tc_point_index = cursor_point_index
+                internal_id, lat_lon_with_time_step_list = cls.plotted_tc_candidates[tc_index]
+                # print out statistics for track
+                storm_ace = 0.0
+                storm_vmax10m = 0.0
+                storm_vmax_time_earliest = None
+                disturbance_start_time = None
+                disturbance_end_time = None
+                earliest_named_time = None
+                for candidate_info in lat_lon_with_time_step_list:
+                    if disturbance_start_time is None:
+                        disturbance_start_time = candidate_info['valid_time']
+
+                    disturbance_end_time = candidate_info['valid_time']
+                    if 'vmax10m' in candidate_info:
+                        point_vmax = candidate_info['vmax10m']
+                        if point_vmax >= 34.0:
+                            storm_ace += pow(10, -4) * np.power(point_vmax, 2)
+                            if earliest_named_time is None:
+                                earliest_named_time = candidate_info['valid_time']
+                        if point_vmax > storm_vmax10m:
+                            storm_vmax_time_earliest = candidate_info['valid_time']
+                            storm_vmax10m = point_vmax
+
+                print(f"Disturbance (Internal ID: {internal_id}) (Model Track stats):")
+                print(f'    ACE (10^-4): {storm_ace:0.1f}')
+                print(f'    Peak VMax @ 10m: {storm_vmax10m:0.1f} kt')
+                print(f'    Disturbance start: {disturbance_start_time}')
+                print(f'    Disturbance end: {disturbance_end_time}')
+                if earliest_named_time is not None:
+                    print(f'    Earliest Named time: {earliest_named_time}')
 
     @classmethod
     def redraw_app_canvas(cls):
