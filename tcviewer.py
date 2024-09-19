@@ -48,6 +48,17 @@
 #   RELEASE SHIFT WHEN END POINT POSITION SET. FREE TO ZOOM IN/OUT AFTERWARD
 
 ####### CONFIG
+# Process the wind radii data from TCGEN ensembles
+PROCESS_TCGEN_WIND_RADII = True
+PROCESS_TCGEN_WIND_RADII = False
+
+# how smooth (and also large) the (interpolated) 'cone' is
+# how often should the wind field be interpolated (in seconds)
+# every 10 minutes is fairly smooth
+# (used by WindField class)
+# to slow to interpret more than per hour currently
+INTERP_PERIOD_SECONDS = 3600
+
 # pressure statistics for NA, EP basins by likelihood of being categorized at that pressure (from cyclone-climatology notebook)
 # used by presets for Analysis
 output_cat_file_name = 'output_cat_values.json'
@@ -337,10 +348,23 @@ from shapely.geometry import LineString
 import geopandas as gpd
 
 # for selection loop tool
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, MultiPolygon
 from shapely.strtree import STRtree
 # for selection loop tool
 from matplotlib.patches import Polygon as MPLPolygon
+
+# for tcgen/ensemble WindField / cone
+from shapely.ops import unary_union
+from geographiclib.geodesic import Geodesic
+from matplotlib.path import Path
+from shapely.geometry import Point
+import antimeridian
+import pandas as pd
+from shapely.validation import make_valid
+# TODO: remove
+from shapely.errors import GEOSException
+from shapely import is_valid_reason
+
 
 # main app gui imports
 import tkinter as tk
@@ -422,6 +446,24 @@ try:
         raise ValueError("Houston-The Woodlands-Sugar Land, TX Metro Area not found in the shapefile")
     # Ensure the CRS matches that of the Cartopy map (PlateCarree)
     custom_gdf = houston_gdf.to_crs(ccrs.PlateCarree().proj4_init)
+except:
+    custom_gdf = None
+
+### plot Shanghai boundary
+# Load the shapefile using Geopandas
+# from gadm.org (china, level 2 shapefile)
+# shapefile_path = "tl_2023_us_cbsa/tl_2023_us_cbsa.shp"
+shapefile_path = 'gadm41_CHN_shp/gadm41_CHN_2.shp'
+
+try:
+    tmp_gdf = gpd.read_file(shapefile_path)
+    # Filter the GeoDataFrame to only include Shanghai
+    print(tmp_gdf.keys())
+    shanghai_gdf = tmp_gdf[tmp_gdf['NAME_1'] == 'Shanghai']
+    if shanghai_gdf.empty:
+        raise ValueError("Shanghai area not found in the shapefile")
+    # Ensure the CRS matches that of the Cartopy map (PlateCarree)
+    custom_gdf = shanghai_gdf.to_crs(ccrs.PlateCarree().proj4_init)
 except:
     custom_gdf = None
 
@@ -855,6 +897,10 @@ atcf_ens_num_models_by_ensemble = {
 }
 atcf_ens_names_in_all = ['GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF']
 
+# for statistics in case one of the ensembles is under maintenance (not reporting)
+# TODO: ADD BACK FNMOC WHEN WORKING AGAIN
+atcf_active_ensembles_all = ['GEFS-ATCF', 'GEPS-ATCF']
+
 # Create a dictionary to map model names to ensemble names
 atcf_ens_model_name_to_ensemble_name = {}
 for list_name, lst in zip(['GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF'], [gefs_atcf_members, geps_atcf_members, fnmoc_atcf_members]):
@@ -887,6 +933,11 @@ tcgen_num_models_by_ensemble = {
     'ALL-TCGEN': len(all_tcgen_members)
 }
 tcgen_names_in_all = ['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN']
+
+# for statistics in case one of the ensembles is under maintenance (not reporting)
+# TODO: ADD BACK FNMOC WHEN WORKING AGAIN
+tcgen_active_ensembles_all = ['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN']
+
 '''
 # Member counts of above
 GEFS-TCGEN : 32
@@ -1885,6 +1936,8 @@ class AnalysisDialog(tk.Toplevel):
             if self.previous_selected_combo == 'ALL-TCGEN':
                 # Should be 4 (EPS, FNMOC, GEFS, GEPS; don't count ALL)
                 self.total_ensembles = len(tcgen_models_by_ensemble.keys()) - 1
+                if len(tcgen_active_ensembles_all) != self.total_ensembles:
+                    self.total_ensembles = len(tcgen_active_ensembles_all)
             else:
                 self.total_ensembles = 1
 
@@ -1899,6 +1952,8 @@ class AnalysisDialog(tk.Toplevel):
             if self.previous_selected_combo == 'ALL-ATCF':
                 # Should be 3 (FNMOC, GEFS, GEPS; don't count ALL)
                 self.total_ensembles = len(atcf_ens_num_models_by_ensemble.keys()) - 1
+                if len(atcf_active_ensembles_all) != self.total_ensembles:
+                    self.total_ensembles = len(atcf_active_ensembles_all)
             else:
                 self.total_ensembles = 1
 
@@ -3048,7 +3103,6 @@ class AnalysisDialog(tk.Toplevel):
                                 exclude = True
 
                     if not skip_exclusion_by_cps and not exclusively_include_any_cps:
-                        print("check tropi")
                         if tc['tropical'] == 'True':
                             tropical = True
                         else:
@@ -3059,7 +3113,6 @@ class AnalysisDialog(tk.Toplevel):
                             subtropical = False
 
                     if not skip_exclusion_by_cps and not exclusively_include_any_cps:
-                        print("check sub")
                         if exclusively_include_tropical_or_subtropical:
                             if not (tropical or subtropical):
                                 exclude = True
@@ -5744,11 +5797,489 @@ class SortedCyclicEnumDict(OrderedDict):
         self._index = (self._index + 1) % len(self)
         return (idx + 1, key)
 
+# Helper class to calculate wind field geometries from wind radii (tcgen/ensemble wind radii)
+class WindField:
+    @staticmethod
+    # aggregate the points them by quadrant (pairs of vertices, each belonging to a connecting line)
+    def aggregate_points_by_quadrant(quad_poly_point_pairs):
+        quad_lines = [ [[ ], [ ], [ ]], [[ ], [ ], [ ]], [[ ], [ ], [ ]], [[ ], [ ], [ ]] ]
+        for j, quad_point_triple in enumerate(quad_poly_point_pairs):
+
+            for (step_dt, arc_start_point, arc_end_point) in quad_point_triple:
+                quad_lines[j][0].append(step_dt)
+                quad_lines[j][1].append(arc_start_point)
+                quad_lines[j][2].append(arc_end_point)
+
+        return quad_lines
+
+    @staticmethod
+    def aggregate_points_in_pairs(paths):
+        quad_poly_point_pairs = [[ ], [ ], [ ], [ ]]
+        last_current_point_paths = None
+        for step_dt, current_point_paths in paths.items():
+            # get the quadrant points that extend outwards forming the vertices for the arc
+            last_current_point_paths = current_point_paths
+            for k, current_quad_path in enumerate(current_point_paths):
+                quad_poly_point_pairs[k].append(
+                    [step_dt, current_quad_path[0][1], current_quad_path[0][4]])
+
+        return quad_poly_point_pairs
+
+    # approximate all Bezier curves in the Path
+    @staticmethod
+    def approximate_bezier_path(path, num_points=100):
+        """Approximates Bezier segments in a Path."""
+        vertices = []
+        i = 0
+        while i < len(path.vertices):
+            code = path.codes[i]
+            if code == Path.CURVE4:  # Handle cubic Bezier curves
+                if i + 3 < len(path.vertices):  # Ensure enough points for CURVE4
+                    p0 = path.vertices[i - 1]  # Start point
+                    p1, p2, p3 = path.vertices[i:i + 3]  # Two control points and the end point
+                    for t in np.linspace(0, 1, num_points):
+                        point = WindField.cubic_bezier(t, p0, p1, p2, p3)
+                        vertices.append(point)
+                    i += 3  # Move index past the control points and end point
+                else:
+                    #print(f"Warning: Not enough points for CURVE4 at index {i}")
+                    break
+            else:
+                vertices.append(path.vertices[i])  # For other path segments, just add the vertex
+            i += 1
+
+        return np.array(vertices)
+
+    @staticmethod
+    def concat_quads_and_connecting_paths(paths, connecting_paths):
+        combined_vertices = []
+        combined_codes = []
+        concat_paths = []
+        for path_dict in [paths, connecting_paths]:
+            for dt, quad_paths in path_dict.items():
+                for quad_path in quad_paths:
+                    vertices, codes = quad_path
+                    combined_vertices.extend(vertices)
+                    combined_codes.extend(codes)
+                    path = Path(vertices, codes)
+                    concat_paths.append(path)
+
+        return concat_paths
+
+    def construct_connecting_vertices(quad_lines):
+        # construct the connecting polys for each interpolated step and quadrant using the connecting lines
+        connecting_quad_poly_vertices = {}
+        # changed to NOT do a large path around the whole track, rather do small connecting polys for each interpolation
+        # this allows for (fine tuned) interpolation statistics (however much that adds given we are only using 6 hour wind radii)
+        for j, quad_line in enumerate(quad_lines):
+            for k in range(len(quad_line[0]) - 1):
+                end_idx = k
+                quad_dt_end = quad_line[0][end_idx]
+                quad_end_p1 = quad_line[1][end_idx]
+                quad_end_p2 = quad_line[2][end_idx]
+
+                start_idx = k+1
+                quad_dt_start = quad_line[0][start_idx]
+                quad_start_p1 = quad_line[1][start_idx]
+                quad_start_p2 = quad_line[2][start_idx]
+
+                # take middle of datetimes for connecting
+                time_diff = quad_dt_end - quad_dt_start
+
+                # calculate the middle time
+                quad_dt = quad_dt_start + time_diff / 2
+
+                if quad_dt not in connecting_quad_poly_vertices:
+                    connecting_quad_poly_vertices[quad_dt] = [[ ], [ ], [ ], [ ]]
+
+                poly = [quad_end_p1] + [quad_end_p2] + \
+                    [quad_start_p2] + [quad_start_p1] + \
+                    [quad_end_p1]
+
+                connecting_quad_poly_vertices[quad_dt][j].extend(poly)
+
+        return connecting_quad_poly_vertices
+
+    # interpolate points on a cubic Bezier curve
+    @staticmethod
+    def cubic_bezier(t, p0, p1, p2, p3):
+        """Parametric cubic Bezier curve equation."""
+        return (1 - t)**3 * p0 + 3 * (1 - t)**2 * t * p1 + 3 * (1 - t) * t**2 * p2 + t**3 * p3
+
+    # generate the path object for the connecting poly
+    @staticmethod
+    def generate_connecting_paths(connecting_quad_poly_vertices):
+        connecting_paths = {}
+        # connecting_quad_poly_vertices is a dict (by interpolated dt) of a list of polys (one per quadrant)
+        last_connecting_quad = None
+        for quad_dt, connecting_quads in connecting_quad_poly_vertices.items():
+            for k, connecting_quad in enumerate(connecting_quads):
+                num_points = len(connecting_quad)
+
+                if num_points > 1:
+                    codes = [Path.MOVETO] + ([Path.LINETO] * (num_points - 2)) + [Path.CLOSEPOLY]
+                    # Create the Path object
+                    last_connecting_quad = connecting_quad
+                    if quad_dt not in connecting_paths:
+                        connecting_paths[quad_dt] = [[ ], [ ], [ ], [ ]]
+
+                    connecting_paths[quad_dt][k] = (connecting_quad, codes)
+
+        return connecting_paths
+
+    @staticmethod
+    def generate_cone_path_from_paths(concat_paths):
+        # Approximate cubic Bezier curves in the path by generating intermediate points
+        # for each curve (Path.CURVE4) segment. This creates smooth paths by interpolating
+        # between control points. The result is a dense set of points that approximate
+        # all the curves in the path.
+
+        # For each path in concat_paths (which represent individual closed shapes),
+        # we approximate the Bezier curves and use the points to create Shapely Polygons.
+
+        # Using Shapely’s unary_union, we combine the polygons to get the outermost boundary
+        # (the "outline") that surrounds all the paths.
+
+        # Finally, we convert this outer boundary to a Matplotlib Path and display it
+
+        polygons = []
+        for path in concat_paths:
+            # 1. Approximate Bezier curves in the path
+            approx_vertices = WindField.approximate_bezier_path(path, num_points=100)
+
+            # 2. Create a Shapely Polygon for each interpolated closed path
+            polygons.append(Polygon(approx_vertices))
+
+        # 3. Find the union of all polygons (outermost boundary)
+        polys = []
+        for poly in polygons:
+            if poly and WindField.geometry_length(poly) > 2:
+                p_list = antimeridian.segment_shape(poly)
+                for p in p_list:
+                    po = Polygon(p)
+                    if p and WindField.geometry_length(po) > 2:
+                        polys.append(po)
+
+        try:
+            valid_polygons = [make_valid(polygon) for polygon in polys]
+            actual_polygons = []
+            for valid_geom in valid_polygons:
+                if isinstance(valid_geom, Polygon):
+                    #print("Valid Polygon")
+                    actual_polygons.append(valid_geom)
+                elif isinstance(valid_geom, MultiPolygon):
+                    #print("Valid MultiPolygon")
+                    actual_polygons.append(valid_geom)
+                else:
+                    pass
+
+            union_polygon = unary_union(actual_polygons)
+        except GEOSException:
+            print("# polygons:", len(actual_polygons))
+            union_polygon = []
+
+
+
+
+
+        # 4. Convert the exterior of the union polygon to a Matplotlib Path
+        if isinstance(union_polygon, Polygon):
+            outer_boundary_vertices = np.array(union_polygon.exterior.coords)
+        else:
+            outer_boundary_vertices = []
+            for polygon in union_polygon.geoms:
+                outer_boundary_vertices.extend(polygon.exterior.coords)
+            outer_boundary_vertices = np.array(outer_boundary_vertices)
+
+        num_points = len(outer_boundary_vertices)
+        if num_points > 1:
+            codes = [Path.MOVETO] + ([Path.LINETO] * (num_points - 2)) + [Path.CLOSEPOLY]
+        else:
+            codes = None
+
+        if codes:
+            outer_boundary_path = Path(outer_boundary_vertices, codes)
+        else:
+            outer_boundary_path = None
+
+        return outer_boundary_path
+
+    # https://gis.stackexchange.com/questions/119453/count-the-number-of-points-in-a-multipolygon-in-shapely
+    @staticmethod
+    def geometry_flatten(geom):
+        if hasattr(geom, 'geoms'):  # Multi<Type> / GeometryCollection
+            for g in geom.geoms:
+                yield from WindField.geometry_flatten(g)
+        elif hasattr(geom, 'interiors'):  # Polygon
+            yield geom.exterior
+            yield from geom.interiors
+        else:  # Point / LineString
+            yield geom
+
+    @staticmethod
+    def geometry_length(geom):
+        return sum(len(g.coords) for g in WindField.geometry_flatten(geom))
+
+    @staticmethod
+    def get_wind_radii_paths_and_gpds_for_steps(wind_radii_selected_list = [34, 50, 64], lat_lon_with_time_step_list = []):
+        # Assume ret_dict is your input dictionary
+        if lat_lon_with_time_step_list is None or len(lat_lon_with_time_step_list) == 0:
+            return None
+
+        model_name = lat_lon_with_time_step_list[0]['model_name']
+        #label model
+
+        ret_dict = WindField.interpolate_points_in_speed_list(wind_radii_selected_list, lat_lon_with_time_step_list)
+
+        ret_gpds = {}
+        for wind_radii_speed, (wind_radii_path, filler_path, outer_boundary_path) in ret_dict.items():
+            # Create a GeoDataFrame for each of the three paths
+            points = []
+            path_indices = []
+            for path_index, path_list in wind_radii_path.items():
+                for (vertices, codes) in path_list:
+                    real_path = Path(vertices, codes)
+                    approx_path = WindField.approximate_bezier_path(real_path, num_points=20)
+                    points.extend(approx_path)
+                    path_indices.extend([path_index] * len(approx_path))
+
+            geometry = [Point(x) for x in points]
+
+            if len(geometry) > 0:
+                wind_radii_gpd = gpd.GeoDataFrame(
+                    geometry=geometry,
+                    index=path_indices,
+                    columns=['geometry']
+                )
+
+                wind_radii_gpd['wind_radii_speed'] = wind_radii_speed
+                wind_radii_gpd['model_name'] = model_name
+                wind_radii_gpd['valid_time'] = wind_radii_gpd.index
+            else:
+                wind_radii_gpd = None
+
+            points = []
+            path_indices = []
+            for path_index, path_list in filler_path.items():
+                for (vertices, codes) in path_list:
+                    real_path = Path(vertices, codes)
+                    approx_path = WindField.approximate_bezier_path(real_path, num_points=20)
+                    points.extend(approx_path)
+                    path_indices.extend([path_index] * len(approx_path))
+
+            geometry = [Point(x) for x in points]
+
+            if len(geometry) > 0:
+                filler_gpd = gpd.GeoDataFrame(
+                    geometry=geometry,
+                    #index=wind_radii_path.keys(),
+                    index=path_indices,
+                    columns=['geometry']
+                )
+
+                filler_gpd['wind_radii_speed'] = wind_radii_speed
+                filler_gpd['model_name'] = model_name
+                filler_gpd['valid_time'] = filler_gpd.index
+            else:
+                filler_gpd = None
+
+            if outer_boundary_path is not None:
+                outer_boundary = WindField.approximate_bezier_path(outer_boundary_path, num_points = 100)
+                outer_boundary_gpd = gpd.GeoDataFrame(
+                    geometry=[Point(x) for x in outer_boundary],
+                    index=range(len(outer_boundary)),
+                    columns=['geometry']
+                )
+                outer_boundary_gpd['wind_radii_speed'] = wind_radii_speed
+                outer_boundary_gpd['model_name'] = model_name
+                outer_boundary_gpd['valid_time'] = None
+            else:
+                outer_boundary_gpd = None
+
+            # Store the GeoDataFrames in a dictionary
+            ret_gpds[wind_radii_speed] = [wind_radii_gpd, filler_gpd, outer_boundary_gpd]
+
+        # returns the dict of the 3 paths and the dict of the 3 gpds
+        return ret_dict, ret_gpds
+
+    @staticmethod
+    def interpolate_points_at_speed(wind_radii_speed, lat_lon_with_time_step_list):
+        geod = Geodesic.WGS84
+        quad_angles = list(zip([0, 90, 180, 270], ['NE', 'SE', 'SW', 'NW']))
+
+        # Create a Plate Carree projection
+        proj = ccrs.PlateCarree()
+
+        # paths representing Paths (interpolated polys) at interpolated times
+        paths = {}
+        for i, point in reversed(list(enumerate(lat_lon_with_time_step_list))):
+            wind_radii_key = f'wind_radii_{str(int(round(wind_radii_speed,0)))}'
+            current_point = point
+            if i > 0:
+                prev_point = lat_lon_with_time_step_list[i-1]
+            else:
+                prev_point = current_point
+
+            # Calculate the time difference (num steps to interpolate between points)
+            current_dt = current_point['valid_time']
+            prev_dt = prev_point['valid_time']
+            time_diff = round(
+                (current_dt - prev_dt).total_seconds() / INTERP_PERIOD_SECONDS, 0)
+
+            # Generate the interpolation steps (0 to 1 ratios)
+            step_ratios = np.linspace(0, 1, int(time_diff) + 1)
+
+            # Initialize the list of lists to store the interpolated values
+            interp_points = []
+
+            any_valid_wind = False
+            if wind_radii_key in current_point:
+                current_wind_radii = current_point[wind_radii_key]
+            else:
+                current_wind_radii = [0.0, 0.0, 0.0, 0.0]
+
+            if wind_radii_key in prev_point:
+                prev_wind_radii = prev_point[wind_radii_key]
+            else:
+                prev_wind_radii = [0.0, 0.0, 0.0, 0.0]
+
+            if prev_wind_radii != [0.0, 0.0, 0.0, 0.0] or current_wind_radii != [0.0, 0.0, 0.0, 0.0]:
+                any_valid_wind = True
+
+            last_step_ratio = step_ratios[-1]
+
+            # Calculate the intermediate point using geod.Direct
+            g = geod.Inverse(current_point['lat'], current_point['lon'], prev_point['lat'], prev_point['lon'])
+            azimuth = g['azi1']
+            distance = g['s12']
+
+            # Loop through each step and interpolate the wind radii values
+            for step_n, step_ratio in enumerate(step_ratios):
+                interpolated_wind_radii_values = [[], [], [], []]
+                for n in range(4):
+                    if current_wind_radii is not None and prev_wind_radii is not None:
+                        interpolated_wind_radii_values[n] = current_wind_radii[n] + (prev_wind_radii[n] - current_wind_radii[n]) * step_ratio
+
+                if step_ratio > 0:
+                    intermediate_point = geod.Direct(current_point['lat'], current_point['lon'], azimuth, distance * (step_ratio / last_step_ratio))
+
+                    interpolated_point = {
+                        'lon': intermediate_point['lon2'],
+                        'lat': intermediate_point['lat2'],
+                        wind_radii_key: interpolated_wind_radii_values,
+                        'any_valid_wind': any_valid_wind
+                    }
+                else:
+                    interpolated_point = {
+                        'lon': current_point['lon'],
+                        'lat': current_point['lat'],
+                        wind_radii_key: current_wind_radii,
+                        'any_valid_wind': any_valid_wind
+                    }
+
+                # subtract as we are doing it in reverse order
+                step_dt = current_dt - timedelta(seconds=INTERP_PERIOD_SECONDS * step_n)
+
+                interp_points.append((step_dt, interpolated_point))
+
+            for (step_dt, interp_point) in interp_points:
+                wind_radii = interp_point[wind_radii_key]
+                point_paths = []
+                if not interp_point['any_valid_wind'] or wind_radii is None:
+                    # skip when no wind field
+                    continue
+
+                for j, (angle, quad) in enumerate(quad_angles):
+                    # Calculate the radius in degrees for each direction
+                    if wind_radii[j] is not None and wind_radii[j] and wind_radii[j] > 0:
+                        try:
+                            radius = wind_radii[j]
+                            d = radius*4*(np.sqrt(2)-1)/3
+                        except:
+                            print('\n')
+                            print(wind_radii)
+                            print(j)
+                            print(wind_radii[j])
+                    else:
+                        d = 0
+                        radius = 0
+
+                    # bezier wedge (quarter circle) approximations for each quadrant
+                    result1 = geod.Direct(interp_point['lat'], interp_point['lon'], angle, radius)
+                    result2 = geod.Direct(interp_point['lat'], interp_point['lon'], angle+90, radius)
+                    control_point1 = geod.Direct(result1['lat2'], result1['lon2'], angle+90, d)
+                    control_point2 = geod.Direct(result2['lat2'], result2['lon2'], angle, d)
+                    vertices = [
+                        (interp_point['lon'], interp_point['lat']), # center
+                        (result1['lon2'], result1['lat2']), # clock wise arc in NEQ order
+                        (control_point1['lon2'], control_point1['lat2']),
+                        (control_point2['lon2'], control_point2['lat2']),
+                        (result2['lon2'], result2['lat2']),
+                        (interp_point['lon'], interp_point['lat']),  # back to center
+                    ]
+
+                    codes = [
+                        Path.MOVETO,  # center
+                        Path.LINETO,  # north/south point
+                        Path.CURVE4,  # arc to east/west point
+                        Path.CURVE4,  # arc to east/west point
+                        Path.CURVE4,  # arc to east/west point
+                        Path.CLOSEPOLY  # back to center
+                    ]
+
+                    point_paths.append((vertices, codes))
+
+                paths[step_dt] = point_paths
+
+        # we have the paths already for the wind fields at each interpolated step
+
+        # what we need is also to generate 'cone' like paths using the paths
+
+        # aggregate the points pairwise
+        quad_poly_point_pairs = WindField.aggregate_points_in_pairs(paths)
+
+        # create the connecting lines
+        quad_lines = WindField.aggregate_points_by_quadrant(quad_poly_point_pairs)
+
+        # construct the vertices for the connecting polygons (the cone-filling)
+        connecting_quad_poly_vertices = WindField.construct_connecting_vertices(quad_lines)
+
+        # generate the connecting paths
+        connecting_paths = WindField.generate_connecting_paths(connecting_quad_poly_vertices)
+
+        # join the quad paths (the synoptic shape of the wind radii field) with the cone from interpolation
+        concat_paths = WindField.concat_quads_and_connecting_paths(paths, connecting_paths)
+
+        # generates a single (boundary) cone from the concat paths
+        boundary_path = WindField.generate_cone_path_from_paths(concat_paths)
+
+        # return values:
+        # paths is the (interpolated) wind radii paths
+        # connecting_paths is the filler for cone (connecting wind radii paths to different hours)
+        # boundary_path is the (simplified) cone boundary
+
+        return paths, connecting_paths, boundary_path
+
+    @staticmethod
+    def interpolate_points_in_speed_list(wind_radii_speed_list, lat_lon_with_time_step_list):
+        ret_dict = {}
+        if len(lat_lon_with_time_step_list) > 0:
+            for wind_radii_speed in wind_radii_speed_list:
+                wind_radii_path, filler_path, outer_boundary_path = WindField.interpolate_points_at_speed(wind_radii_speed, lat_lon_with_time_step_list)
+                # convert "paths" to gpd to be useful for statistics
+
+                ret_dict[wind_radii_speed] = (wind_radii_path, filler_path, outer_boundary_path)
+
+        return ret_dict
+
 # Main app class
 
 class App:
     lon_lat_tc_records = []
     str_tree = None
+    wind_field_records = []
+    wind_field_str_trees = None
+
     root = None
     # manually hidden tc candidates and annotations
     hidden_tc_candidates = set()
@@ -6263,6 +6794,8 @@ class App:
         cls.update_tc_status_labels()
         cls.clear_circle_patch()
         App.lon_lat_tc_records = []
+        App.wind_field_records = {}
+        App.wind_field_strtrees = {}
 
     @classmethod
     def clear_storm_extrema_annotations(cls):
@@ -6986,6 +7519,7 @@ class App:
 
         cls.clear_plotted_list()
         lon_lat_tc_records = []
+        wind_field_gpd_dicts = []
         numc = 0
         for tc in tc_candidates:
             numc += 1
@@ -7022,6 +7556,7 @@ class App:
 
                 lat_lon_with_time_step_list = []
                 lon_lat_tuples = []
+                llwtsl_indices = []
                 # handle when we are hiding certain time steps or whether the storm itself should be hidden based on time step
                 have_displayed_points = False
                 for time_step_str, valid_time_str, candidate in disturbance_candidates:
@@ -7079,6 +7614,15 @@ class App:
                     else:
                         candidate_info['subtropical'] = 'Unknown'
 
+                    if PROCESS_TCGEN_WIND_RADII:
+                        wind_radii_speed_indices = ['34', '50', '64']
+                        for wind_speed in wind_radii_speed_indices:
+                            wind_radii_key = f'wind_radii_{wind_speed}'
+                            if wind_radii_key in candidate:
+                                candidate_info[wind_radii_key] = candidate[wind_radii_key]
+                            else:
+                                candidate_info[wind_radii_key] = None
+
                     if prev_lon:
                         prev_lon_f = float(prev_lon)
                         if abs(prev_lon_f - lon) > 270:
@@ -7114,7 +7658,7 @@ class App:
                     opacity = 1.0
                     lons = {}
                     lats = {}
-                    for point in reversed(lat_lon_with_time_step_list):
+                    for llwtsl_idx, point in reversed(list(enumerate(lat_lon_with_time_step_list))):
                         hours_after = point['hours_after_valid_day']
                         # if start <= time_step <= end:
                         # use hours after valid_day instead
@@ -7130,6 +7674,8 @@ class App:
                             lons[marker].append(point['lon'])
                             lats[marker].append(point['lat'])
                             lon_lat_tuples.append([point['lon'], point['lat']])
+                            # track with indices are visible so we can construct a visible version
+                            llwtsl_indices.append(llwtsl_idx)
 
                     for vmaxmarker in lons.keys():
                         scatter = cls.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
@@ -7181,8 +7727,40 @@ class App:
                         record['value'] = internal_id
                         lon_lat_tc_records.append(record)
 
+                # TODO: handle anti-meridean for WindField geometries
+                #  this doesn't seem a too important edge case unless it is breaking
+                # get the visible time step list for lat_lon_with_time_step_list
+                llwtsl_indices.sort()
+                visible_llwtsl = [lat_lon_with_time_step_list[llwtsl_idx] for llwtsl_idx in llwtsl_indices]
+                if visible_llwtsl:
+                    # TODO MODIFY (ONLY FOR TESTING)
+                    path_dicts, gpd_dicts = WindField.get_wind_radii_paths_and_gpds_for_steps(
+                        lat_lon_with_time_step_list = visible_llwtsl, wind_radii_selected_list = [34])
+                    
+                    # TODO: probabilistic wind radii graphic with boundary path (path patch)
+                    wind_field_gpd_dicts.append(gpd_dicts)
+
         App.lon_lat_tc_records = lon_lat_tc_records
         App.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
+
+        wind_field_records = {}
+        if PROCESS_TCGEN_WIND_RADII:
+            for wind_speed in [34, 50, 64]:  # assuming these are the wind speeds
+                gpds_to_concat = []
+                for gpd in wind_field_gpd_dicts:
+                    if wind_speed in gpd:
+                        # 0 is the gpd corresponding to the interpolated wind radii Path s
+                        gpds_to_concat.append(gpd[wind_speed][0])
+                        # 1 is the gpd corresponding to the Path s connecting the interpolations (cone)
+                        gpds_to_concat.append(gpd[wind_speed][1])
+
+                if gpds_to_concat and len(gpds_to_concat) > 0:
+                    df = pd.concat(gpds_to_concat, ignore_index=True)
+                    App.wind_field_records[wind_speed] = df
+                    App.wind_field_strtrees[wind_speed] = STRtree(df["geometry"].values)
+                else:
+                    App.wind_field_records[wind_speed] = None
+                    App.wind_field_strtrees[wind_speed] = None
 
         labels_positive = [f' D+{str(i): >2} ' for i in
                            range(len(cls.time_step_marker_colors) - 1)]  # Labels corresponding to colors
