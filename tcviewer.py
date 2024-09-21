@@ -8062,8 +8062,9 @@ class App:
                 result_ids = [tc_internal_ids[i] for i in result]
                 for result_id in result_ids:
                     # skip internal ids that are not visible
-                    if len(cls.hidden_tc_candidates) != 0 and result_id not in cls.hidden_tc_candidates:
-                        result_items.add(result_id)
+                    if len(cls.hidden_tc_candidates) != 0:
+                        if result_id not in cls.hidden_tc_candidates:
+                            result_items.add(result_id)
                     else:
                         result_items.add(result_id)
 
@@ -8206,6 +8207,7 @@ class App:
                                 except:
                                     traceback.print_exc()
 
+                cls.update_selection_info_label()
                 cls.redraw_fig_canvas(stale_bg=True)
             # unhide all
             elif len(App.hidden_tc_candidates) > 0:
@@ -8237,6 +8239,7 @@ class App:
                 App.hidden_tc_candidates = set()
                 (lon, lat) = cls.last_cursor_lon_lat
                 cls.update_labels_for_mouse_hover(lat=lat, lon=lon)
+                cls.update_selection_info_label()
                 cls.redraw_fig_canvas(stale_bg=True)
         else:
             num, cursor_point_index = cls.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
@@ -8272,6 +8275,7 @@ class App:
 
                 (lon, lat) = cls.last_cursor_lon_lat
                 cls.update_labels_for_mouse_hover(lat=lat, lon=lon)
+                cls.update_selection_info_label()
                 cls.redraw_fig_canvas(stale_bg=True)
 
     @classmethod
@@ -9490,6 +9494,7 @@ class App:
         if internal_ids:
             num_tracks = len(internal_ids)
         num_tracks_str = ""
+
         if num_tracks > 0:
             num_tracks_str=f"# Selected: Tracks: {num_tracks}"
             filtered_candidates = [(iid, tc) for iid, tc in cls.plotted_tc_candidates if
