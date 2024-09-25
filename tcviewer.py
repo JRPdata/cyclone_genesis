@@ -28,7 +28,7 @@
 #   CLEAR SELECTION LOOPS = c key (only in selection loop mode)
 #   HIDE SELECTION LOOPS = h key (only in selection loop mode)
 # SELECTION LOOP ON BASIN = b key (popup dialog to create a selection loop on a basin) (uses shapes/basin) (alternatively, draw by clicking 'Select')
-# TOGGLE ANALYSIS MODE = a key (must have selection loop on tracks)
+# TOGGLE ANALYSIS MODE = a key (must have selection loop on tracks); NOTE: TRACK ANALYSIS ONLY PRESENTLY WORKS IN UTC TZ
 #   SAVE FIGURE = s key (or p key) (saves current figure in analysis mode)
 # PRINT TRACK STATS = i key (must be hovering; prints to terminal)
 
@@ -961,9 +961,8 @@ model_name_to_ensemble_name['GFS'] = 'GEFS-TCGEN'
 model_name_to_ensemble_name['ECM'] = 'EPS-TCGEN'
 model_name_to_ensemble_name['NAV'] = 'FNMOC-TCGEN'
 
-# all genesis members across both datasets: global-det + all_tcgen
-# there is some overlap with CMC ours and theirs, so add CMCO as theirs (like GFSO)
-all_genesis_names = list(set(all_tcgen_members + global_det_members + ['CMCO']))
+# all genesis members across both datasets: global-det + all_tcgen (overlap with CMC)
+all_genesis_names = list(set(all_tcgen_members + global_det_members))
 
 # Helper functions for input data
 
@@ -2377,16 +2376,15 @@ class AnalysisDialog(tk.Toplevel):
 
         self.update_all_charts()
 
-    # Example Usage inside a class
     def analyze_tracks(self):
         all_datetimes = self.get_unique_datetimes()
         mean_track = self.calculate_mean_track(all_datetimes)
         cross_track_spread, along_track_spread = self.calculate_spread(mean_track)
 
-    def calculate_mean_track(self, all_datetimes):
+    def calculate_mean_track(self, all_datetimes, filtered_storm_ids):
         # Filter plotted_tc_candidates based on selected_internal_storm_ids
         filtered_candidates = [(iid, tc) for iid, tc in self.plotted_tc_candidates if
-                               iid in self.selected_internal_storm_ids]
+                               iid in filtered_storm_ids]
 
         mean_track = []
         for dt in all_datetimes:
@@ -2403,10 +2401,10 @@ class AnalysisDialog(tk.Toplevel):
                 mean_track.append({'valid_time': dt, 'lat': mean_lat, 'lon': mean_lon})
         return mean_track
 
-    def calculate_spread(self, mean_track):
+    def calculate_spread(self, mean_track, filtered_storm_ids):
         # Filter plotted_tc_candidates based on selected_internal_storm_ids
         filtered_candidates = [(iid, tc) for iid, tc in self.plotted_tc_candidates if
-                               iid in self.selected_internal_storm_ids]
+                               iid in filtered_storm_ids]
 
         cross_track_spread = []
         along_track_spread = []
@@ -3093,13 +3091,10 @@ class AnalysisDialog(tk.Toplevel):
                             tropical = False
 
                     if not skip_exclusion_by_warm_core and not exclusively_include_any_warm_or_cold_core:
-                        print("check warm")
                         if exclusively_include_warm_core:
-                            print("warm", warm_core)
                             if not warm_core:
                                 exclude = True
                         elif exclusively_include_cold_core:
-                            print("cold", warm_core)
                             if warm_core:
                                 exclude = True
 
@@ -4035,12 +4030,14 @@ class AnalysisDialog(tk.Toplevel):
             series_data = []
             model_names_set = set()
             any_data = False
+            filtered_storm_ids = []
             for internal_storm_id in self.selected_internal_storm_ids:
                 model_name, x, y = self.generate_time_series(internal_storm_id, 'lon')
                 if y is not None:
                     any_data = True
                     num_tracks_with_data += 1
                     model_names_set.add(model_name)
+                    filtered_storm_ids.append(internal_storm_id)
             if not any_data:
                 return
 
@@ -4066,10 +4063,10 @@ class AnalysisDialog(tk.Toplevel):
             unique_datetimes = self.get_unique_datetimes()
             if not unique_datetimes:
                 return
-            mean_track = self.calculate_mean_track(unique_datetimes)
+            mean_track = self.calculate_mean_track(unique_datetimes, filtered_storm_ids)
             if not mean_track:
                 return
-            cross_track_spread, along_track_spread = self.calculate_spread(mean_track)
+            cross_track_spread, along_track_spread = self.calculate_spread(mean_track, filtered_storm_ids)
             if not cross_track_spread or not along_track_spread:
                 return
 
@@ -7417,14 +7414,18 @@ class App:
         vmax_labels = ['\u25BD TD', '\u25B3 TS', '\u25A1 1', '\u25C1 2', '\u25B7 3', '\u25C7 4', '\u2605 5']
         marker_sizes = {'v': 6, '^': 6, 's': 8, '<': 10, '>': 12, 'D': 12, '*': 14}
 
+        expected_model_names = []
         if cls.genesis_previous_selected != 'GLOBAL-DET':
             is_ensemble = True
             if cls.genesis_previous_selected != 'ALL-TCGEN':
                 is_all_tcgen = False
             else:
                 is_all_tcgen = True
+
+            expected_model_names = tcgen_models_by_ensemble[cls.genesis_previous_selected]
         else:
             is_ensemble = False
+            expected_model_names = global_det_members
 
         # disturbance_candidates = get_disturbances_from_db(model_name, model_timestamp)
         # now = datetime_utcnow()
@@ -7452,27 +7453,29 @@ class App:
         """
         model_dates = {}
         most_recent_model_timestamps = {}
-        for model_name in all_genesis_names:
+
+        for model_name in expected_model_names:
             model_dates[model_name] = None
             most_recent_model_timestamps[model_name] = datetime.min
 
         for genesis_source_type, model_init_times, model_completed_times, \
-            ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times():
+            ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times(is_ensemble=is_ensemble):
 
             if not model_init_times:
                 continue
             for model_name, model_init_time in model_init_times.items():
+                if model_name not in expected_model_names:
+                    continue
+
                 model_timestamp = datetime.fromisoformat(model_init_time)
                 ensemble_name = None
                 if model_name in model_name_to_ensemble_name:
                     ensemble_name = model_name_to_ensemble_name[model_name]
-                if genesis_source_type != 'GLOBAL-DET' and model_name == 'CMC':
-                    # CMC from TCGEN is renamed internally at this step
-                    model_name = 'CMCO'
 
                 if (ensemble_completed_times and ensemble_name in ensemble_completed_times and
                         len(ensemble_completed_times[ensemble_name]) == 1):
-                    completed_time = ensemble_completed_times[ensemble_name][0]
+                    #completed_time = ensemble_completed_times[ensemble_name][0]
+                    completed_time = completed_ensembles[ensemble_name]
                 else:
                     completed_time = None
                 if completed_time and ensemble_name and model_timestamp < completed_time:
@@ -7490,6 +7493,16 @@ class App:
 
         # need to handle GLOBAL-DET case and TCGEN case
         # should match model cycle
+        missing_models = []
+        # filter out any models that aren't available
+        for model_name, dt in most_recent_model_timestamps.items():
+            if dt == datetime.min:
+                missing_models.append(model_name)
+
+        # remove from list completely missing models
+        for model_name in missing_models:
+            del most_recent_model_timestamps[model_name]
+
         if is_ensemble:
             # tcgen case
             if is_all_tcgen:
@@ -7946,8 +7959,16 @@ class App:
 
     # generator to return data on latest model/ensemble times (yields once per genesis source type)
     @classmethod
-    def get_latest_genesis_data_times(cls):
-        for genesis_source_type in ['GLOBAL-DET', 'ALL-TCGEN']:
+    def get_latest_genesis_data_times(cls, is_ensemble=None):
+        if is_ensemble is not None:
+            if is_ensemble:
+                genesis_source_types = ['ALL-TCGEN']
+            else:
+                genesis_source_types = ['GLOBAL-DET']
+        else:
+            genesis_source_types = ['GLOBAL-DET', 'ALL-TCGEN']
+
+        for genesis_source_type in genesis_source_types:
             conn = None
             model_names = list(model_data_folders_by_model_name.keys())
             model_init_times = {}
