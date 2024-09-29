@@ -949,6 +949,15 @@ ALL-TCGEN : 128
 '''
 global_det_members = ['GFS', 'CMC', 'ECM', 'NAV']
 num_global_det_members = len(global_det_members)
+# TODO: modify when NAVGEM WORKS AGAIN
+active_global_det_members = ['GFS', 'CMC', 'ECM']
+num_active_global_det_members = {
+    'GLOBAL-DET': len(active_global_det_members)
+}
+global_det_active_ensembles = ['GLOBAL-DET']
+global_det_lookup = {}
+for member in global_det_lookup:
+    global_det_lookup[member] = 'GLOBAL-DET'
 
 # Create a dictionary to map model names to ensemble names
 model_name_to_ensemble_name = {}
@@ -1927,9 +1936,9 @@ class AnalysisDialog(tk.Toplevel):
             model_names = [model_name for model_name in model_names if model_name[-5:] != 'TCGEN']
             self.total_models = len(model_names)
             self.ensemble_type = 'GLOBAL-DET'
-            self.lookup_model_name_ensemble_name = model_name_to_ensemble_name
-            # this won't work but is for redundancy, needs fixing
-            self.lookup_num_models_by_ensemble_name = tcgen_num_models_by_ensemble
+            self.lookup_model_name_ensemble_name = global_det_lookup
+            # TODO: test; this won't work but is for redundancy, needs fixing
+            self.lookup_num_models_by_ensemble_name = num_active_global_det_members
         elif self.previous_selected_combo[-5:] == 'TCGEN':
             self.possible_ensemble = True
             self.total_models = len(tcgen_models_by_ensemble[self.previous_selected_combo])
@@ -8196,7 +8205,7 @@ class App:
         total_num_overlapped_points = len(cls.nearest_point_indices_overlapped)
         if total_num_overlapped_points == 0:
             if not SelectionLoops.is_empty():
-                to_hide_internal_ids = App.get_selected_internal_storm_ids()
+                to_hide_internal_ids = cls.get_selected_internal_storm_ids()
 
                 for to_hide_internal_id in to_hide_internal_ids:
                     #cursor_internal_id, tc_index, tc_point_index = cursor_point_index
@@ -8750,6 +8759,378 @@ class App:
                 print(f'    Disturbance end: {disturbance_end_time}')
                 if earliest_named_time is not None:
                     print(f'    Earliest Named time: {earliest_named_time}')
+        else:
+            internal_ids = cls.get_selected_internal_storm_ids()
+            num_tracks = 0
+            if internal_ids:
+                num_tracks = len(internal_ids)
+
+            if num_tracks == 0:
+                return
+
+            # Aggregate candidates by models
+            filtered_candidates = [(iid, tc) for iid, tc in cls.plotted_tc_candidates if
+                                   iid in internal_ids]
+
+            if filtered_candidates and len(filtered_candidates) == 0:
+                return
+
+            if cls.mode == "ADECK":
+                previous_selected_combo = cls.adeck_previous_selected
+            else:
+                previous_selected_combo = cls.genesis_previous_selected
+
+            if previous_selected_combo == 'GLOBAL-DET':
+                possible_ensemble = False
+                total_ensembles = 0
+                model_names = model_data_folders_by_model_name.keys()
+                model_names = [model_name for model_name in model_names if model_name[-5:] != 'TCGEN']
+                total_models = len(model_names)
+                ensemble_type = 'GLOBAL-DET'
+                lookup_model_name_ensemble_name = global_det_lookup
+                # TODO: test; this won't work but is for redundancy, needs fixing
+                lookup_num_models_by_ensemble_name = num_active_global_det_members
+            elif previous_selected_combo[-5:] == 'TCGEN':
+                possible_ensemble = True
+                total_models = len(tcgen_models_by_ensemble[previous_selected_combo])
+                if previous_selected_combo == 'ALL-TCGEN':
+                    # Should be 4 (EPS, FNMOC, GEFS, GEPS; don't count ALL)
+                    total_ensembles = len(tcgen_models_by_ensemble.keys()) - 1
+                    if len(tcgen_active_ensembles_all) != total_ensembles:
+                        total_ensembles = len(tcgen_active_ensembles_all)
+                else:
+                    total_ensembles = 1
+
+                ensemble_type = 'TCGEN'
+                lookup_model_name_ensemble_name = model_name_to_ensemble_name
+                lookup_num_models_by_ensemble_name = tcgen_num_models_by_ensemble
+            elif previous_selected_combo[-4:] in 'ATCF':
+                # unofficial adeck (GEFS, GEPS, FNMOC)
+                # not handling "GEFS-MEMBERS" (no official a-track gefs members as no guarantee which members are present?)
+                possible_ensemble = True
+                total_models = len(atcf_ens_models_by_ensemble[previous_selected_combo])
+                if previous_selected_combo == 'ALL-ATCF':
+                    # Should be 3 (FNMOC, GEFS, GEPS; don't count ALL)
+                    total_ensembles = len(atcf_ens_num_models_by_ensemble.keys()) - 1
+                    if len(atcf_active_ensembles_all) != total_ensembles:
+                        total_ensembles = len(atcf_active_ensembles_all)
+                else:
+                    total_ensembles = 1
+
+                ensemble_type = 'ATCF'
+                lookup_model_name_ensemble_name = atcf_ens_model_name_to_ensemble_name
+                lookup_num_models_by_ensemble_name = atcf_ens_num_models_by_ensemble
+            else:
+                # TODO: for now don't count ensembles for adeck data as we don't have a complete list of member names
+                total_ensembles = 0
+                possible_ensemble = False
+                ensemble_type = 'UNKNOWN'
+                # won't work for now until fixed in code
+                lookup_model_name_ensemble_name = model_name_to_ensemble_name
+
+            by_model_stats = {}
+            for internal_id, tc in filtered_candidates:
+                if tc and tc[0] and 'model_name' in tc[0]:
+                    model_name = tc[0]['model_name']
+                    ensemble_name = None
+                    if possible_ensemble and model_name in lookup_model_name_ensemble_name:
+                        ensemble_name = lookup_model_name_ensemble_name[model_name]
+
+                    lat_lon_with_time_step_list = tc
+                    # print out statistics for track
+                    storm_ace = 0.0
+                    storm_vmax10m = 0.0
+                    storm_vmax_time_earliest = None
+                    disturbance_start_time = None
+                    disturbance_end_time = None
+                    earliest_named_time = None
+                    for candidate_info in lat_lon_with_time_step_list:
+                        if disturbance_start_time is None:
+                            disturbance_start_time = candidate_info['valid_time']
+
+                        disturbance_end_time = candidate_info['valid_time']
+                        if 'vmax10m' in candidate_info:
+                            point_vmax = candidate_info['vmax10m']
+                            if point_vmax >= 34.0:
+                                storm_ace += pow(10, -4) * np.power(point_vmax, 2)
+                                if earliest_named_time is None:
+                                    earliest_named_time = candidate_info['valid_time']
+                            if point_vmax > storm_vmax10m:
+                                storm_vmax_time_earliest = candidate_info['valid_time']
+                                storm_vmax10m = point_vmax
+
+                    if model_name not in by_model_stats:
+                        by_model_stats[model_name] = {
+                            'storm_ace': [storm_ace],
+                            'storm_vmax10m': [storm_vmax10m],
+                            'storm_vmax_time_earliest': [storm_vmax_time_earliest],
+                            'disturbance_start_time': [disturbance_start_time],
+                            'earliest_named_time': [earliest_named_time],
+                            'disturbance_end_time': [disturbance_end_time]
+                        }
+                    else:
+                        by_model_stats[model_name]['storm_ace'].append(storm_ace)
+                        by_model_stats[model_name]['storm_vmax10m'].append(storm_vmax10m)
+                        by_model_stats[model_name]['storm_vmax_time_earliest'].append(storm_vmax_time_earliest)
+                        by_model_stats[model_name]['disturbance_start_time'].append(disturbance_start_time)
+                        by_model_stats[model_name]['earliest_named_time'].append(earliest_named_time)
+                        by_model_stats[model_name]['disturbance_end_time'].append(disturbance_end_time)
+
+                    if ensemble_name and 'ensemble_name' not in by_model_stats[model_name]:
+                        by_model_stats[model_name]['ensemble_name'] = ensemble_name
+
+            by_ensemble_stats = {}
+            for model_name, model_stats in by_model_stats.items():
+                if possible_ensemble:
+                    ensemble_name = model_stats['ensemble_name']
+                else:
+                    ensemble_name = ensemble_type
+
+                if ensemble_name not in by_ensemble_stats:
+                    by_ensemble_stats[ensemble_name] = {
+                        'storm_ace': [model_stats['storm_ace']],
+                        'storm_vmax10m': [model_stats['storm_vmax10m']],
+                        'storm_vmax_time_earliest': [model_stats['storm_vmax_time_earliest']],
+                        'disturbance_start_time': [model_stats['disturbance_start_time']],
+                        'earliest_named_time': [model_stats['earliest_named_time']],
+                        'disturbance_end_time': [model_stats['disturbance_end_time']]
+                    }
+                else:
+                    by_ensemble_stats[ensemble_name]['storm_ace'].append(model_stats['storm_ace'])
+                    by_ensemble_stats[ensemble_name]['storm_vmax10m'].append(model_stats['storm_vmax10m'])
+                    by_ensemble_stats[ensemble_name]['storm_vmax_time_earliest'].append(model_stats['storm_vmax_time_earliest'])
+                    by_ensemble_stats[ensemble_name]['disturbance_start_time'].append(model_stats['disturbance_start_time'])
+                    by_ensemble_stats[ensemble_name]['earliest_named_time'].append(model_stats['earliest_named_time'])
+                    by_ensemble_stats[ensemble_name]['disturbance_end_time'].append(model_stats['disturbance_end_time'])
+
+            # Initialize dictionaries to store aggregated statistics
+            ensemble_stats = {}
+            all_ensemble_stats = {}
+
+            # Loop through each ensemble
+            for ensemble_name, stats in by_ensemble_stats.items():
+                # Initialize dictionaries to store aggregated statistics for the current ensemble
+                model_agg = {}
+                storm_values = defaultdict(list)
+                weights = {}
+
+                # Calculate aggregated statistics for the current ensemble
+                for key, values in stats.items():
+                    # Remove None values
+                    valid_values = []
+                    for value_list in values:
+                        valid_list = []
+                        if value_list is not None:
+                            for v in value_list:
+                                if v is not None:
+                                    valid_list.append(v)
+
+                        if len(valid_list) > 0:
+                            valid_values.append(valid_list)
+
+                    # Calculate weight for the current parameter
+                    num_models_with_data = len(valid_values)
+                    if possible_ensemble:
+                        weight = 1 / lookup_num_models_by_ensemble_name[ensemble_name]
+                    else:
+                        weight = 1 / num_models_with_data
+
+                    weights[key] = weight
+                    flattened_valid_values = []
+                    for valid_vals in valid_values:
+                        flattened_valid_values.extend(valid_vals)
+
+                    valid_values = np.array(flattened_valid_values)
+                    have_data = len(valid_values) > 0
+                    if key == 'storm_ace':
+                        model_agg[key] = np.sum(valid_values)
+                    elif key == 'storm_vmax10m':
+                        model_agg[key] = np.max(valid_values) if have_data else None
+                    elif key == 'storm_vmax_time_earliest':
+                        model_agg[key] = np.min(valid_values) if have_data else None
+                    elif key == 'disturbance_start_time':
+                        model_agg[key] = np.min(valid_values) if have_data else None
+                    elif key == 'earliest_named_time':
+                        model_agg[key] = np.min(valid_values) if have_data else None
+                    elif key == 'disturbance_end_time':
+                        model_agg[key] = np.max(valid_values) if have_data else None
+
+                    # Store all valid values for the current parameter
+                    storm_values[key] = np.array(valid_values)
+
+                ensemble_agg_mean = {}
+                ensemble_agg_median = {}
+                ensemble_agg_min = {}
+                ensemble_agg_max = {}
+                weighted_ensemble_agg_mean = {}
+                weighted_ensemble_agg_median = {}
+                weighted_ensemble_agg_min = {}
+                weighted_ensemble_agg_max = {}
+
+                for key, values in storm_values.items():
+                    # Calculate ensemble statistics (mean, median, min, max)
+                    if isinstance(values[0], datetime):
+                        # Convert datetime objects to Unix timestamps
+                        timestamps = [value.timestamp() for value in values]
+
+                        # Calculate mean, median, min, max of timestamps
+                        mean_timestamp = np.mean(timestamps)
+                        median_timestamp = np.median(timestamps)
+                        min_timestamp = np.min(timestamps)
+                        max_timestamp = np.max(timestamps)
+
+                        # Convert mean, median, min, max timestamps back to datetime objects
+                        ensemble_agg_mean[key] = datetime.fromtimestamp(mean_timestamp)
+                        ensemble_agg_median[key] = datetime.fromtimestamp(median_timestamp)
+                        ensemble_agg_min[key] = datetime.fromtimestamp(min_timestamp)
+                        ensemble_agg_max[key] = datetime.fromtimestamp(max_timestamp)
+
+                        weighted_ensemble_agg_mean[key] = datetime.fromtimestamp(mean_timestamp)
+                        weighted_ensemble_agg_median[key] = datetime.fromtimestamp(median_timestamp)
+                        weighted_ensemble_agg_min[key] = datetime.fromtimestamp(min_timestamp)
+                        weighted_ensemble_agg_max[key] = datetime.fromtimestamp(max_timestamp)
+                    else:
+                        # Calculate mean, median, min, max for non-datetime values
+                        if key == 'storm_ace':
+                            ensemble_agg_mean[key] = np.mean(values)
+                            ensemble_agg_median[key] = np.median(values)
+                            ensemble_agg_min[key] = np.min(values)
+                            ensemble_agg_max[key] = np.max(values)
+
+                            weighted_ensemble_agg_mean[key] = model_agg[key] * weights[key]
+                            # only the mean has significance, these are just placeholders
+                            weighted_ensemble_agg_median[key] = model_agg[key] * weights[key]
+                            weighted_ensemble_agg_min[key] = model_agg[key] * weights[key]
+                            weighted_ensemble_agg_max[key] = model_agg[key] * weights[key]
+                        else:
+                            ensemble_agg_mean[key] = np.mean(values)
+                            ensemble_agg_median[key] = np.median(values)
+                            ensemble_agg_min[key] = np.min(values)
+                            ensemble_agg_max[key] = np.max(values)
+
+                            weighted_ensemble_agg_mean[key] = np.mean(values) * weights[key]
+                            weighted_ensemble_agg_median[key] = np.median(values) * weights[key]
+                            weighted_ensemble_agg_min[key] = np.min(values) * weights[key]
+                            weighted_ensemble_agg_max[key] = np.max(values) * weights[key]
+
+                # Store aggregated statistics for the current ensemble
+                ensemble_stats[ensemble_name] = {
+                    'model_agg': model_agg,
+                    'ensemble_agg_mean': ensemble_agg_mean,
+                    'ensemble_agg_median': ensemble_agg_median,
+                    'ensemble_agg_min': ensemble_agg_min,
+                    'ensemble_agg_max': ensemble_agg_max,
+                    'weighted_ensemble_agg_mean': weighted_ensemble_agg_mean,
+                    'weighted_ensemble_agg_median': weighted_ensemble_agg_median,
+                    'weighted_ensemble_agg_min': weighted_ensemble_agg_min,
+                    'weighted_ensemble_agg_max': weighted_ensemble_agg_max,
+                }
+
+            # Calculate aggregated statistics for super ensemble
+            if len(by_ensemble_stats) > 1:
+                all_ensemble_stats['ALL'] = {}
+                for key in ensemble_stats[list(by_ensemble_stats.keys())[0]].keys():
+                    all_ensemble_stats['ALL'][key] = {}
+                    for ensemble_name, stats in ensemble_stats.items():
+                        for param, value in stats[key].items():
+                            if param not in all_ensemble_stats['ALL'][key]:
+                                all_ensemble_stats['ALL'][key][param] = []
+                            all_ensemble_stats['ALL'][key][param].append(value)
+
+                    for param, values in all_ensemble_stats['ALL'][key].items():
+                        if key.startswith('weighted'):
+                            if isinstance(values[0], datetime):
+                                # Convert datetime objects to Unix timestamps
+                                timestamps = [value.timestamp() for value in values]
+                                # Calculate weighted mean of timestamps
+                                weighted_mean_timestamp = sum(timestamps) / len(by_ensemble_stats)
+                                # Convert weighted mean timestamp back to datetime object
+                                all_ensemble_stats['ALL'][key][param] = datetime.fromtimestamp(
+                                    weighted_mean_timestamp)
+                            else:
+                                all_ensemble_stats['ALL'][key][param] = sum(values) / len(by_ensemble_stats)
+                        elif key.startswith('ensemble_agg'):
+                            if isinstance(values[0], datetime):
+                                # Convert datetime objects to Unix timestamps
+                                timestamps = [value.timestamp() for value in values]
+                                if key.endswith('mean'):
+                                    # Calculate mean of timestamps
+                                    mean_timestamp = np.mean(timestamps)
+                                    # Convert mean timestamp back to datetime object
+                                    all_ensemble_stats['ALL'][key][param] = datetime.fromtimestamp(
+                                        mean_timestamp)
+                                elif key.endswith('median'):
+                                    # Calculate median of timestamps
+                                    median_timestamp = np.median(timestamps)
+                                    # Convert median timestamp back to datetime object
+                                    all_ensemble_stats['ALL'][key][param] = datetime.fromtimestamp(
+                                        median_timestamp)
+                                elif key.endswith('min'):
+                                    # Calculate min of timestamps
+                                    min_timestamp = np.min(timestamps)
+                                    # Convert min timestamp back to datetime object
+                                    all_ensemble_stats['ALL'][key][param] = datetime.fromtimestamp(
+                                        min_timestamp)
+                                elif key.endswith('max'):
+                                    # Calculate max of timestamps
+                                    max_timestamp = np.max(timestamps)
+                                    # Convert max timestamp back to datetime object
+                                    all_ensemble_stats['ALL'][key][param] = datetime.fromtimestamp(
+                                        max_timestamp)
+                            else:
+                                if key.endswith('mean'):
+                                    all_ensemble_stats['ALL'][key][param] = np.mean(values)
+                                elif key.endswith('median'):
+                                    all_ensemble_stats['ALL'][key][param] = np.median(values)
+                                elif key.endswith('min'):
+                                    all_ensemble_stats['ALL'][key][param] = min(values)
+                                elif key.endswith('max'):
+                                    all_ensemble_stats['ALL'][key][param] = max(values)
+                        else:
+                            if isinstance(values[0], datetime):
+                                # Convert datetime objects to Unix timestamps
+                                timestamps = [value.timestamp() for value in values]
+                                # Calculate mean of timestamps
+                                mean_timestamp = sum(timestamps) / len(by_ensemble_stats)
+                                # Convert mean timestamp back to datetime object
+                                all_ensemble_stats['ALL'][key][param] = datetime.fromtimestamp(mean_timestamp)
+                            else:
+                                all_ensemble_stats['ALL'][key][param] = sum(values) / len(by_ensemble_stats)
+
+
+            # Print aggregated statistics for each ensemble
+            for ensemble_name, stats in ensemble_stats.items():
+                print(f"Ensemble: {ensemble_name}")
+                for key, values in stats.items():
+                    print(f"  {key}:")
+                    for param, value in values.items():
+                        if param != 'storm_ace' or (key not in \
+                            ['weighted_ensemble_agg_median', 'weighted_ensemble_agg_min', 'weighted_ensemble_agg_max']):
+
+                            if param == 'storm_ace':
+                                print(f"    {param} (10^-4): {value:0.1f}")
+                            elif param == 'storm_vmax10m':
+                                print(f"    {param} (kts): {value:0.1f}")
+                            else:
+                                print(f"    {param}: {value}")
+
+                print()
+
+            # Print aggregated statistics for all ensembles
+            if len(by_ensemble_stats) > 1:
+                print("Ensemble: ALL")
+                for key, values in all_ensemble_stats['ALL'].items():
+                    print(f"  {key}:")
+                    for param, value in values.items():
+
+                        if param != 'storm_ace' or (key not in \
+                            ['weighted_ensemble_agg_median', 'weighted_ensemble_agg_min', 'weighted_ensemble_agg_max']):
+
+                            if param in ['storm_ace' or 'storm_vmax10m']:
+                                print(f"    {param}: {value:0.1f}")
+                            else:
+                                print(f"    {param}: {value}")
+                print()
 
     @classmethod
     def redraw_app_canvas(cls):
@@ -9510,7 +9891,7 @@ class App:
     @classmethod
     def update_selection_info_label(cls):
         # cls.genesis_selection_info_label.config(text="---.- kt")
-        internal_ids = App.get_selected_internal_storm_ids()
+        internal_ids = cls.get_selected_internal_storm_ids()
         num_tracks = 0
         if internal_ids:
             num_tracks = len(internal_ids)
