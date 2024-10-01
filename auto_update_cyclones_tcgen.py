@@ -1280,10 +1280,6 @@ def df_to_disturbances(ensemble_model_name, model_timestamp, model_member, df):
 
                         if prune_disturbances_without_warm_core:
                             criteria = False
-                        else:
-                            # check if it is a subtropical point
-                            if subtropical == 'False':
-                                criteria = False
 
                 # Prune disturbances by warm core and MSLP
                 # For MSLP ave to have at least 2 hPa difference between storm MSLP and POUTER
