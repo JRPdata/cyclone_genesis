@@ -454,7 +454,7 @@ except:
 # Load the shapefile using Geopandas
 # from gadm.org (china, level 2 shapefile)
 # shapefile_path = "tl_2023_us_cbsa/tl_2023_us_cbsa.shp"
-shapefile_path = 'gadm41_CHN_shp/gadm41_CHN_2.shp'
+#shapefile_path = 'gadm41_CHN_shp/gadm41_CHN_2.shp'
 
 try:
     tmp_gdf = gpd.read_file(shapefile_path)
@@ -1495,8 +1495,8 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
             # for tcgen case, handle case when no predictions from a member but have a complete ensemble
             if tcgen_ensemble:
                 cursor.execute(
-                    f'SELECT init_date FROM ens_status WHERE ensemble_name = ? AND completed = 1 ORDER BY init_date DESC LIMIT 1',
-                    (ensemble_name, ))
+                    f'SELECT init_date FROM ens_status WHERE ensemble_name = ? AND completed = 1 AND init_date <= ? ORDER BY init_date DESC LIMIT 1',
+                    (ensemble_name, datetime.isoformat(interval_end)))
                 results = cursor.fetchall()
                 ens_is_completed = 0
                 if results:
@@ -1545,8 +1545,12 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
                 latest_ensemble_init_time[ensemble_name] = max(init_complete_times)
             else:
                 # incomplete ensemble?
-                earliest_recent_ensemble_init_times[ensemble_name] = min(init_complete_times)
-                latest_ensemble_init_time[ensemble_name] = max(init_complete_times)
+                if init_complete_times is not None or len(init_complete_times) != 0:
+                    earliest_recent_ensemble_init_times[ensemble_name] = min(init_complete_times)
+                    latest_ensemble_init_time[ensemble_name] = max(init_complete_times)
+                else:
+                    latest_ensemble_init_time[ensemble_name] = None
+                    earliest_recent_ensemble_init_times[ensemble_name] = None
 
             # if a tcgen ensemble, we need to mark any candidates that don't belong to this init time to drop them
             # otherwise we will get models from a previous run if they have no predictions this run
@@ -7468,7 +7472,7 @@ class App:
             most_recent_model_timestamps[model_name] = datetime.min
 
         for genesis_source_type, model_init_times, model_completed_times, \
-            ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times(is_ensemble=is_ensemble):
+            ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times(is_ensemble=is_ensemble, model_cycle=model_cycle):
 
             if not model_init_times:
                 continue
@@ -7968,7 +7972,7 @@ class App:
 
     # generator to return data on latest model/ensemble times (yields once per genesis source type)
     @classmethod
-    def get_latest_genesis_data_times(cls, is_ensemble=None):
+    def get_latest_genesis_data_times(cls, is_ensemble=None, model_cycle=None):
         if is_ensemble is not None:
             if is_ensemble:
                 genesis_source_types = ['ALL-TCGEN']
@@ -8007,9 +8011,14 @@ class App:
                 cursor = conn.cursor()
 
                 for model_name in model_names:
-                    cursor.execute(
-                        'SELECT DISTINCT init_date, completed_date FROM completed WHERE model_name = ? ORDER BY init_date DESC LIMIT 1',
-                        (model_name, ))
+                    if model_cycle is not None:
+                        cursor.execute(
+                            'SELECT DISTINCT init_date, completed_date FROM completed WHERE model_name = ? AND init_date <= ? ORDER BY init_date DESC LIMIT 1',
+                            (model_name, datetime.isoformat(model_cycle)))
+                    else:
+                        cursor.execute(
+                            'SELECT DISTINCT init_date, completed_date FROM completed WHERE model_name = ? ORDER BY init_date DESC LIMIT 1',
+                            (model_name, ))
                     results = cursor.fetchall()
                     if results:
                         for row in results:
