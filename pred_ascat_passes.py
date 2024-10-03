@@ -1920,9 +1920,16 @@ def plot_candidate_swath_matches(pruned_rows_by_gdf, swath_gdfs, candidate_gdf, 
         ax.add_patch(rmw_circle)
         ax.add_patch(roci_circle)
 
+        # minimum is 6 degrees (3 deg. on either side)
+        max_deg_radius = 3
+        if not np.isnan(rmw_lat_deg):
+            max_deg_radius = max(max_deg_radius, rmw_lat_deg)
+        if not np.isnan(roci_lat_deg):
+            max_deg_radius = max(max_deg_radius, roci_lat_deg)
+
         # Set limits and labels
-        ax.set_xlim(candidate_lon - 2, candidate_lon + 2)  # Adjust limits based on your data
-        ax.set_ylim(candidate_lat - 2, candidate_lat + 2)  # Adjust limits based on your data
+        ax.set_xlim(candidate_lon - max_deg_radius, candidate_lon + max_deg_radius)  # Adjust limits based on your data
+        ax.set_ylim(candidate_lat - max_deg_radius, candidate_lat + max_deg_radius)  # Adjust limits based on your data
         ax.set_title(f'Pass time: {valid_time_str}\n{sat_str}\nModel: {model_name}: {model_init_time_str}\n(Model) Storm MSLP Center lat, lon: {candidate_lat:.1f}, {candidate_lon:.1f}')
         ax.set_xlabel('Longitude')
         ax.set_ylabel('Latitude')
