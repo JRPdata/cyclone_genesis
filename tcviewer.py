@@ -1545,7 +1545,7 @@ def get_tc_candidates_at_or_before_init_time(genesis_previous_selected, interval
                 latest_ensemble_init_time[ensemble_name] = max(init_complete_times)
             else:
                 # incomplete ensemble?
-                if init_complete_times is not None or len(init_complete_times) != 0:
+                if init_complete_times is not None and len(init_complete_times) != 0:
                     earliest_recent_ensemble_init_times[ensemble_name] = min(init_complete_times)
                     latest_ensemble_init_time[ensemble_name] = max(init_complete_times)
                 else:
@@ -1652,8 +1652,8 @@ def get_tc_candidates_from_valid_time(genesis_previous_selected, interval_start)
                     results = cursor.fetchall()
                     if results:
                         # Process data for each row
-                        for row in results:
-                            model_name, init_date, start_valid_date, ws_max_10m, json_data = row
+                        for row2 in results:
+                            model_name, init_date, start_valid_date, ws_max_10m, json_data = row2
                             retrieved_data = {
                                 "model_name": model_name,
                                 "model_timestamp": init_date,
@@ -1708,16 +1708,21 @@ def get_tc_candidates_from_valid_time(genesis_previous_selected, interval_start)
     return model_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, all_retrieved_data
 
 # get model cycles relative to init_date timestamp
-def get_tc_model_init_times_relative_to(init_date):
+def get_tc_model_init_times_relative_to(init_date, genesis_previous_selected):
     if type(init_date) == str:
         init_date = datetime.fromisoformat(init_date)
+
+    if genesis_previous_selected == 'GLOBAL-DET':
+        db_file_path = tc_candidates_db_file_path
+    else:
+        db_file_path = tc_candidates_tcgen_db_file_path
 
     conn = None
     # 'at' can be strictly before init_date, but previous must be also before 'at'
     model_init_times = {'previous': None, 'next': None, 'at': None}
     try:
         # Connect to the SQLite database
-        conn = sqlite3.connect(tc_candidates_db_file_path)
+        conn = sqlite3.connect(db_file_path)
         cursor = conn.cursor()
         cursor.execute('SELECT DISTINCT init_date FROM completed WHERE init_date <= ? ORDER BY init_date DESC LIMIT 1',
                        (datetime.isoformat(init_date),))
@@ -6843,7 +6848,7 @@ class App:
                 cls.update_genesis_data_staleness()
             model_cycle = cls.genesis_model_cycle_time
             if model_cycle is None:
-                model_cycles = get_tc_model_init_times_relative_to(datetime.now())
+                model_cycles = get_tc_model_init_times_relative_to(datetime.now(), cls.genesis_previous_selected)
                 if model_cycles['next'] is None:
                     model_cycle = model_cycles['at']
                 else:
@@ -8366,7 +8371,7 @@ class App:
     @classmethod
     def latest_genesis_cycle(cls):
         cls.update_genesis_data_staleness()
-        model_cycles = get_tc_model_init_times_relative_to(datetime.now())
+        model_cycles = get_tc_model_init_times_relative_to(datetime.now(), cls.genesis_previous_selected)
         if model_cycles['next'] is None:
             model_cycle = model_cycles['at']
         else:
@@ -8434,13 +8439,13 @@ class App:
         cls.update_genesis_data_staleness()
         if cls.genesis_model_cycle_time is None:
             cls.genesis_model_cycle_time = datetime.now()
-            model_cycles = get_tc_model_init_times_relative_to(cls.genesis_model_cycle_time)
+            model_cycles = get_tc_model_init_times_relative_to(cls.genesis_model_cycle_time, cls.genesis_previous_selected)
             if model_cycles['next'] is None:
                 model_cycle = model_cycles['at']
             else:
                 model_cycle = model_cycles['next']
         else:
-            model_cycles = get_tc_model_init_times_relative_to(nav_time)
+            model_cycles = get_tc_model_init_times_relative_to(nav_time, cls.genesis_previous_selected)
             if model_cycles['next'] is None:
                 # nothing after current cycle
                 return
@@ -8709,13 +8714,13 @@ class App:
             nav_time = cls.genesis_model_cycle_time
         if cls.genesis_model_cycle_time is None:
             cls.genesis_model_cycle_time = datetime.now()
-            model_cycles = get_tc_model_init_times_relative_to(cls.genesis_model_cycle_time)
+            model_cycles = get_tc_model_init_times_relative_to(cls.genesis_model_cycle_time, cls.genesis_previous_selected)
             if model_cycles['previous'] is None:
                 model_cycle = model_cycles['at']
             else:
                 model_cycle = model_cycles['previous']
         else:
-            model_cycles = get_tc_model_init_times_relative_to(nav_time)
+            model_cycles = get_tc_model_init_times_relative_to(nav_time, cls.genesis_previous_selected)
             if model_cycles['previous'] is None:
                 # nothing before current cycle
                 return
@@ -9171,7 +9176,7 @@ class App:
             cls.update_genesis_data_staleness()
             model_cycle = cls.genesis_model_cycle_time
             if model_cycle is None:
-                model_cycles = get_tc_model_init_times_relative_to(datetime.now())
+                model_cycles = get_tc_model_init_times_relative_to(datetime.now(), cls.genesis_previous_selected)
                 if model_cycles['next'] is None:
                     model_cycle = model_cycles['at']
                 else:

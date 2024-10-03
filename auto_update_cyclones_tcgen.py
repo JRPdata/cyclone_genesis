@@ -19,6 +19,10 @@ last_run_dates = {}
 # don't process data older than this date (calculated from retention days as YYYYMMDD00)
 cutoff_date_folder_str = None
 
+# run ASCAT predictions? (pred_ascat_passes.py)
+do_pred_ascat_passes = True
+ascat_ensemble = 'GEFS-TCGEN'
+
 # shape file for placing lat,lon in basins which we are classifying
 # each has an attr`ibute called 'basin_name', with CPAC & EPAC combined as EPAC
 # basins are NATL, EPAC, WPAC, IO, SH
@@ -101,6 +105,9 @@ from pyproj import Geod
 
 from eccodes import codes_bufr_new_from_file, codes_get, codes_get_array, codes_release, codes_set, \
     CodesInternalError
+
+# for calling ascat prediction program without blocking
+import subprocess
 
 # for converting lat/lons to basins
 gdf = gpd.read_file(shape_file)
@@ -234,6 +241,20 @@ gfdl_column_names = [
     "UNKNOWN_C38",  # Colunn 38
     "UNKNOWN_C39",  # Column 39
 ]
+
+#########################################################
+########       HELPER FOR ASCAT PREDICTIONS      ########
+#########################################################
+
+def run_ascat_pred(ensemble_name):
+    if not do_pred_ascat_passes:
+        return
+
+    if ensemble_name != ascat_ensemble:
+        return
+
+    # Call the program asynchronously
+    subprocess.Popen(['python3', 'pred_ascat_passes.py'])
 
 #########################################################
 ########       CALCULATE DISTURBANCES            ########
@@ -1965,6 +1986,7 @@ def update_ensemble_status(model_file_paths_by_model_name_and_timestamp, complet
                     conn.commit()
                     if completed == 1:
                         print(f"Completed {formatted_date} - {ensemble_name}")
+                        run_ascat_pred(ensemble_name)
 
     except sqlite3.Error as e:
         print(f"SQLite error (update_ensemble_status): {e}")
