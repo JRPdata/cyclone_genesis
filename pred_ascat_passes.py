@@ -2233,12 +2233,15 @@ for candidate in passes_log[latest_model_run][latest_pass]:
 image_file_path = os.path.join(save_model_passes_folder, 'global_image.png')
 plt.savefig(image_file_path, dpi=100, bbox_inches=None, pad_inches=0)
 
-
+dt_expires = dt_utc + timedelta(hours=6)
+expires_string = dt_expires.strftime("%a, %d %b %Y %H:%M:%S GMT")
+meta_tag = f'<meta http-equiv="Expires" content="{expires_string}">\n'
 
 # Create an HTML file with the image map and a right-hand side frame
 html_file_path = os.path.join(save_model_passes_folder, 'index.html')
 with open(html_file_path, 'w') as f:
     f.write('<html><head><title>ASCAT Pass Predictions for TCs\n</title>')
+    f.write(meta_tag)
     f.write('<style>\n')
     f.write('#pass-select { font-size: 14px; padding: 5x; }\n')
     f.write('#prev-button, #next-button { font-size: 12px; padding: 5px; }\n')
