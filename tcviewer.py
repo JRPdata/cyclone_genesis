@@ -31,6 +31,15 @@
 # TOGGLE ANALYSIS MODE = a key (must have selection loop on tracks); NOTE: TRACK ANALYSIS ONLY PRESENTLY WORKS IN UTC TZ
 #   SAVE FIGURE = s key (or p key) (saves current figure in analysis mode)
 # PRINT TRACK STATS = i key (must be hovering; prints to terminal)
+# DISPLAY SST DATA = 4 key (set DISPLAY_NETCDF to 'tchp') (Tropical Cyclone Heat Potential from AOML)
+# DISPLAY TCHP DATA = 5 key (set DISPLAY_NETCDF to 'tchp') (Tropical Cyclone Heat Potential from AOML)
+# DISPLAY D26 DATA = 6 key (set DISPLAY_NETCDF to 'd26') (Depth of the 26 degree isobar)
+# DISPLAY NO NETCDF DATA = r key (set DISPLAY_NETCDF to None) (Don't display either TCHP or 26 degree isobar)
+# HIDE TRACKS BY DETIAL = k key (hide tracks by fields (vmax, lat/lon, etc) and valid time)
+# SAVE HIDDEN TRACKS (SLOT 1) = 1 key (saves the current view - same hidden tracks; will not work after changing ensembles)
+# SAVE HIDDEN TRACKS (SLOT 2) = 2 key (saves the current view - same hidden tracks)
+# LOAD HIDDEN TRACKS (SLOT 1) = 8 key (re-hides the tracks saved in slot 1 pressing '1')
+# LOAD HIDDEN TRACKS (SLOT 2) = 9 key ("" from slot 2 from pressing '2')
 
 # Click on (colored) legend for valid time days to cycle between what to display
 #   (relative to (00Z) start of earliest model init day)
@@ -48,6 +57,8 @@
 #   ZOOM OUT, THEN ZOOM IN TO WHERE TO PLACE END POINT AND HOLD SHIFT AND MOUSE MOTION TO PLACE END POINT
 #   RELEASE SHIFT WHEN END POINT POSITION SET. FREE TO ZOOM IN/OUT AFTERWARD
 
+
+
 ####### CONFIG
 # Process the wind radii data from TCGEN ensembles
 PROCESS_TCGEN_WIND_RADII = True
@@ -63,6 +74,24 @@ INTERP_PERIOD_SECONDS = 3600
 # pressure statistics for NA, EP basins by likelihood of being categorized at that pressure (from cyclone-climatology notebook)
 # used by presets for Analysis
 output_cat_file_name = 'output_cat_values.json'
+
+TCHP_NC_PATH = 'netcdf/aomlTCHP_2d68_c702_c12c.nc'
+#TCHP_NC_PATH = 'netcdf/aomlTCHP_0d47_b45c_eae4.nc'
+#TCHP_NC_PATH = 'netcdf/aomlTCHP_b01e_9861_5915.nc'
+# https://coastwatch.noaa.gov/pub/socd2/coastwatch/sst_blended/sst5km/daynight/ghrsst_ospo/2024/20241002000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc
+SST_NC_PATH = 'netcdf/20241001000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc'
+SST_NC_PATH = 'netcdf/20241003000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc'
+SST_NC_PATH = 'netcdf/20241004000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc'
+SST_NC_PATH = 'netcdf/20241005000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc'
+# load netcdf files (regardless of display)
+LOAD_NETCDF = True
+# default netcdf display?
+DISPLAY_NETCDF = None
+#DISPLAY_NETCDF = 'd26'
+DISPLAY_NETCDF = 'tchp'
+#DISPLAY_NETCDF = 'sst'
+# Set to True or False to bin the NETCDF data
+BIN_NETCDF_DATA = True
 
 # how often (in minutes) to check for stale data in three classes: tcvitals, adeck, bdeck
 #   for notification purposes only.
@@ -379,6 +408,15 @@ import sqlite3
 
 # for performance optimizations
 import matplotlib
+
+# for plotting netcdf4 data
+import netCDF4 as nc
+import matplotlib.colors as mcolors
+
+# Disable all pre-existing keymaps in mpl (conflict causes bugs)
+for key in plt.rcParams.keys():
+    if key.startswith('keymap'):
+        plt.rcParams[key] = []
 
 # Input data variables
 
@@ -1918,6 +1956,7 @@ def tcvitals_line_to_dict(line):
             pass
 
     return storm_vitals
+
 
 # Classes used by App class
 
@@ -5462,6 +5501,315 @@ class MeasureTool:
             if EventManager.get_blocking_purpose():
                 EventManager.unblock_events()
 
+# Plot tchp, depth of the 26th isobar data
+class NetCDFPlotter:
+    def __init__(self, filepath, data_type):
+        self.filepath = filepath
+        self.tchp = None
+        self.d26 = None
+        self.sst = None
+        self.lat = None
+        self.lon = None
+        self.first_datetime = None
+        self.data_type = data_type
+
+    def load_data(self):
+        # Open the NetCDF file and load tchp and depth26 datasets
+        with nc.Dataset(self.filepath, 'r') as ds:
+            if self.data_type in ['tchp', 'd26']:
+                self.tchp = ds.variables['Tropical_Cyclone_Heat_Potential'][:][0]
+                self.d26 = ds.variables['D26'][:][0]
+                self.lat = ds.variables['latitude'][:]
+                self.lon = ds.variables['longitude'][:]
+            elif self.data_type == 'sst':
+                # Get the sst data for the day and convert it from K to C
+                self.sst = ds.variables['analysed_sst'][:][0]  - 273.15
+                self.lat = ds.variables['lat'][:]
+                self.lon = ds.variables['lon'][:]
+
+            # Assume the time variable is named 'time' and is in hours since a reference date
+            time_var = ds.variables['time'][:]
+            time_units = ds.variables['time'].units  # e.g., 'hours since 2000-01-01 00:00:00'
+
+            # Convert the time to a pandas datetime
+            time_dates = nc.num2date(time_var, time_units)
+
+            # Convert cftime to datetime
+            datetime_dates = [datetime(*date.timetuple()[:6]) for date in time_dates]
+            if len(datetime_dates) != 0:
+                self.first_datetime = datetime_dates[0]
+
+    def clip_data(self, data, data_min=None, data_max=None):
+        # Clip the data based on provided min and max
+        if data_min is not None:
+            data = np.maximum(data, data_min)
+        if data_max is not None:
+            data = np.minimum(data, data_max)
+        return data
+
+    def bin_data(self, data, bins=None):
+        # If binning is enabled, simplify the data based on the bins
+        if bins:
+            binned_data = np.zeros_like(data)
+            for i, (bin_min, bin_max) in enumerate(bins):
+                binned_data[(data >= bin_min) & (data < bin_max)] = (bin_min + bin_max) / 2
+            return binned_data
+        return data
+
+    # Create the colormap function
+    def create_colormap(self, dataset, data_min, data_max, bins, scale_min, scale_max):
+        if dataset == 'sst':
+            colors = ['white', 'cyan', 'blue', 'green', 'yellow', 'orange', 'red', 'purple', 'pink']
+        else:
+            colors = ['black', 'blue', 'cyan', 'green', 'yellow', 'orange', 'red', 'purple', 'pink']
+
+        if bins is not None:
+            # Number of bins, and hence color segments, should match the intervals in bins
+            num_colors = len(bins)
+
+            # Create a continuous colormap from the defined colors
+            continuous_cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors)
+
+            # Extract the lower and upper bounds from the bin tuples
+            bin_edges = np.array([b[0] for b in bins] + [bins[-1][1]])  # Include the upper bound of the last bin
+
+            # Normalize the bin edges to [0, 1] based on data_min and data_max
+            norm_bin_edges = (bin_edges - scale_min) / (scale_max - scale_min)
+
+            # Sample colors based on the normalized bin edges
+            sampled_colors = [continuous_cmap(norm) for norm in norm_bin_edges]
+
+            # Create a ListedColormap using the sampled colors
+            cmap = mcolors.ListedColormap(sampled_colors[:num_colors])
+
+            norm = mcolors.BoundaryNorm(bin_edges, cmap.N)
+
+
+        else:
+            # Use continuous colormap
+            cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors)
+            norm = mcolors.Normalize(vmin=scale_min, vmax=scale_max)
+
+        return cmap, norm
+
+    def plot_data(self, ax=None, dataset='tchp', data_min=None, data_max=None, bins=None, opacity=1.0, scale_min=0,
+                  scale_max=300):
+        # Select the dataset (tchp or d26)
+        if dataset == 'tchp':
+            data = self.tchp
+            label = 'TCHP\n(kJ cm^-2)'
+        elif dataset == 'd26':
+            data = self.d26
+            label = 'D26\n(m)'
+        elif dataset == 'sst':
+            data = self.sst
+            label = 'SST\n(deg C)'
+        else:
+            # invalid config
+            return
+
+        if self.first_datetime is not None:
+            formatted_date = self.first_datetime.strftime('%Y-%m-%d')
+            label += f'\n{formatted_date}'
+
+        data = self.clip_data(data, data_min, data_max)
+
+        data = self.bin_data(data, bins)
+
+        data_range_min = np.nanmin(data)
+        data_range_max = np.nanmax(data)
+
+        vmin = data_min if data_min is not None else data_range_min
+        vmax = data_max if data_max is not None else data_range_max
+
+        # Create the colormap
+        cmap, norm = self.create_colormap(dataset, data_range_min, data_range_max, bins, scale_min, scale_max)
+        mesh = ax.pcolormesh(self.lon, self.lat, data, cmap=cmap, norm=norm, alpha=opacity,
+                             transform=ccrs.PlateCarree())
+
+        # Create the color bar
+        cbar = plt.colorbar(mesh, ax=ax, orientation='horizontal', pad=0.05, fraction = 0.1)
+        cbar.ax.set_position([0.45, 0.9, 0.45, 0.1])  # [left, bottom, width, height] of the color bar
+
+        # Set tick label colors to white
+        cbar.ax.tick_params(labelcolor='white')  # Set color of color bar ticks
+
+        if bins is not None:
+            bin_edges = np.array([b[0] for b in bins] + [bins[-1][1]])
+            cbar.set_ticks(bin_edges)
+
+        cbar.set_label(label, color='white')
+
+        # Set bbox for the color bar label using the correct attribute
+        cbar.ax.xaxis.label.set_bbox(dict(facecolor='dimgray', edgecolor='white', alpha=1))  # Dark grey background
+        cbar.ax.xaxis.set_label_coords(1.09, 0.75)  # Adjust this to position the label below the color bar
+
+        cbar.ax.tick_params(labelcolor='white')  # Set color of color bar ticks
+
+        for label in cbar.ax.get_xticklabels():
+            label.set_color('white')  # Set label color to white
+            label.set_bbox(dict(facecolor='dimgray', edgecolor='white', alpha=1.0))  # Dark grey background
+
+        # Set the color of the color bar ticks to white
+        for tick in cbar.ax.get_yticklabels():
+            tick.set_color('white')
+
+
+# Helper class for (partially) interpolating and filtering points on tc candidates by time and fields
+class PartialInterpolationTrackFilter:
+    @staticmethod
+    def filter_by_field(time_filtered_candidates, field_data, by_all_all, by_all_any, by_any_all,
+                                   by_any_any):
+        """
+        Filter candidates based on the specified criteria.
+
+        Parameters:
+        - time_filtered_candidates: List of tuples containing candidate tracks.
+        - field_data: Dictionary containing field key ranges.
+        - by_all_all: Boolean indicating if all points must satisfy all fields.
+        - by_all_any: Boolean indicating if all points must satisfy at least one field.
+        - by_any_all: Boolean indicating if any point must satisfy all fields.
+        - by_any_any: Boolean indicating if any pair of points must satisfy any fields.
+
+        Returns:
+        - List of filtered candidates.
+        """
+        field_filtered_candidates = []
+
+        for internal_id, points in time_filtered_candidates:
+            # Skip candidates if the track has no points
+            if not points:
+                continue
+
+            if by_all_all and PartialInterpolationTrackFilter.satisfies_all_fields(points, field_data):
+                field_filtered_candidates.append((internal_id, points))
+            elif by_all_any and PartialInterpolationTrackFilter.satisfies_any_fields(points, field_data):
+                field_filtered_candidates.append((internal_id, points))
+            elif by_any_all and PartialInterpolationTrackFilter.satisfies_any_all(points, field_data):
+                field_filtered_candidates.append((internal_id, points))
+            elif by_any_any and PartialInterpolationTrackFilter.satisfies_any_any(points, field_data):
+                field_filtered_candidates.append((internal_id, points))
+
+        return field_filtered_candidates
+
+    @staticmethod
+    def interpolate_point(pt1, pt2, target_time, field_keys):
+        """Interpolate values between two points based on target_time."""
+        interpolated = {}
+        time_diff = (pt2['valid_time'] - pt1['valid_time']).total_seconds()
+        factor = (target_time - pt1['valid_time']).total_seconds() / time_diff
+
+        # Interpolate each field based on the factor
+        for key in field_keys:
+            if key in pt1 and key in pt2:
+                interpolated[key] = pt1[key] + (pt2[key] - pt1[key]) * factor
+
+        # Always include valid_time and init_time
+        interpolated['valid_time'] = target_time
+        interpolated['init_time'] = pt1['init_time']  # Assuming we use pt1's init_time
+        return interpolated
+
+    # Partially (only include points in dt range) interpolate points for tc candidates (filter by time)
+    # This is run first, then filtered by fields
+    @staticmethod
+    def filter_by_time(filtered_candidates, start_dt, end_dt, field_keys, all_must_overlap):
+        interpolated_tracks = []
+
+        for internal_id, tc in filtered_candidates:
+            # If start or end is outside the track range, skip
+            if start_dt > tc[-1]['valid_time'] or end_dt < tc[0]['valid_time']:
+                continue
+
+            if all_must_overlap:
+                if tc[0]['valid_time'] >= start_dt and tc[-1]['valid_time'] <= end_dt:
+                    interpolated_tracks.append((internal_id, tc))
+                # either track is absolutely in range or not
+                continue
+
+            new_track = []
+            i = 0
+
+            # Find where the start_dt fits
+            while i < len(tc) and tc[i]['valid_time'] < start_dt:
+                i += 1
+
+            # Handle the case where start_dt is before the first point
+            if i == 0:
+                new_track.append({k: v for k, v in tc[0].items() if k in field_keys or k == 'valid_time'})
+                i = 1
+            elif i < len(tc):
+                # Interpolate start_dt
+                interpolated_start = PartialInterpolationTrackFilter.interpolate_point(tc[i - 1], tc[i], start_dt, field_keys)
+                new_track.append(interpolated_start)
+
+            # Add subsequent points until end_dt
+            while i < len(tc) and tc[i]['valid_time'] <= end_dt:
+                new_track.append({k: v for k, v in tc[i].items() if k in field_keys or k == 'valid_time'})
+                i += 1
+
+            # Handle the case where end_dt is between two points
+            if i < len(tc) and tc[i - 1]['valid_time'] < end_dt < tc[i]['valid_time']:
+                interpolated_end = PartialInterpolationTrackFilter.interpolate_point(tc[i - 1], tc[i], end_dt, field_keys)
+                new_track.append(interpolated_end)
+
+            # Add track to final output if we added points
+            if new_track:
+                interpolated_tracks.append((internal_id, new_track))
+
+        return interpolated_tracks
+
+    @staticmethod
+    def ranges_overlap(range1, range2):
+        """Check if two ranges overlap."""
+        return max(range1[0], range2[0]) <= min(range1[1], range2[1])
+
+    @staticmethod
+    def satisfies_all_fields(points, field_data):
+        """Check if all points satisfy all field conditions."""
+        for pt in points:
+            for key, value in field_data.items():
+                if not (value['min'] <= pt[key] <= value['max']):
+                    return False
+        return True
+
+    @staticmethod
+    def satisfies_any_fields(points, field_data):
+        """Check if at least one field is satisfied for all points."""
+        for pt in points:
+            if any(value['min'] <= pt[key] <= value['max'] for key, value in field_data.items()):
+                continue
+            return False
+        return True
+
+    @staticmethod
+    def satisfies_any_all(points, field_data):
+        """Check if any point satisfies all field conditions."""
+        for pt in points:
+            if all(value['min'] <= pt[key] <= value['max'] for key, value in field_data.items()):
+                return True
+        return False
+
+    @staticmethod
+    def satisfies_all_any(points, field_data):
+        """Check if all points have at least one overlapping field."""
+        for key in field_data.keys():
+            if all(not (value['min'] <= pt[key] <= value['max']) for pt in points):
+                return False
+        return True
+
+    @staticmethod
+    def satisfies_any_any(points, field_data):
+        """Check if any pair of points satisfies any field conditions."""
+        for i in range(len(points)):
+            for j in range(i + 1, len(points)):
+                for key in field_data.keys():
+                    if PartialInterpolationTrackFilter.ranges_overlap(
+                            (points[i][key], points[j][key]),
+                            (field_data[key]['min'], field_data[key]['max'])
+                    ):
+                        return True
+        return False
+
 # Blitting box for map (for zooms / selections)
 class SelectionBox:
     def __init__(self):
@@ -6291,6 +6639,19 @@ class WindField:
 # Main app class
 
 class App:
+    saved_hidden = {}
+    plotter_sst = None
+    plotter_tchp_d26 = None
+    if LOAD_NETCDF:
+        file_path = SST_NC_PATH
+        # load tchp, d26 together
+        plotter_sst = NetCDFPlotter(file_path, 'sst')
+        plotter_sst.load_data()
+
+        file_path = TCHP_NC_PATH
+        plotter_tchp_d26 = NetCDFPlotter(file_path, 'tchp')
+        plotter_tchp_d26.load_data()
+
     lon_lat_tc_records = []
     str_tree = None
     wind_field_records = []
@@ -6493,6 +6854,7 @@ class App:
     overlay_rvor_label_last_alpha = 1.0
 
     rvor_dialog_open = False
+    hide_by_field_dialog_open = False
     analysis_dialog_open = False
 
     selection_loop_mode = False
@@ -6624,6 +6986,10 @@ class App:
             cls.annotate_single_storm_extrema(point_index=cursor_point_index)
 
     @classmethod
+    def any_modal_open(cls):
+        return cls.hide_by_field_dialog_open or cls.analysis_dialog_open or cls.rvor_dialog_open
+
+    @classmethod
     def any_storm_points_in_bounds(cls, tc_index):
         if not cls.plotted_tc_candidates:
             return False
@@ -6639,7 +7005,7 @@ class App:
         try:
             internal_id, tc_candidate = cls.plotted_tc_candidates[tc_index]
             for point in tc_candidate:
-                if len(App.hidden_tc_candidates) == 0 or internal_id not in App.hidden_tc_candidates:
+                if len(cls.hidden_tc_candidates) == 0 or internal_id not in cls.hidden_tc_candidates:
                     lat = point['lat']
                     lon = point['lon']
                     any_in_bound = any_in_bound or (xlim[0] <= lon <= xlim[1] and ylim[0] <= lat <= ylim[1])
@@ -6789,7 +7155,7 @@ class App:
             # restore region
             if cls.background_for_blit:
                 cls.ax.figure.canvas.restore_region(cls.background_for_blit)
-                App.ax.figure.canvas.blit(App.ax.bbox)
+                cls.ax.figure.canvas.blit(cls.ax.bbox)
 
             #cls.circle_handle.remove()
             cls.circle_handle = None
@@ -6809,9 +7175,9 @@ class App:
         # reset all labels
         cls.update_tc_status_labels()
         cls.clear_circle_patch()
-        App.lon_lat_tc_records = []
-        App.wind_field_records = {}
-        App.wind_field_strtrees = {}
+        cls.lon_lat_tc_records = []
+        cls.wind_field_records = {}
+        cls.wind_field_strtrees = {}
 
     @classmethod
     def clear_storm_extrema_annotations(cls):
@@ -6830,7 +7196,7 @@ class App:
             cls.display_map()
             if not cls.have_deck_data:
                 cls.update_deck_data()
-            App.hidden_tc_candidates = set()
+            cls.hidden_tc_candidates = set()
             cls.display_deck_data()
             cls.set_focus_on_map()
 
@@ -7217,7 +7583,7 @@ class App:
                         # valid_time_datetime.fromisoformat(valid_time_str)
 
                         # check for manually hidden
-                        if len(App.hidden_tc_candidates) != 0 and internal_id in App.hidden_tc_candidates:
+                        if len(cls.hidden_tc_candidates) != 0 and internal_id in cls.hidden_tc_candidates:
                             continue
 
                     lat_lon_with_time_step_list = []
@@ -7385,8 +7751,8 @@ class App:
                             record['value'] = internal_id
                             lon_lat_tc_records.append(record)
 
-        App.lon_lat_tc_records = lon_lat_tc_records
-        App.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
+        cls.lon_lat_tc_records = lon_lat_tc_records
+        cls.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
 
         labels_positive = [f' D+{str(i): >2} ' for i in
                            range(len(cls.time_step_marker_colors) - 1)]  # Labels corresponding to colors
@@ -7583,7 +7949,7 @@ class App:
 
                 # check for manually hidden
                 internal_id = numc
-                if len(App.hidden_tc_candidates) != 0 and internal_id in App.hidden_tc_candidates:
+                if len(cls.hidden_tc_candidates) != 0 and internal_id in cls.hidden_tc_candidates:
                     continue
 
                 lat_lon_with_time_step_list = []
@@ -7772,8 +8138,8 @@ class App:
                     # TODO: probabilistic wind radii graphic with boundary path (path patch)
                     wind_field_gpd_dicts.append(gpd_dicts)
 
-        App.lon_lat_tc_records = lon_lat_tc_records
-        App.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
+        cls.lon_lat_tc_records = lon_lat_tc_records
+        cls.str_tree = STRtree([record["geometry"] for record in lon_lat_tc_records])
 
         wind_field_records = {}
         if PROCESS_TCGEN_WIND_RADII:
@@ -7788,11 +8154,11 @@ class App:
 
                 if gpds_to_concat and len(gpds_to_concat) > 0:
                     df = pd.concat(gpds_to_concat, ignore_index=True)
-                    App.wind_field_records[wind_speed] = df
-                    App.wind_field_strtrees[wind_speed] = STRtree(df["geometry"].values)
+                    cls.wind_field_records[wind_speed] = df
+                    cls.wind_field_strtrees[wind_speed] = STRtree(df["geometry"].values)
                 else:
-                    App.wind_field_records[wind_speed] = None
-                    App.wind_field_strtrees[wind_speed] = None
+                    cls.wind_field_records[wind_speed] = None
+                    cls.wind_field_strtrees[wind_speed] = None
 
         labels_positive = [f' D+{str(i): >2} ' for i in
                            range(len(cls.time_step_marker_colors) - 1)]  # Labels corresponding to colors
@@ -7888,6 +8254,31 @@ class App:
         cls.ax.autoscale_view(scalex=False, scaley=False)
         cls.ax.set_yscale('linear')
         cls.ax.set_facecolor('black')
+
+
+        if LOAD_NETCDF and DISPLAY_NETCDF is not None:
+            # Draw the netcdf data for SSTs, or TCHP, or Depth of the 26th isobar (D26)
+            if DISPLAY_NETCDF == 'sst':
+                plotter = cls.plotter_sst
+                abs_scale_min = -5
+                abs_scale_max = 35
+                bins = [(-5, 0), (0, 5), (5, 10), (10, 20), (20, 25), (25, 26), (26, 27),
+                        (27, 28), (28, 29), (29, 30), (30, 31), (31, 32), (32, 33), (33, 34), (34, 35), (35, 99)]
+            elif DISPLAY_NETCDF in ['tchp', 'd26']:
+                plotter = cls.plotter_tchp_d26
+                abs_scale_min = 0
+                abs_scale_max = 300
+                bins = [(0, 10), (10, 20), (20, 30), (30, 40), (40, 50), (50, 60), (60, 70), (70, 80), (80, 90),
+                          (90, 100), (100, 125), (125, 150), (150, 175), (175, 200),
+                          (200, 225), (225, 250), (250, 275), (275, 300), (300, 999)]
+
+            # Plot with clipping, binning, and opacity
+
+            if not BIN_NETCDF_DATA:
+                bins = None
+
+            plotter.plot_data(ax=cls.ax, dataset=DISPLAY_NETCDF, data_min=None, data_max=None, bins=bins, opacity=1,
+                              scale_min=abs_scale_min, scale_max=abs_scale_max)
 
         # Draw a rectangle patch around the subplot to visualize its boundaries
         extent = cls.ax.get_extent()
@@ -8210,20 +8601,229 @@ class App:
             # sanity check
             return official_models
 
-    # hide selected, or show all if none selected
+    # Hide (selected) tracks by field
     @classmethod
-    def hide_tc_candidate(cls):
+    def hide_by_field(cls, by_all_all = False, by_all_any = False, by_any_all = False, by_any_any = False):
+        # Given selected tracks (selectop loop) or all the tracks (if no selection loops):
+        # When there is no field keys and by_all_all, we treat the valid_time as the field key essentially (time range must overlap for all points)
+        # When there are field keys, we interpolate and filter tracks on the valid_time, then by field depending on whether
+        # (by_all_all) for all track points (in the time range) (per candidate), all fields must satisfy
+        # (by_all_any) for all track poiints (in the time range) (per candidate), any field must satisfy
+        # (by_any_all) for any track points (in the time range) (per candidate), all fields must satisfy
+        # (by_all_any) for any track poiints (in the time range) (per candidate), any field must satisfy
+        # We then take the disjoint union of the constrained candidates to get the set of candidates to hide
+
+        field_data = {}
+        any_valid = False
+        for key, vars in cls.field_vars.items():
+            val = vars['value'].get()
+            tol = vars['tolerance'].get()
+            min = vars['min'].get()
+            max = vars['max'].get()
+            fd = {}
+            if key == 'vmax10m_ms':
+                unit_conv = 1.9438452
+                key = 'vmax10m'
+            else:
+                unit_conv = 1.0
+
+            if len(str(val).strip()) > 0:
+                conv_value = float(val) * unit_conv
+                if len(str(tol).strip()) > 0:
+                    tol = float(tol) * unit_conv
+                else:
+                    tol = 0.0
+
+                fd['min'] = conv_value - tol
+                fd['max'] = conv_value + tol
+            else:
+                any_min_max = False
+                if len(str(min).strip()) > 0:
+                    fd['min'] = float(min) * unit_conv
+                    any_min_max = True
+                if len(str(max).strip()) > 0:
+                    fd['max'] = float(max) * unit_conv
+                    any_min_max = True
+
+                # only add the implicit min/max if we have one of the values as an input
+                if any_min_max:
+                    if 'min' not in fd:
+                        fd['min'] = -np.inf
+                    if 'max' not in fd:
+                        fd['max'] = np.inf
+
+            if len(fd.keys()) > 0:
+                field_data[key] = fd
+                any_valid = True
+
+        time_data = {}
+        for time_type, time_type_vars in cls.time_vars.items():
+            time_data[time_type] = {}
+            for k, v in time_type_vars.items():
+                val = v.get().strip()
+                if val != '':
+                    time_data[time_type][k] = int(val)
+
+            if time_type == 'point':
+                expected_num_keys = 7
+            else:
+                expected_num_keys = 6
+
+            if len(time_data[time_type].keys()) == expected_num_keys:
+                any_valid = True
+            elif time_type == 'point' and len(time_data[time_type].keys()) == 6 and 'tolerance' not in time_data[time_type].keys():
+                time_data[time_type]['tolerance'] = 0.0
+                any_valid = True
+            else:
+                # delete the constraint if there are empty (required) fields
+                del time_data[time_type]
+
+            # can only have a point or range for time type (in case user specifies all three)
+            if 'point' in time_data.keys() and len(time_data.keys()) > 1:
+                if 'min' in time_data.keys():
+                    del time_data[time_type]['min']
+                if 'max' in time_data.keys():
+                    del time_data[time_type]['max']
+
+        if not any_valid:
+            return
+
+        filtered_candidates = []
+        if not SelectionLoops.is_empty():
+            internal_ids = cls.get_selected_internal_storm_ids()
+            num_tracks = 0
+            if internal_ids:
+                num_tracks = len(internal_ids)
+
+            if num_tracks == 0:
+                return
+
+            # Aggregate candidates by models
+            filtered_candidates = [(iid, tc) for iid, tc in cls.plotted_tc_candidates if
+                                   iid in internal_ids]
+        else:
+            # Aggregate candidates by models
+            for candidate in cls.plotted_tc_candidates:
+                iid, tc = candidate
+                if iid not in cls.hidden_tc_candidates:
+                    filtered_candidates.append(candidate)
+
+        if len(filtered_candidates) == 0:
+            return
+
+        # from filtered candidates are now the list of candidates we will find a list that meet the constraints
+        # after finding the candidates that meet the constraints, we will hide the disjoint union of the two
+
+        field_keys = field_data.keys()
+        synoptic_only = False
+        synpotic_point = False
+        synoptic_min = False
+        synoptic_max = False
+        interpolated_time = False
+        hide_by_time = False
+        # first check if we need to interpolate the tracks (for time constraint)
+        time_filtered_candidates = []
+        if len(time_data.keys()) == 0:
+            # no filtering by time
+            time_filtered_candidates = filtered_candidates
+        elif len(time_data.keys()) > 0:
+            start_dt = datetime.min
+            end_dt = datetime.max
+            if 'point' in time_data.keys():
+                k = 'point'
+                dt = datetime(
+                    year=time_data[k]['year'],
+                    month=time_data[k]['month'],
+                    day=time_data[k]['day'],
+                    hour=time_data[k]['hour'],
+                    minute=time_data[k]['minute'],
+                    second=time_data[k]['second']
+                )
+                start_dt = dt - timedelta(seconds=time_data[k]['tolerance'])
+                end_dt = dt + timedelta(seconds=time_data[k]['tolerance'])
+            else:
+                if 'min' in time_data.keys():
+                    k = 'min'
+                    start_dt = datetime(
+                        year=time_data[k]['year'],
+                        month=time_data[k]['month'],
+                        day=time_data[k]['day'],
+                        hour=time_data[k]['hour'],
+                        minute=time_data[k]['minute'],
+                        second=time_data[k]['second']
+                    )
+                if 'max' in time_data.keys():
+                    k = 'max'
+                    end_dt = datetime(
+                        year=time_data[k]['year'],
+                        month=time_data[k]['month'],
+                        day=time_data[k]['day'],
+                        hour=time_data[k]['hour'],
+                        minute=time_data[k]['minute'],
+                        second=time_data[k]['second']
+                    )
+
+            no_field_keys = len(field_keys) == 0
+            all_must_overlap = no_field_keys and by_all_all
+            print(all_must_overlap, start_dt, end_dt)
+            time_filtered_candidates = PartialInterpolationTrackFilter.filter_by_time(filtered_candidates,
+                                                                                      start_dt, end_dt, field_keys,
+                                                                                      all_must_overlap)
+
+        # have candidates meeting time constraint, now filter by candidates meeting field_keys constraint
+        if len(time_filtered_candidates) > 0 and len(field_keys) > 0:
+            # filter now by field_keys
+            # only one of the by_X_X can be True
+            field_filtered_candidates = PartialInterpolationTrackFilter.filter_by_field(
+                time_filtered_candidates,
+                field_data,
+                by_all_all=by_all_all,
+                by_all_any=by_all_any,
+                by_any_all=by_any_all,
+                by_any_any=by_any_any
+            )
+        else:
+            field_filtered_candidates = time_filtered_candidates
+
+        # Get the disjoint union
+        field_filtered_ids = {internal_id for internal_id, _ in field_filtered_candidates}
+        filtered_ids = {internal_id for internal_id, _ in filtered_candidates}
+
+        # Return the symmetric difference, which gives us the disjoint union of ids
+        internal_ids_to_hide = field_filtered_ids.symmetric_difference(filtered_ids)
+
+        if len(internal_ids_to_hide) > 0:
+            # hide the candidates
+            cls.hide_tc_candidates(internal_ids_to_hide)
+
+    # Function to set the current time for a specific time variable
+    @classmethod
+    def hide_set_current_time(cls, time_var):
+        current_time = datetime_utcnow()
+        time_var['year'].set(current_time.year)
+        time_var['month'].set(current_time.month)
+        time_var['day'].set(current_time.day)
+        time_var['hour'].set(current_time.hour)
+        time_var['minute'].set(current_time.minute)
+        time_var['second'].set(current_time.second)
+
+    # hide selected, or show all if none selected; if candidates_to_hide is passed, only hide those candidates
+    @classmethod
+    def hide_tc_candidates(cls, candidates_to_hide = None):
         # two modes now
         # when no selection loops present: hide mouse hovered storm, or unhide all
         # when selection loops present: hide mouse hovered storm, or if no hover, hide all tracks in selection
         total_num_overlapped_points = len(cls.nearest_point_indices_overlapped)
-        if total_num_overlapped_points == 0:
-            if not SelectionLoops.is_empty():
-                to_hide_internal_ids = cls.get_selected_internal_storm_ids()
+        if total_num_overlapped_points == 0 or candidates_to_hide:
+            if not SelectionLoops.is_empty() or candidates_to_hide:
+                if candidates_to_hide:
+                    to_hide_internal_ids = candidates_to_hide
+                else:
+                    to_hide_internal_ids = cls.get_selected_internal_storm_ids()
 
                 for to_hide_internal_id in to_hide_internal_ids:
                     #cursor_internal_id, tc_index, tc_point_index = cursor_point_index
-                    App.hidden_tc_candidates.add(to_hide_internal_id)
+                    cls.hidden_tc_candidates.add(to_hide_internal_id)
 
                     if cls.scatter_objects:
                         for internal_id, scatters in cls.scatter_objects.items():
@@ -8254,7 +8854,7 @@ class App:
                 cls.update_selection_info_label()
                 cls.redraw_fig_canvas(stale_bg=True)
             # unhide all
-            elif len(App.hidden_tc_candidates) > 0:
+            elif len(cls.hidden_tc_candidates) > 0:
                 if cls.scatter_objects:
                     for internal_id, scatters in cls.scatter_objects.items():
                         try:
@@ -8280,7 +8880,7 @@ class App:
                             except:
                                 traceback.print_exc()
 
-                App.hidden_tc_candidates = set()
+                cls.hidden_tc_candidates = set()
                 (lon, lat) = cls.last_cursor_lon_lat
                 cls.update_labels_for_mouse_hover(lat=lat, lon=lon)
                 cls.update_selection_info_label()
@@ -8289,7 +8889,7 @@ class App:
             num, cursor_point_index = cls.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
             if cursor_point_index:
                 cursor_internal_id, tc_index, tc_point_index = cursor_point_index
-                App.hidden_tc_candidates.add(cursor_internal_id)
+                cls.hidden_tc_candidates.add(cursor_internal_id)
 
                 if cls.scatter_objects:
                     for internal_id, scatters in cls.scatter_objects.items():
@@ -8340,6 +8940,11 @@ class App:
         cls.root.bind('z', cls.zoom_to_basin_dialog)
         cls.root.bind('b', cls.select_basin_dialog)
 
+        cls.root.bind('4', cls.set_netcdf_display_sst)
+        cls.root.bind('5', cls.set_netcdf_display_tchp)
+        cls.root.bind('6', cls.set_netcdf_display_d26)
+        cls.root.bind('r', cls.set_netcdf_display_none)
+
         cls.adeck_selected = tk.StringVar()
         cls.genesis_selected = tk.StringVar()
 
@@ -8380,6 +8985,11 @@ class App:
         if model_cycle:
             # clear map
             cls.redraw_map_with_data(model_cycle=model_cycle)
+
+    # rehide hidden candidates saved in slot
+    @classmethod
+    def load_hidden(cls, slot=None):
+        cls.hide_tc_candidates(cls.saved_hidden[slot])
 
     @staticmethod
     def load_settings():
@@ -8427,6 +9037,13 @@ class App:
         cls.set_focus_on_map()
 
     @classmethod
+    def on_hide_by_field_dialog_close(cls, dialog):
+        cls.hide_by_field_dialog_open = False
+        dialog.destroy()
+        # focus back on app
+        cls.set_focus_on_map()
+
+    @classmethod
     def on_rvor_dialog_close(cls, dialog):
         cls.rvor_dialog_open = False
         dialog.destroy()
@@ -8458,8 +9075,25 @@ class App:
 
     @classmethod
     def on_key_press(cls, event):
-        if not cls.zoom_selection_box:
-            cls.measure_tool.on_key_press(event)
+        if cls.any_modal_open():
+            return
+
+        if event.key == 'k':
+            cls.show_hide_by_field_dialog()
+            return
+
+        if event.key == '1':
+            cls.save_hidden(slot=1)
+            return
+        if event.key == '2':
+            cls.save_hidden(slot=2)
+            return
+        if event.key == '8':
+            cls.load_hidden(slot=1)
+            return
+        if event.key == '9':
+            cls.load_hidden(slot=2)
+            return
 
         if event.key == 'escape':
             # abort a zoom
@@ -8468,35 +9102,44 @@ class App:
                 cls.zoom_selection_box = None
             # cls.fig.canvas.draw()
             cls.blit_circle_patch()
+            return
 
         if event.key == '0':
             cls.zoom_out(max_zoom=True)
+            return
 
         if event.key == '-':
             cls.zoom_out(step_zoom=True)
+            return
 
         if event.key == '=':
             cls.zoom_in(step_zoom=True)
+            return
 
         if event.key == 'n':
             cls.cycle_to_next_overlapped_point()
+            return
 
         if event.key == 's':
             cls.toggle_selection_loop_mode()
+            return
 
         if event.key == 'h':
             if cls.selection_loop_mode:
                 SelectionLoops.toggle_visible()
             else:
-                cls.hide_tc_candidate()
+                cls.hide_tc_candidates()
+            return
 
         if event.key == 'i':
             if not cls.selection_loop_mode:
                 cls.print_track_stats()
+            return
 
         if event.key == 'x':
             # annotate storm extrema
             cls.annotate_storm_extrema()
+            return
 
         if event.key == 'c':
             if cls.selection_loop_mode:
@@ -8539,14 +9182,24 @@ class App:
 
             cls.redraw_fig_canvas(stale_bg=True)
             cls.blit_circle_patch()
+            return
+
+        if not cls.zoom_selection_box:
+            cls.measure_tool.on_key_press(event)
 
     @classmethod
     def on_key_release(cls, event):
+        if cls.any_modal_open():
+            return
+
         if not cls.zoom_selection_box:
             cls.measure_tool.on_key_release(event)
 
     @classmethod
     def on_click(cls, event):
+        if cls.any_modal_open():
+            return
+
         xlim = cls.ax.get_xlim()
         ylim = cls.ax.get_ylim()
 
@@ -8641,6 +9294,9 @@ class App:
 
     @classmethod
     def on_motion(cls, event):
+        if cls.any_modal_open():
+            return
+
         xlim = cls.ax.get_xlim()
         ylim = cls.ax.get_ylim()
 
@@ -8679,6 +9335,9 @@ class App:
 
     @classmethod
     def on_release(cls, event):
+        if cls.any_modal_open():
+            return
+
         xlim = cls.ax.get_xlim()
         ylim = cls.ax.get_ylim()
 
@@ -8786,7 +9445,7 @@ class App:
             filtered_candidates = [(iid, tc) for iid, tc in cls.plotted_tc_candidates if
                                    iid in internal_ids]
 
-            if filtered_candidates and len(filtered_candidates) == 0:
+            if len(filtered_candidates) == 0:
                 return
 
             if cls.mode == "ADECK":
@@ -9159,7 +9818,7 @@ class App:
 
     @classmethod
     def redraw_map_with_data(cls, model_cycle=None):
-        App.hidden_tc_candidates = set()
+        cls.hidden_tc_candidates = set()
         cls.display_map()
         if cls.mode == "GENESIS" and model_cycle:
             cls.display_genesis_data(model_cycle)
@@ -9247,6 +9906,10 @@ class App:
                     json.dump(settings, f, indent=4)
 
     @classmethod
+    def save_hidden(cls, slot=None):
+        cls.saved_hidden[slot] = copy.deepcopy(cls.hidden_tc_candidates)
+
+    @classmethod
     def select_basin_dialog(cls, event=None):
         dialog = tk.Toplevel(cls.root)
         dialog.title('Select Basin')
@@ -9276,6 +9939,30 @@ class App:
         listbox.bind("<Escape>", lambda event: cancel())
         ttk.Button(dialog, text='OK', command=select_basin, style='TButton').pack(side=tk.LEFT, padx=5, pady=5)
         ttk.Button(dialog, text='Cancel', command=cancel, style='TButton').pack(side=tk.LEFT, padx=5, pady=5)
+
+    @classmethod
+    def set_netcdf_display_d26(cls, event=None):
+        global DISPLAY_NETCDF
+        DISPLAY_NETCDF = 'd26'
+        cls.redraw_map_with_data(model_cycle=cls.genesis_model_cycle_time)
+
+    @classmethod
+    def set_netcdf_display_none(cls, event=None):
+        global DISPLAY_NETCDF
+        DISPLAY_NETCDF = None
+        cls.redraw_map_with_data(model_cycle=cls.genesis_model_cycle_time)
+
+    @classmethod
+    def set_netcdf_display_sst(cls, event=None):
+        global DISPLAY_NETCDF
+        DISPLAY_NETCDF = 'sst'
+        cls.redraw_map_with_data(model_cycle=cls.genesis_model_cycle_time)
+
+    @classmethod
+    def set_netcdf_display_tchp(cls, event=None):
+        global DISPLAY_NETCDF
+        DISPLAY_NETCDF = 'tchp'
+        cls.redraw_map_with_data(model_cycle=cls.genesis_model_cycle_time)
 
     @classmethod
     def set_focus_on_map(cls):
@@ -9383,7 +10070,182 @@ class App:
         cls.set_focus_on_map()
 
     @classmethod
+    def show_hide_by_field_dialog(cls, event=None):
+        cls.root.update_idletasks()
+
+        if not cls.hide_by_field_dialog_open:
+            cls.hide_by_field_dialog_open = True
+        else:
+            return
+
+        dialog = tk.Toplevel(cls.root, bg="#000000")
+        dialog.protocol("WM_DELETE_WINDOW", lambda: cls.on_hide_by_field_dialog_close(dialog))
+        dialog.title("Hide (Selected) Tracks by Field")
+
+        height = 540
+        width = 925
+        dialog.geometry(f"{width}x{height}")  # Set the width to 300 and height to 250
+        dialog.geometry(
+            f"+{tk_root.winfo_x() - width // 2 + tk_root.winfo_width() // 2}+{tk_root.winfo_y() - height // 2 + tk_root.winfo_height() // 2}")
+
+        # modal
+        dialog.grab_set()
+
+
+        # Create a frame to hold the checkboxes
+        frame = ttk.Frame(dialog, style='CanvasFrame.TFrame')
+        frame.grid()
+        frame.focus_set()
+        frame.focus()
+
+        # Field Constraints Section
+        # Header Labels
+        n = 0
+        ttk.Label(frame, text="Field", font=("Arial", 12, 'bold')).grid(row=n, column=0, padx=5, pady=5)
+        ttk.Label(frame, text="Value", font=("Arial", 12, 'bold')).grid(row=n, column=1, padx=5, pady=5)
+        ttk.Label(frame, text="Tol (+/-)", font=("Arial", 12, 'bold')).grid(row=n, column=2, padx=5, pady=5)
+        ttk.Label(frame, text="Min", font=("Arial", 12, 'bold')).grid(row=n, column=3, padx=5, pady=5)
+        ttk.Label(frame, text="Max", font=("Arial", 12, 'bold')).grid(row=n, column=4, padx=5, pady=5)
+
+        # Field rows with default tolerances
+        cls.fields = {
+            'lat': ("Latitude (deg):", 0.2),
+            'lon': ("Longitude (deg):", 0.2),
+            'mslp_value': ("MSLP (hPa):", 2.0),
+            'vmax10m': ("VMAX @ 10m (kt):", 5.0),
+            'vmax10m_ms': ("VMAX @ 10m (m/s):", 2.6),
+            'roci': ("ROCI (km):", 0),
+            'rmw': ("RMW (km):", 0)
+        }
+
+        # Entries
+        cls.field_vars = {}
+
+        n += 1
+        for i, (key, (label, tolerance)) in enumerate(cls.fields.items(), start=n):
+            ttk.Label(frame, text=label).grid(row=i, column=0, padx=5, pady=5)
+
+            value_var = tk.StringVar()
+            tolerance_var = tk.StringVar(value=str(tolerance))
+            min_var = tk.StringVar()
+            max_var = tk.StringVar()
+
+            ttk.Entry(frame, textvariable=value_var, width=8).grid(row=i, column=1, padx=5, pady=5)
+            ttk.Entry(frame, textvariable=tolerance_var, width=4).grid(row=i, column=2, padx=5, pady=5)
+            ttk.Entry(frame, textvariable=min_var, width=8).grid(row=i, column=3, padx=5, pady=5)
+            ttk.Entry(frame, textvariable=max_var, width=8).grid(row=i, column=4, padx=5, pady=5)
+
+            cls.field_vars[key] = {
+                'value': value_var,
+                'tolerance': tolerance_var,
+                'min': min_var,
+                'max': max_var
+            }
+            n += 1
+
+        # Time Constraints Section
+        # Labels for 'Time Constraints'
+        ttk.Label(frame, text="Time Constraints", font=("Arial", 12, 'bold')).grid(row=n, column=0, padx=5, pady=10,
+                                                                                   columnspan=9)
+        n += 1
+        time_labels = ['Year', 'Month', 'Day', 'Hour', 'Minute', 'Sec', 'Tol (+/-) (s)']
+        for i, time_label in enumerate(time_labels):
+            ttk.Label(frame, text=time_labels[i], font=("Arial", 12, 'bold')).grid(row=n, column=i+2, padx=5, pady=5)
+
+        n += 1
+        current_time = datetime_utcnow()
+        cls.time_vars = {
+            'point': {
+                'year': tk.StringVar(),
+                'month': tk.StringVar(),
+                'day': tk.StringVar(),
+                'hour': tk.StringVar(),
+                'minute': tk.StringVar(),
+                'second': tk.StringVar(),
+                'tolerance': tk.StringVar(value="0")
+            },
+            'min': {
+                'year': tk.StringVar(),
+                'month': tk.StringVar(),
+                'day': tk.StringVar(),
+                'hour': tk.StringVar(),
+                'minute': tk.StringVar(),
+                'second': tk.StringVar(),
+            },
+            'max': {
+                'year': tk.StringVar(),
+                'month': tk.StringVar(),
+                'day': tk.StringVar(),
+                'hour': tk.StringVar(),
+                'minute': tk.StringVar(),
+                'second': tk.StringVar(),
+            }
+        }
+
+        n += 1
+        # Row for point time
+        ttk.Label(frame, text="Point Time").grid(row=n, column=0, padx=5, pady=5)
+        ttk.Button(frame, text="Now", command=lambda: cls.hide_set_current_time(cls.time_vars['point'])).grid(row=n,
+                                                                                                     column=1,
+                                                                                                     padx=5,
+                                                                                                     pady=5)
+        for i, (key, var) in enumerate(cls.time_vars['point'].items()):
+            ttk.Entry(frame, textvariable=var, width=4).grid(row=n, column=i + 2, padx=5, pady=5, sticky="ew")
+
+        n += 1
+        # Row for min time
+        ttk.Label(frame, text="Min Time").grid(row=n, column=0, padx=5, pady=5)
+        ttk.Button(frame, text="Now", command=lambda: cls.hide_set_current_time(cls.time_vars['min'])).grid(row=n,
+                                                                                                     column=1,
+                                                                                                     padx=5,
+                                                                                                     pady=5)
+        for i, (key, var) in enumerate(cls.time_vars['min'].items()):
+            if key != 'tolerance':
+                ttk.Entry(frame, textvariable=var, width=4).grid(row=n, column=i + 2, padx=5, pady=5, sticky="ew")
+
+        n += 1
+        # Row for max time
+        ttk.Label(frame, text="Max Time").grid(row=n, column=0, padx=5, pady=5)
+        ttk.Button(frame, text="Now", command=lambda: cls.hide_set_current_time(cls.time_vars['max'])).grid(row=n,
+                                                                                                     column=1,
+                                                                                                     padx=5,
+                                                                                                     pady=5)
+        for i, (key, var) in enumerate(cls.time_vars['max'].items()):
+            if key != 'tolerance':
+                ttk.Entry(frame, textvariable=var, width=4).grid(row=n, column=i + 2, padx=5, pady=5, sticky="ew")
+
+        n += 1
+        # buttons
+        all_all_btn = ttk.Button(frame, text="All T All F",
+                            command=lambda: [cls.hide_by_field(by_all_all=True), cls.on_hide_by_field_dialog_close(dialog)],
+                            style='TButton', width=12)
+        all_all_btn.grid(row=n, column=0, padx=20, pady=5)
+
+        all_any_btn = ttk.Button(frame, text="All T Any F",
+                            command=lambda: [cls.hide_by_field(by_all_any=True), cls.on_hide_by_field_dialog_close(dialog)],
+                            style='TButton', width=12)
+        all_any_btn.grid(row=n, column=1, padx=20, pady=5)
+
+        any_all_btn = ttk.Button(frame, text="Any T All F",
+                                 command=lambda: [cls.hide_by_field(by_any_all=True), cls.on_hide_by_field_dialog_close(dialog)],
+                                 style='TButton', width=12)
+        any_all_btn.grid(row=n, column=2, padx=20, pady=5)
+
+        any_any_btn = ttk.Button(frame, text="Any T Any F",
+                             command=lambda: [cls.hide_by_field(by_any_any=True), cls.on_hide_by_field_dialog_close(dialog)],
+                             style='TButton', width=12)
+        any_any_btn.grid(row=n, column=3, padx=20, pady=5)
+
+        # Cancel button
+        cancel_btn = ttk.Button(frame, text="Cancel", command=lambda e: cls.on_hide_by_field_dialog_close(dialog), style='TButton', width=8)
+        cancel_btn.grid(row=n, column=4, padx=20, pady=5)
+
+        dialog.bind("<Escape>", lambda e: cls.on_hide_by_field_dialog_close(dialog))
+
+    @classmethod
     def show_rvor_dialog(cls, event=None):
+        cls.root.update_idletasks()
+
         if not cls.rvor_dialog_open:
             cls.rvor_dialog_open = True
         else:
@@ -9631,7 +10493,7 @@ class App:
             # restore region
             if cls.background_for_blit:
                 cls.ax.figure.canvas.restore_region(cls.background_for_blit)
-                App.ax.figure.canvas.blit(App.ax.bbox)
+                cls.ax.figure.canvas.blit(cls.ax.bbox)
 
             # cls.circle_handle.remove()
 
@@ -9643,7 +10505,7 @@ class App:
                                     transform=ccrs.PlateCarree())
         
         # as we are not using cartopy's Circle patches we have to update axes ourself
-        cls.circle_handle.axes = App.ax
+        cls.circle_handle.axes = cls.ax
         #cls.ax.add_patch(cls.circle_handle)
         #cls.redraw_fig_canvas()
 
@@ -9776,7 +10638,7 @@ class App:
             internal_id, tc_index, point_index = cls.rtree_tuple_index_mapping[unmapped_point_index]
             point = cls.plotted_tc_candidates[tc_index][1][point_index]
             item_is_overlapping = False
-            if internal_id in App.hidden_tc_candidates:
+            if internal_id in cls.hidden_tc_candidates:
                 continue
             if len(cls.nearest_point_indices_overlapped):
                 overlapping_internal_id, overlapping_tc_index, overlapping_point_index = cls.nearest_point_indices_overlapped.get_first_key()
