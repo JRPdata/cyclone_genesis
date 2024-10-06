@@ -40,6 +40,8 @@
 # SAVE HIDDEN TRACKS (SLOT 2) = 2 key (saves the current view - same hidden tracks)
 # LOAD HIDDEN TRACKS (SLOT 1) = 8 key (re-hides the tracks saved in slot 1 pressing '1')
 # LOAD HIDDEN TRACKS (SLOT 2) = 9 key ("" from slot 2 from pressing '2')
+# BLIT MEAN TRACK = m key (temporarily, draw the mean track from the selected tracks)
+
 
 # Click on (colored) legend for valid time days to cycle between what to display
 #   (relative to (00Z) start of earliest model init day)
@@ -2433,29 +2435,28 @@ class AnalysisDialog(tk.Toplevel):
 
         self.update_all_charts()
 
-    def analyze_tracks(self):
-        all_datetimes = self.get_unique_datetimes()
-        mean_track = self.calculate_mean_track(all_datetimes)
-        cross_track_spread, along_track_spread = self.calculate_spread(mean_track)
-
-    def calculate_mean_track(self, all_datetimes, filtered_storm_ids):
+    @staticmethod
+    def calculate_mean_track(plotted_tc_candidates, all_datetimes, filtered_storm_ids):
         # Filter plotted_tc_candidates based on selected_internal_storm_ids
-        filtered_candidates = [(iid, tc) for iid, tc in self.plotted_tc_candidates if
+        filtered_candidates = [(iid, tc) for iid, tc in plotted_tc_candidates if
                                iid in filtered_storm_ids]
 
         mean_track = []
         for dt in all_datetimes:
             latitudes = []
             longitudes = []
+            vmax = []
             for internal_id, tc_candidate in filtered_candidates:
                 for tc in tc_candidate:
                     if tc['valid_time'] == dt:
                         latitudes.append(tc['lat'])
                         longitudes.append(tc['lon'])
+                        vmax.append(tc['vmax10m'])
             if latitudes and longitudes:
                 mean_lat = np.mean(latitudes)
                 mean_lon = np.mean(longitudes)
-                mean_track.append({'valid_time': dt, 'lat': mean_lat, 'lon': mean_lon})
+                mean_vmax = np.mean(vmax)
+                mean_track.append({'valid_time': dt, 'lat': mean_lat, 'lon': mean_lon, 'vmax10m': mean_vmax})
         return mean_track
 
     def calculate_spread(self, mean_track, filtered_storm_ids):
@@ -2613,7 +2614,8 @@ class AnalysisDialog(tk.Toplevel):
             self.update_all_charts()
 
     # convert it to native (strip tz) for easier charting
-    def convert_to_selected_timezone(self, dt, timezone_str):
+    @staticmethod
+    def convert_to_selected_timezone(dt, timezone_str):
         """Convert a datetime object from UTC to the selected timezone."""
         # Get the timezone string without the UTC offset
         timezone_name = timezone_str.split(') ')[-1]
@@ -3274,18 +3276,19 @@ class AnalysisDialog(tk.Toplevel):
         """Get a list of all timezones with their UTC offsets."""
         return pytz.all_timezones
 
-    def get_unique_datetimes(self):
+    @staticmethod
+    def get_unique_datetimes(plotted_tc_candidates, selected_internal_storm_ids, tz_previous_selected):
         # Filter plotted_tc_candidates based on selected_internal_storm_ids
-        filtered_candidates = [(iid, tc) for iid, tc in self.plotted_tc_candidates if
-                               iid in self.selected_internal_storm_ids]
+        filtered_candidates = [(iid, tc) for iid, tc in plotted_tc_candidates if
+                               iid in selected_internal_storm_ids]
 
         # Collect all unique datetimes across all models
         all_datetimes = set()
-        tz = self.tz_previous_selected
+        tz = tz_previous_selected
         for internal_id, tc_candidate in filtered_candidates:
             for tc in tc_candidate:
                 valid_dt = tc['valid_time']
-                converted_valid_dt = self.convert_to_selected_timezone(valid_dt, tz)
+                converted_valid_dt = AnalysisDialog.convert_to_selected_timezone(valid_dt, tz)
                 all_datetimes.add(converted_valid_dt)
         return sorted(all_datetimes)
 
@@ -4117,10 +4120,10 @@ class AnalysisDialog(tk.Toplevel):
                 ensemble_model_count_str = ''
 
             # Calculate the spreads now
-            unique_datetimes = self.get_unique_datetimes()
+            unique_datetimes = AnalysisDialog.get_unique_datetimes(self.plotted_tc_candidates, self.selected_internal_storm_ids, self.tz_previous_selected)
             if not unique_datetimes:
                 return
-            mean_track = self.calculate_mean_track(unique_datetimes, filtered_storm_ids)
+            mean_track = AnalysisDialog.calculate_mean_track(self.plotted_tc_candidates, unique_datetimes, filtered_storm_ids)
             if not mean_track:
                 return
             cross_track_spread, along_track_spread = self.calculate_spread(mean_track, filtered_storm_ids)
@@ -6640,6 +6643,8 @@ class WindField:
 
 class App:
     saved_hidden = {}
+    mean_track_obj = None
+    blit_show_mean_track = False
     plotter_sst = None
     plotter_tchp_d26 = None
     if LOAD_NETCDF:
@@ -7031,6 +7036,148 @@ class App:
         elif cls.background_for_blit:
             cls.ax.figure.canvas.restore_region(cls.background_for_blit)
             cls.ax.figure.canvas.blit(cls.ax.bbox)
+
+    @classmethod
+    def blit_mean_track(cls, stale_bg=False, init=False):
+        if cls.ax is None:
+            return
+
+        if not init:
+            cls.mean_track_obj = None
+            mean_track = None
+        else:
+            if SelectionLoops.is_empty():
+                return
+
+            filtered_candidates = []
+            internal_ids = cls.get_selected_internal_storm_ids()
+            num_tracks = 0
+            if internal_ids:
+                num_tracks = len(internal_ids)
+
+            if num_tracks == 0:
+                return
+
+            filtered_candidates = [(iid, tc) for iid, tc in cls.plotted_tc_candidates if
+                                   iid in internal_ids]
+
+            tz = 'UTC'
+            timezone = pytz.timezone(tz)
+            offset = datetime.now(timezone).strftime('%z')
+            hours, minutes = int(offset[:3]), int(offset[0] + offset[3:])
+            formatted_offset = f"{'+' if hours >= 0 else '-'}{abs(hours):02}:{abs(minutes):02}"
+            tz_previous_selected = f"(UTC{formatted_offset}) {tz}"
+
+            all_datetimes = AnalysisDialog.get_unique_datetimes(filtered_candidates, internal_ids, tz_previous_selected)
+            mean_track = AnalysisDialog.calculate_mean_track(filtered_candidates, all_datetimes, internal_ids)
+            lat_lon_with_time_step_list = []
+            len_mean_track = len(mean_track)
+            valid_day = datetime.fromisoformat(cls.valid_day)
+            for i in range(len_mean_track):
+                prev_lon = None
+                prev_lat = None
+                if i > 0:
+                    lon = mean_track[i]['lon']
+                    prev_lon = mean_track[i - 1]['lon']
+                    if prev_lon:
+                        prev_lon_f = float(prev_lon)
+                        if abs(prev_lon_f - lon) > 270:
+                            if prev_lon_f < lon:
+                                prev_lon = prev_lon_f + 360
+                            else:
+                                prev_lon = prev_lon_f - 360
+
+                mean_track[i]['prev_lat'] = mean_track[i - 1]['lat']
+                mean_track[i]['prev_lon'] = prev_lon
+
+                hours_diff = (mean_track[i]['valid_time'] - valid_day).total_seconds() / 3600
+                # round to the nearest hour
+                hours_diff_rounded = round(hours_diff)
+
+                mean_track[i]['hours_after_valid_day'] = hours_diff_rounded
+
+        if stale_bg or cls.background_for_blit is None:
+            cls.background_for_blit = cls.ax.figure.canvas.copy_from_bbox(cls.ax.bbox)
+            if init:
+                cls.mean_track_obj = None
+
+        if cls.mean_track_obj is None and mean_track is not None:
+            lon_lat_tuples = []
+            llwtsl_indices = []
+            #cls.ax.draw_artist(mean_track_obj)
+            vmax_kt_threshold = [(34.0, 'v'), (64.0, '^'), (83.0, 's'), (96.0, '<'), (113.0, '>'), (137.0, 'D'),
+                                 (float('inf'), '*')]
+            vmax_labels = ['\u25BD TD', '\u25B3 TS', '\u25A1 1', '\u25C1 2', '\u25B7 3', '\u25C7 4', '\u2606 5']
+            marker_sizes = {'v': 6, '^': 6, 's': 8, '<': 10, '>': 12, 'D': 12, '*': 14}
+
+            scatter_objects = []
+            # do in reversed order so most recent items get rendered on top
+            for i, (start, end) in reversed(list(enumerate(cls.time_step_ranges))):
+                opacity = 1.0
+                lons = {}
+                lats = {}
+                for llwtsl_idx, point in reversed(list(enumerate(mean_track))):
+                    hours_after = point['hours_after_valid_day']
+                    # if start <= time_step <= end:
+                    # use hours after valid_day instead
+                    if start <= hours_after <= end:
+                        marker = "*"
+                        for upper_bound, vmaxmarker in vmax_kt_threshold:
+                            marker = vmaxmarker
+                            if point['vmax10m'] < upper_bound:
+                                break
+                        if marker not in lons:
+                            lons[marker] = []
+                            lats[marker] = []
+                        lons[marker].append(point['lon'])
+                        lats[marker].append(point['lat'])
+                        lon_lat_tuples.append([point['lon'], point['lat']])
+                        # track with indices are visible so we can construct a visible version
+                        llwtsl_indices.append(llwtsl_idx)
+
+                for vmaxmarker in lons.keys():
+                    scatter = cls.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
+                                             facecolors='none', edgecolors=cls.time_step_marker_colors[i],
+                                             s=marker_sizes[vmaxmarker] ** 2, alpha=opacity, antialiased=False)
+                    scatter_objects.append(scatter)
+                    #cls.ax.draw_artist(scatter)
+
+            line_collection_objects = []
+            for i, (start, end) in reversed(list(enumerate(cls.time_step_ranges))):
+                line_color = cls.time_step_marker_colors[i]
+                opacity = 1.0
+                strokewidth = 3
+
+                line_segments = []
+                for point in reversed(mean_track):
+                    hours_after = point['hours_after_valid_day']
+                    if start <= hours_after <= end:
+                        if point['prev_lon']:
+                            # Create a list of line segments
+                            line_segments.append([(point['prev_lon'], point['prev_lat']),
+                                                  (point['lon'], point['lat'])])
+
+                # Create a LineCollection
+                lc = LineCollection(line_segments, color=line_color, linewidth=strokewidth, alpha=opacity)
+                # Add the LineCollection to the axes
+                line_collection = cls.ax.add_collection(lc)
+                line_collection_objects.append(line_collection)
+                #cls.ax.draw_artist(line_collection)
+
+            cls.mean_track_obj = [scatter_objects, line_collection_objects]
+
+        if cls.background_for_blit:
+            cls.ax.figure.canvas.restore_region(cls.background_for_blit)
+
+            if cls.mean_track_obj:
+                scatters, lines = cls.mean_track_obj
+                for scatter in scatters:
+                    cls.ax.draw_artist(scatter)
+
+                for line_collection in lines:
+                    cls.ax.draw_artist(line_collection)
+
+                cls.ax.figure.canvas.blit(cls.ax.bbox)
 
     @staticmethod
     def calculate_distance(start_point, end_point):
@@ -7561,6 +7708,7 @@ class App:
         valid_datetime, num_all_models, num_models, tc_candidates = cls.get_selected_model_candidates_from_decks()
         start_of_day = valid_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
         valid_day = start_of_day.isoformat()
+        cls.valid_day = valid_day
 
         cls.clear_plotted_list()
         lon_lat_tc_records = []
@@ -7908,6 +8056,7 @@ class App:
 
         start_of_day = oldest_model_cycle.replace(hour=0, minute=0, second=0, microsecond=0)
         valid_day = start_of_day.isoformat()
+        cls.valid_day = valid_day
         # model_init_times, tc_candidates = get_tc_candidates_from_valid_time(now.isoformat())
         #model_init_times, tc_candidates = get_tc_candidates_at_or_before_init_time(most_recent_model_cycle)
         model_init_times, earliest_recent_ensemble_init_times, model_completed_times, ensemble_completed_times, completed_ensembles, \
@@ -8228,6 +8377,8 @@ class App:
         cls.circle_handle = None
         cls.last_circle_lat = None
         cls.last_circle_lon = None
+        cls.mean_track_obj = None
+        cls.blit_show_mean_track = False
 
         if cls.canvas:
             cls.canvas.get_tk_widget().pack_forget()
@@ -9082,6 +9233,11 @@ class App:
             cls.show_hide_by_field_dialog()
             return
 
+        if event.key == 'm':
+            cls.blit_show_mean_track = not cls.blit_show_mean_track
+            cls.blit_mean_track(init=cls.blit_show_mean_track)
+            return
+
         if event.key == '1':
             cls.save_hidden(slot=1)
             return
@@ -9815,6 +9971,7 @@ class App:
         cls.ax.figure.canvas.draw()
 
         cls.blit_circle_patch(stale_bg=stale_bg)
+        cls.blit_mean_track(stale_bg=stale_bg)
 
     @classmethod
     def redraw_map_with_data(cls, model_cycle=None):
