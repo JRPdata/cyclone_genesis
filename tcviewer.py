@@ -85,8 +85,9 @@ SST_NC_PATH = 'netcdf/20241001000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLO
 SST_NC_PATH = 'netcdf/20241003000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc'
 SST_NC_PATH = 'netcdf/20241004000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc'
 SST_NC_PATH = 'netcdf/20241005000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc'
+FINE_SST_BINS = False
 # load netcdf files (regardless of display)
-LOAD_NETCDF = True
+LOAD_NETCDF = False
 # default netcdf display?
 DISPLAY_NETCDF = None
 #DISPLAY_NETCDF = 'd26'
@@ -350,6 +351,13 @@ import numpy as np
 import os
 import requests
 import traceback
+import re
+
+# for parsing ADT information
+from bs4 import BeautifulSoup
+
+# for interp. mean track
+from scipy.interpolate import interp1d
 
 # main app imports for map charts and plotting
 import cartopy.crs as ccrs
@@ -404,6 +412,7 @@ from tkinter import ttk, font
 
 # config dialog
 from tkinter import colorchooser
+from tkinter import simpledialog
 
 # for input databases
 import sqlite3
@@ -1065,6 +1074,7 @@ def ab_deck_line_to_dict(line):
         raw_data['valid_time'] = valid_datetime.isoformat()
     return raw_data
 
+
 # for managing tracks (loop selections on them) that cross the antimeridian
 def cut_line_string_at_antimeridian(line_string):
     coordinates = list(line_string.coords)
@@ -1172,6 +1182,41 @@ def download_file(url, local_filename):
         print(f"Failed to download {url}: {e}")
         return None
     return dt_mod
+
+
+def get_adt_urls():
+    # Define the URLs
+    ospo_url = "https://www.ospo.noaa.gov/products/ocean/tropical/adt.html"
+    cimss_url = "https://tropic.ssec.wisc.edu/real-time/adt/adt.html"
+
+    # Send HTTP requests and get the HTML responses
+    ospo_response = requests.get(ospo_url)
+    cimss_response = requests.get(cimss_url)
+
+    # Parse the HTML content using BeautifulSoup
+    ospo_soup = BeautifulSoup(ospo_response.content, 'html.parser')
+    cimss_soup = BeautifulSoup(cimss_response.content, 'html.parser')
+
+    # Find all ADT URLs on the OSPO page
+    ospo_adt_urls = []
+    for link in ospo_soup.find_all('a', href=True):
+        href = link['href']
+        if href.startswith('/tropical-data/') and href.endswith('.txt') and '/adt/' in href:
+            adt_url = f"https://www.ospo.noaa.gov{href}"
+            ospo_adt_urls.append(adt_url)
+
+    # Find all ADT URLs on the WISC page
+    cimss_adt_urls = []
+    for link in cimss_soup.find_all('a', href=True):
+        href = link['href']
+        match = re.search(r'odt(\d{2})([A-Z]).html', href)
+        if match:
+            storm_number = match.group(1)
+            storm_letter = match.group(2)
+            adt_url = f"https://tropic.ssec.wisc.edu/real-time/adt/{storm_number}{storm_letter}-list.txt"
+            cimss_adt_urls.append(adt_url)
+
+    return ospo_adt_urls, cimss_adt_urls
 
 # Function to get the corresponding A-Deck and B-Deck files for the identified storms
 # adeck2 is the unofficial adeck from auto_generate_adecks_from_atcf
@@ -1819,6 +1864,72 @@ def http_get_modification_date(url):
         print(f"An error occurred getting {url}: {e}")
         return None
 
+def parse_adt(url):
+    # Send a GET request to the URL
+    response = requests.get(url)
+
+    # Check if the request was successful
+    if response.status_code != 200:
+        raise Exception(f"Failed to retrieve data from {url}")
+
+    # Split the response into lines
+    lines = response.text.splitlines()
+
+    i = 0
+    while i < len(lines):
+        if lines[i][:10].strip() == 'Date':
+            i += 1
+            break
+        i += 1
+
+    if i == len(lines):
+        return []
+
+    # Skip the header lines
+    data_lines = lines[i:]
+
+
+    # Initialize an empty list to store the parsed data
+    parsed_data = []
+
+    # Loop through each line
+    for line in data_lines:
+        # check if valid line
+        if re.match(r'^([0-9]{4})', line[0:4]) is None:
+            continue
+
+        # Extract the data using fixed width positions
+        date = line[:9].strip()
+        time = line[10:16].strip()
+        mslp_value = float(line[22:28].strip())
+        vmax10m = float(line[29:34].strip())
+        lat = float(line[114:120].strip())
+        # ADT wackily uses degrees W
+        lon = -float(line[121:128].strip())
+        fix = line[130:136].strip()
+        if fix == 'FCST':
+            fixmethod = 'Forecast'
+        elif fix == 'ARCHER':
+            fixmethod = 'ARCHER'
+
+        # Combine date and time into a datetime object
+        valid_time = datetime.strptime(f"{date} {time}", "%Y%b%d %H%M%S")
+
+        # Create a dictionary for this entry
+        entry = {
+            "valid_time": valid_time,
+            "mslp_value": mslp_value,
+            "vmax10m": vmax10m,
+            "lat": lat,
+            "lon": lon,
+            "fixmethod": fixmethod
+        }
+
+        # Add the entry to the list
+        parsed_data.append(entry)
+
+    return parsed_data
+
 def parse_tcvitals_line(line):
     if len(line) >= 149:
         return {
@@ -2441,22 +2552,75 @@ class AnalysisDialog(tk.Toplevel):
         filtered_candidates = [(iid, tc) for iid, tc in plotted_tc_candidates if
                                iid in filtered_storm_ids]
 
+        # Initialize a dictionary to store values for each valid time
+        track_values = {dt: {'lat': [], 'lon': [], 'vmax10m': []} for dt in all_datetimes}
+
+        # Populate the dictionary with values from filtered candidates
+        for internal_id, tc_candidate in filtered_candidates:
+            for tc in tc_candidate:
+                dt = tc['valid_time']
+                if dt in track_values:
+                    track_values[dt]['lat'].append(tc['lat'])
+                    track_values[dt]['lon'].append(tc['lon'])
+                    track_values[dt]['vmax10m'].append(tc['vmax10m'])
+
+        # Calculate the mean for each valid time
         mean_track = []
-        for dt in all_datetimes:
-            latitudes = []
-            longitudes = []
-            vmax = []
-            for internal_id, tc_candidate in filtered_candidates:
-                for tc in tc_candidate:
-                    if tc['valid_time'] == dt:
-                        latitudes.append(tc['lat'])
-                        longitudes.append(tc['lon'])
-                        vmax.append(tc['vmax10m'])
-            if latitudes and longitudes:
-                mean_lat = np.mean(latitudes)
-                mean_lon = np.mean(longitudes)
-                mean_vmax = np.mean(vmax)
+        for dt, values in track_values.items():
+            if values['lat'] and values['lon']:
+                mean_lat = np.mean(values['lat'])
+                mean_lon = np.mean(values['lon'])
+                mean_vmax = np.mean(values['vmax10m'])
                 mean_track.append({'valid_time': dt, 'lat': mean_lat, 'lon': mean_lon, 'vmax10m': mean_vmax})
+
+        return mean_track
+
+    @staticmethod
+    def calculate_mean_track_interp(plotted_tc_candidates, all_datetimes, filtered_storm_ids):
+        # Filter plotted_tc_candidates based on selected_internal_storm_ids
+        filtered_candidates = [(iid, tc) for iid, tc in plotted_tc_candidates if
+                               iid in filtered_storm_ids]
+
+        # Initialize a dictionary to store interpolated values for each valid time
+        track_values = {dt: {'lat': [], 'lon': [], 'vmax10m': []} for dt in all_datetimes}
+
+        # Interpolate each individual track hourly and populate the dictionary
+        for internal_id, tc_candidate in filtered_candidates:
+            # Extract valid times and corresponding values for interpolation
+            valid_times = [tc['valid_time'] for tc in tc_candidate]
+            lats = [tc['lat'] for tc in tc_candidate]
+            lons = [tc['lon'] for tc in tc_candidate]
+            vmaxs = [tc['vmax10m'] for tc in tc_candidate]
+
+            # Convert valid times to datetime objects and then to timestamps
+            valid_times = np.array([dt.timestamp() for dt in valid_times])
+
+            # Interpolate values hourly
+            f_lat = interp1d(valid_times, lats, kind='linear', fill_value='extrapolate')
+            f_lon = interp1d(valid_times, lons, kind='linear', fill_value='extrapolate')
+            f_vmax = interp1d(valid_times, vmaxs, kind='linear', fill_value='extrapolate')
+
+            # Evaluate interpolating functions at hourly intervals
+            hourly_times = np.array([dt.timestamp() for dt in all_datetimes])
+            interp_lats = f_lat(hourly_times)
+            interp_lons = f_lon(hourly_times)
+            interp_vmaxs = f_vmax(hourly_times)
+
+            # Populate the dictionary with interpolated values
+            for i, dt in enumerate(all_datetimes):
+                track_values[dt]['lat'].append(interp_lats[i])
+                track_values[dt]['lon'].append(interp_lons[i])
+                track_values[dt]['vmax10m'].append(interp_vmaxs[i])
+
+        # Calculate the mean for each valid time
+        mean_track = []
+        for dt, values in track_values.items():
+            if values['lat'] and values['lon']:
+                mean_lat = np.mean(values['lat'])
+                mean_lon = np.mean(values['lon'])
+                mean_vmax = np.mean(values['vmax10m'])
+                mean_track.append({'valid_time': dt, 'lat': mean_lat, 'lon': mean_lon, 'vmax10m': mean_vmax})
+
         return mean_track
 
     def calculate_spread(self, mean_track, filtered_storm_ids):
@@ -7069,7 +7233,7 @@ class App:
             tz_previous_selected = f"(UTC{formatted_offset}) {tz}"
 
             all_datetimes = AnalysisDialog.get_unique_datetimes(filtered_candidates, internal_ids, tz_previous_selected)
-            mean_track = AnalysisDialog.calculate_mean_track(filtered_candidates, all_datetimes, internal_ids)
+            mean_track = AnalysisDialog.calculate_mean_track_interp(filtered_candidates, all_datetimes, internal_ids)
             lat_lon_with_time_step_list = []
             len_mean_track = len(mean_track)
             valid_day = datetime.fromisoformat(cls.valid_day)
@@ -7571,6 +7735,122 @@ class App:
             lon = point['lon']
             lat = point['lat']
             cls.update_circle_patch(lon=lon, lat=lat)
+
+    @classmethod
+    def display_adt(cls, url):
+        adt_track = parse_adt(url)
+        if len(adt_track) == 0:
+            return
+        lat_lon_with_time_step_list = []
+        len_adt_track = len(adt_track)
+        valid_day = datetime.fromisoformat(cls.valid_day)
+        for i in range(len_adt_track):
+            prev_lon = None
+            prev_lat = None
+            if i > 0:
+                lon = adt_track[i]['lon']
+                prev_lon = adt_track[i - 1]['lon']
+                if prev_lon:
+                    prev_lon_f = float(prev_lon)
+                    if abs(prev_lon_f - lon) > 270:
+                        if prev_lon_f < lon:
+                            prev_lon = prev_lon_f + 360
+                        else:
+                            prev_lon = prev_lon_f - 360
+
+            adt_track[i]['prev_lat'] = adt_track[i - 1]['lat']
+            adt_track[i]['prev_lon'] = prev_lon
+
+            hours_diff = (adt_track[i]['valid_time'] - valid_day).total_seconds() / 3600
+            # round to the nearest hour
+            hours_diff_rounded = round(hours_diff)
+
+            adt_track[i]['hours_after_valid_day'] = hours_diff_rounded
+
+        lon_lat_tuples = []
+        llwtsl_indices = []
+        # cls.ax.draw_artist(adt_track)
+        vmax_kt_threshold = [(34.0, 'v'), (64.0, '^'), (83.0, 's'), (96.0, '<'), (113.0, '>'), (137.0, 'D'),
+                             (float('inf'), '*')]
+        vmax_labels = ['\u25BD TD', '\u25B3 TS', '\u25A1 1', '\u25C1 2', '\u25B7 3', '\u25C7 4', '\u2606 5']
+        marker_sizes = {'v': 6, '^': 6, 's': 8, '<': 10, '>': 12, 'D': 12, '*': 14}
+
+        scatter_objects = []
+        # do in reversed order so most recent items get rendered on top
+        for i, (start, end) in reversed(list(enumerate(cls.time_step_ranges))):
+            opacity = 0.3
+            opacity_archer = 0.6
+            lons = {}
+            lats = {}
+            lons_archer = {}
+            lats_archer = {}
+            opacities = {}
+            for llwtsl_idx, point in reversed(list(enumerate(adt_track))):
+                hours_after = point['hours_after_valid_day']
+                # if start <= time_step <= end:
+                # use hours after valid_day instead
+                if start <= hours_after <= end:
+                    marker = "*"
+                    for upper_bound, vmaxmarker in vmax_kt_threshold:
+                        marker = vmaxmarker
+                        if point['vmax10m'] < upper_bound:
+                            break
+                    if point['fixmethod'] == 'ARCHER':
+                        if marker not in lons_archer:
+                            lons_archer[marker] = []
+                            lats_archer[marker] = []
+                        lons_archer[marker].append(point['lon'])
+                        lats_archer[marker].append(point['lat'])
+                    else:
+                        if marker not in lons:
+                            lons[marker] = []
+                            lats[marker] = []
+                        lons[marker].append(point['lon'])
+                        lats[marker].append(point['lat'])
+
+                    lon_lat_tuples.append([point['lon'], point['lat']])
+                    # track with indices are visible so we can construct a visible version
+                    llwtsl_indices.append(llwtsl_idx)
+
+            for vmaxmarker in lons.keys():
+                scatter = cls.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
+                                         facecolors='none', edgecolors=cls.time_step_marker_colors[i],
+                                         s=marker_sizes[vmaxmarker] ** 2, alpha=opacity, antialiased=False)
+                scatter_objects.append(scatter)
+                cls.ax.draw_artist(scatter)
+
+            for vmaxmarker in lons_archer.keys():
+                scatter = cls.ax.scatter(lons_archer[vmaxmarker], lats_archer[vmaxmarker], marker=vmaxmarker,
+                                         facecolors='none', edgecolors=cls.time_step_marker_colors[i],
+                                         s=marker_sizes[vmaxmarker] ** 2, alpha=opacity_archer, antialiased=False)
+                scatter_objects.append(scatter)
+                cls.ax.draw_artist(scatter)
+
+        line_collection_objects = []
+        for i, (start, end) in reversed(list(enumerate(cls.time_step_ranges))):
+            line_color = cls.time_step_marker_colors[i]
+            opacity = 1.0
+            strokewidth = 2
+
+            line_segments = []
+            for point in reversed(adt_track):
+                hours_after = point['hours_after_valid_day']
+                if start <= hours_after <= end:
+                    if point['prev_lon']:
+                        # Create a list of line segments
+                        line_segments.append([(point['prev_lon'], point['prev_lat']),
+                                              (point['lon'], point['lat'])])
+
+            # Create a LineCollection
+            # for ADT change linestyle to dotted
+            lc = LineCollection(line_segments, color=line_color, linewidth=strokewidth, alpha=opacity, linestyle='dotted')
+            # Add the LineCollection to the axes
+            line_collection = cls.ax.add_collection(lc)
+            line_collection_objects.append(line_collection)
+            cls.ax.draw_artist(line_collection)
+
+        # update blit
+        cls.redraw_fig_canvas(stale_bg=True)
 
     @classmethod
     def display_custom_boundaries(cls, label_column=None):
@@ -8415,6 +8695,17 @@ class App:
                 abs_scale_max = 35
                 bins = [(-5, 0), (0, 5), (5, 10), (10, 20), (20, 25), (25, 26), (26, 27),
                         (27, 28), (28, 29), (29, 30), (30, 31), (31, 32), (32, 33), (33, 34), (34, 35), (35, 99)]
+
+                # fine bins
+                if FINE_SST_BINS:
+                    abs_scale_min = 28
+                    abs_scale_max = 32
+                    edges = np.linspace(28, 32, 21)
+                    bins = []
+                    for i in list(range(len(edges))):
+                        if (i+1) != len(edges):
+                            bins.append((edges[i], edges[i+1]))
+                        
             elif DISPLAY_NETCDF in ['tchp', 'd26']:
                 plotter = cls.plotter_tchp_d26
                 abs_scale_min = 0
@@ -8498,6 +8789,26 @@ class App:
         cls.axes_size = cls.ax.get_figure().get_size_inches() * cls.ax.get_figure().dpi
         # make sure focus is always on map after updating
         cls.set_focus_on_map()
+
+    @classmethod
+    def enter_adt_url(cls):
+        # defunct, kept for reference, or in case something breaks
+        url = simpledialog.askstring("Enter (OSPO) ADT URL", "URL:")
+        if url and url.strip() is not None:
+            cls.display_adt(url)
+        else:
+            cls.set_focus_on_map()
+
+    @classmethod
+    def get_adt(cls):
+        #cls.enter_adt_url()
+        ospo_urls, cimss_urls = get_adt_urls()
+        if ospo_urls is not None:
+            for ospo_url in ospo_urls:
+                cls.display_adt(ospo_url)
+        if cimss_urls is not None:
+            for cimss_url in cimss_urls:
+                cls.display_adt(cimss_url)
 
     @classmethod
     def get_contour_min_span_deg(cls):
@@ -8916,7 +9227,6 @@ class App:
 
             no_field_keys = len(field_keys) == 0
             all_must_overlap = no_field_keys and by_all_all
-            print(all_must_overlap, start_dt, end_dt)
             time_filtered_candidates = PartialInterpolationTrackFilter.filter_by_time(filtered_candidates,
                                                                                       start_dt, end_dt, field_keys,
                                                                                       all_must_overlap)
@@ -9227,6 +9537,10 @@ class App:
     @classmethod
     def on_key_press(cls, event):
         if cls.any_modal_open():
+            return
+
+        if event.key == 't':
+            cls.get_adt()
             return
 
         if event.key == 'k':
@@ -9798,26 +10112,30 @@ class App:
 
                 for key, values in storm_values.items():
                     # Calculate ensemble statistics (mean, median, min, max)
-                    if isinstance(values[0], datetime):
-                        # Convert datetime objects to Unix timestamps
-                        timestamps = [value.timestamp() for value in values]
+                    if 'time' in key:
+                        if len(values) > 0 and isinstance(values[0], datetime):
+                            # Convert datetime objects to Unix timestamps
+                            timestamps = [value.timestamp() for value in values]
 
-                        # Calculate mean, median, min, max of timestamps
-                        mean_timestamp = np.mean(timestamps)
-                        median_timestamp = np.median(timestamps)
-                        min_timestamp = np.min(timestamps)
-                        max_timestamp = np.max(timestamps)
+                            # Calculate mean, median, min, max of timestamps
+                            mean_timestamp = np.mean(timestamps)
+                            median_timestamp = np.median(timestamps)
+                            min_timestamp = np.min(timestamps)
+                            max_timestamp = np.max(timestamps)
 
-                        # Convert mean, median, min, max timestamps back to datetime objects
-                        ensemble_agg_mean[key] = datetime.fromtimestamp(mean_timestamp)
-                        ensemble_agg_median[key] = datetime.fromtimestamp(median_timestamp)
-                        ensemble_agg_min[key] = datetime.fromtimestamp(min_timestamp)
-                        ensemble_agg_max[key] = datetime.fromtimestamp(max_timestamp)
+                            # Convert mean, median, min, max timestamps back to datetime objects
+                            ensemble_agg_mean[key] = datetime.fromtimestamp(mean_timestamp)
+                            ensemble_agg_median[key] = datetime.fromtimestamp(median_timestamp)
+                            ensemble_agg_min[key] = datetime.fromtimestamp(min_timestamp)
+                            ensemble_agg_max[key] = datetime.fromtimestamp(max_timestamp)
 
-                        weighted_ensemble_agg_mean[key] = datetime.fromtimestamp(mean_timestamp)
-                        weighted_ensemble_agg_median[key] = datetime.fromtimestamp(median_timestamp)
-                        weighted_ensemble_agg_min[key] = datetime.fromtimestamp(min_timestamp)
-                        weighted_ensemble_agg_max[key] = datetime.fromtimestamp(max_timestamp)
+                            weighted_ensemble_agg_mean[key] = datetime.fromtimestamp(mean_timestamp)
+                            weighted_ensemble_agg_median[key] = datetime.fromtimestamp(median_timestamp)
+                            weighted_ensemble_agg_min[key] = datetime.fromtimestamp(min_timestamp)
+                            weighted_ensemble_agg_max[key] = datetime.fromtimestamp(max_timestamp)
+                        else:
+                            # no time (empty array)
+                            pass
                     else:
                         # Calculate mean, median, min, max for non-datetime values
                         if key == 'storm_ace':
@@ -9916,13 +10234,15 @@ class App:
                                 elif key.endswith('max'):
                                     all_ensemble_stats['ALL'][key][param] = max(values)
                         else:
-                            if isinstance(values[0], datetime):
-                                # Convert datetime objects to Unix timestamps
-                                timestamps = [value.timestamp() for value in values]
-                                # Calculate mean of timestamps
-                                mean_timestamp = sum(timestamps) / len(by_ensemble_stats)
-                                # Convert mean timestamp back to datetime object
-                                all_ensemble_stats['ALL'][key][param] = datetime.fromtimestamp(mean_timestamp)
+                            if 'time' in param:
+                                if len(values) > 0:
+                                    # and isinstance(values[0], datetime)):
+                                    # Convert datetime objects to Unix timestamps
+                                    timestamps = [value.timestamp() for value in values if isinstance(value, datetime)]
+                                    # Calculate mean of timestamps
+                                    mean_timestamp = sum(timestamps) / len(by_ensemble_stats)
+                                    # Convert mean timestamp back to datetime object
+                                    all_ensemble_stats['ALL'][key][param] = datetime.fromtimestamp(mean_timestamp)
                             else:
                                 all_ensemble_stats['ALL'][key][param] = sum(values) / len(by_ensemble_stats)
 
