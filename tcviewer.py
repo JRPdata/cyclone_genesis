@@ -1375,8 +1375,6 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                 if model_id not in adeck[storm_id].keys():
                                     adeck[storm_id][model_id] = {}
                                 ab_deck_line_dict['basin'] = basin_id.upper()
-                                if adeck[storm_id][model_id]:
-                                    print(adeck[storm_id][model_id])
                                 adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
                             elif model_date >= (latest_date - timedelta(hours=6)):
                                 # GEPS/EPS/FNMOC members ATCF are usually later than GEFS (allow up to 6 hours late)
@@ -2632,6 +2630,14 @@ class AnalysisDialog(tk.Toplevel):
             interp_lons = f_lon(hourly_times)
             interp_vmaxs = f_vmax(hourly_times)
 
+            # Set values outside the candidate's interpolate range to NaN
+            min_time = np.min(valid_times)
+            max_time = np.max(valid_times)
+            mask = (hourly_times < min_time) | (hourly_times > max_time)
+            interp_lats[mask] = np.nan
+            interp_lons[mask] = np.nan
+            interp_vmaxs[mask] = np.nan
+
             # Populate the dictionary with interpolated values
             for i, dt in enumerate(all_datetimes):
                 track_values[dt]['lat'].append(interp_lats[i])
@@ -2642,9 +2648,9 @@ class AnalysisDialog(tk.Toplevel):
         mean_track = []
         for dt, values in track_values.items():
             if values['lat'] and values['lon']:
-                mean_lat = np.mean(values['lat'])
-                mean_lon = np.mean(values['lon'])
-                mean_vmax = np.mean(values['vmax10m'])
+                mean_lat = np.nanmean(values['lat'])
+                mean_lon = np.nanmean(values['lon'])
+                mean_vmax = np.nanmean(values['vmax10m'])
                 mean_track.append({'valid_time': dt, 'lat': mean_lat, 'lon': mean_lon, 'vmax10m': mean_vmax})
 
         return mean_track
@@ -4870,7 +4876,7 @@ class AnnotatedCircles:
             try:
                 for internal_id, point_index_circles in cls.circle_handles.items():
                     for point_index, circle_object in point_index_circles.items():
-                        print(internal_id, point_index, circle_object)
+                        #print(internal_id, point_index, circle_object)
                         circle_object.remove()
             except:
                 traceback.print_exc()
