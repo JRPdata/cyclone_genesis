@@ -1294,15 +1294,24 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                     # GEFS members ATCF is reported late by 6 hours...
                                     ab_deck_line_dict = ab_deck_line_to_dict(line)
                                     model_id = ab_deck_line_dict['TECH']
+                                    init_datetime = datetime.fromisoformat(ab_deck_line_dict['init_time'])
                                     # allow only late GEFS members:
                                     if model_id[0:2] in ['AC', 'AP']:
                                         valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
-                                        if storm_id not in adeck.keys():
-                                            adeck[storm_id] = {}
+
+                                        skip_old = False
                                         if model_id not in adeck[storm_id].keys():
                                             adeck[storm_id][model_id] = {}
+                                        else:
+                                            prev_valid_time_str = list(adeck[storm_id][model_id].keys())[0]
+                                            if prev_valid_time_str and 'init_time' in adeck[storm_id][model_id][prev_valid_time_str]:
+                                                prev_init_time = datetime.fromisoformat(adeck[storm_id][model_id][prev_valid_time_str]['init_time'])
+                                                if prev_init_time > init_datetime:
+                                                    skip_old = True
+
                                         ab_deck_line_dict['basin'] = basin_id.upper()
-                                        adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
+                                        if not skip_old:
+                                            adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
 
                     dt_mods_adeck[file_url] = dt_mod
                 except OSError as e:
@@ -1346,8 +1355,11 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                         if model_date > latest_date:
                             latest_date = model_date
 
-                # now we know if we have data to update from source
                 if latest_date > most_recent_model_dates[storm_id]:
+                    most_recent_model_dates[storm_id] = latest_date
+
+                # ensemble members will be late
+                if most_recent_model_dates[storm_id] >= (latest_date - timedelta(hours=6)):
                     most_recent_model_dates[storm_id] = latest_date
                     for line in lines:
                         parts = line.split(',')
@@ -1363,6 +1375,8 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                 if model_id not in adeck[storm_id].keys():
                                     adeck[storm_id][model_id] = {}
                                 ab_deck_line_dict['basin'] = basin_id.upper()
+                                if adeck[storm_id][model_id]:
+                                    print(adeck[storm_id][model_id])
                                 adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
                             elif model_date >= (latest_date - timedelta(hours=6)):
                                 # GEPS/EPS/FNMOC members ATCF are usually later than GEFS (allow up to 6 hours late)
@@ -1370,12 +1384,24 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                 model_id = ab_deck_line_dict['TECH']
                                 # allow late members
                                 valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
+                                init_datetime = datetime.fromisoformat(ab_deck_line_dict['init_time'])
                                 if storm_id not in adeck.keys():
                                     adeck[storm_id] = {}
+
+                                valid_time_str = valid_datetime.isoformat()
+                                skip_old = False
                                 if model_id not in adeck[storm_id].keys():
                                     adeck[storm_id][model_id] = {}
+                                else:
+                                    prev_valid_time_str = list(adeck[storm_id][model_id].keys())[0]
+                                    if prev_valid_time_str and 'init_time' in adeck[storm_id][model_id][prev_valid_time_str]:
+                                        prev_init_time = datetime.fromisoformat(adeck[storm_id][model_id][prev_valid_time_str]['init_time'])
+                                        if prev_init_time > init_datetime:
+                                            skip_old = True
+
                                 ab_deck_line_dict['basin'] = basin_id.upper()
-                                adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
+                                if not skip_old:
+                                    adeck[storm_id][model_id][valid_time_str] = ab_deck_line_dict
 
                 dt_mods_adeck2[local_filename] = dt_mod
             except OSError as e:
@@ -11030,7 +11056,7 @@ class App:
                 if updated_urls_tcvitals:
                     cls.recent_storms = new_recent_storms
         # Get A-Deck and B-Deck files
-        if do_update_adeck or do_update_bdeck:
+        if do_update_adeck or do_update_adeck2 or do_update_bdeck:
 
             new_dt_mods_adeck, new_dt_mods_adeck2, new_dt_mods_bdeck, new_adeck, new_bdeck = get_deck_files(
                 cls.recent_storms, adeck_urls, bdeck_urls, do_update_adeck, do_update_adeck2, do_update_bdeck)
