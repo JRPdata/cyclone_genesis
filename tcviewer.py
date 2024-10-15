@@ -1229,6 +1229,9 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
     dt_mods_adeck = {}
     dt_mods_adeck2 = {}
     dt_mods_bdeck = {}
+    # keep track of which ensembles we already have/don't have and their model date
+    # this allows us to prune members from old ensembles that no longer show genesis/tracks
+    atcf_active_ensembles_have = {}
 
     for storm_id in storms.keys():
         basin_id = storm_id[:2]
@@ -1284,11 +1287,16 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                     ab_deck_line_dict = ab_deck_line_to_dict(line)
                                     model_id = ab_deck_line_dict['TECH']
                                     valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
+                                    init_datetime = datetime.fromisoformat(ab_deck_line_dict['init_time'])
                                     if storm_id not in adeck.keys():
                                         adeck[storm_id] = {}
                                     if model_id not in adeck[storm_id].keys():
                                         adeck[storm_id][model_id] = {}
                                     ab_deck_line_dict['basin'] = basin_id.upper()
+                                    if model_id in atcf_ens_model_name_to_ensemble_name:
+                                        ens_name = atcf_ens_model_name_to_ensemble_name[model_id]
+                                        atcf_active_ensembles_have[ens_name] = init_datetime
+
                                     adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
                                 elif model_date >= (latest_date - timedelta(hours=6)):
                                     # GEFS members ATCF is reported late by 6 hours...
@@ -1311,6 +1319,10 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
 
                                         ab_deck_line_dict['basin'] = basin_id.upper()
                                         if not skip_old:
+                                            if model_id in atcf_ens_model_name_to_ensemble_name:
+                                                ens_name = atcf_ens_model_name_to_ensemble_name[model_id]
+                                                atcf_active_ensembles_have[ens_name] = init_datetime
+
                                             adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
 
                     dt_mods_adeck[file_url] = dt_mod
@@ -1370,11 +1382,15 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                 ab_deck_line_dict = ab_deck_line_to_dict(line)
                                 model_id = ab_deck_line_dict['TECH']
                                 valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
+                                init_datetime = datetime.fromisoformat(ab_deck_line_dict['init_time'])
                                 if storm_id not in adeck.keys():
                                     adeck[storm_id] = {}
                                 if model_id not in adeck[storm_id].keys():
                                     adeck[storm_id][model_id] = {}
                                 ab_deck_line_dict['basin'] = basin_id.upper()
+                                if model_id in atcf_ens_model_name_to_ensemble_name:
+                                    ens_name = atcf_ens_model_name_to_ensemble_name[model_id]
+                                    atcf_active_ensembles_have[ens_name] = init_datetime
                                 adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
                             elif model_date >= (latest_date - timedelta(hours=6)):
                                 # GEPS/EPS/FNMOC members ATCF are usually later than GEFS (allow up to 6 hours late)
@@ -1399,6 +1415,9 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
 
                                 ab_deck_line_dict['basin'] = basin_id.upper()
                                 if not skip_old:
+                                    if model_id in atcf_ens_model_name_to_ensemble_name:
+                                        ens_name = atcf_ens_model_name_to_ensemble_name[model_id]
+                                        atcf_active_ensembles_have[ens_name] = init_datetime
                                     adeck[storm_id][model_id][valid_time_str] = ab_deck_line_dict
 
                 dt_mods_adeck2[local_filename] = dt_mod
@@ -1411,6 +1430,26 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
             except Exception as e:
                 traceback.print_exc()
                 print(f"Failed to read from {adeck_folder}: {e}")
+
+        # Prune old ensemble member points that are older than current ensemble members present
+        for ens_name, model_members in atcf_ens_models_by_ensemble.items():
+            if ens_name not in atcf_active_ensembles_have:
+                continue
+
+            ens_init_date = atcf_active_ensembles_have[ens_name]
+            for model_name in model_members:
+                if model_name not in adeck[storm_id]:
+                    continue
+                valid_times = list(adeck[storm_id][model_name].keys())
+                if len(valid_times) == 0:
+                    continue
+                for prev_valid_time_str in valid_times:
+                    if prev_valid_time_str and 'init_time' in adeck[storm_id][model_name][prev_valid_time_str]:
+                        prev_init_time = datetime.fromisoformat(adeck[storm_id][model_name][prev_valid_time_str]['init_time'])
+                        if prev_init_time < ens_init_date:
+                            # this member point is not present in latest ensemble
+                            del adeck[storm_id][model_name][prev_valid_time_str]
+
         if do_update_bdeck:
             # Download B-Deck files
             for url in urls_b:
