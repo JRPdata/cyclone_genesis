@@ -1,4 +1,5 @@
 # an experimental TC plotter (stand-alone full screen viewer) for intensity models and genesis
+# an experimental TC plotter (stand-alone full screen viewer) for intensity models and genesis
 ######
 #   uses a-deck,b-deck,tcvitals (from NHC,UCAR) and tc genesis candidates (tc_candidates.db)
 
@@ -1202,7 +1203,53 @@ def download_file(url, local_filename):
         return None
     return dt_mod
 
-def download_latest_ohc_nc_files():
+
+def download_latest_ohc_nc_files_coastwatch():
+    basins = ['sp', 'np', 'na']
+    suffix = '14'
+    current_year = datetime.now().year
+    latest_files = {}
+    local_file_paths = []
+
+    for basin in basins:
+        for attempt in range(2):
+            year = current_year - attempt
+            url = f'https://coastwatch.noaa.gov/pub/socd2/coastwatch/ocean_heat/{basin}{suffix}/{year}/'
+            response = requests.get(url)
+            if response.ok:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                links = [a['href'] for a in soup.find_all('a', href=True) if a['href'].endswith('.nc')]
+                file_numbers = [int(re.search(r'_(\d{3})\.nc', link).group(1)) for link in links]
+                latest_file_number = max(file_numbers)
+                latest_file = [link for link in links if re.search(r'_(\d{3})\.nc', link).group(1) == str(latest_file_number).zfill(3)][0]
+                latest_files[basin] = url + latest_file
+                break
+        else:
+            return None
+
+    # Download the latest files
+    for basin, url in latest_files.items():
+        filename = url.split('/')[-1]
+        dest_path = os.path.join(NETCDF_FOLDER_PATH, filename)
+        file_ok = False
+        if not os.path.exists(dest_path):
+            os.makedirs(NETCDF_FOLDER_PATH, exist_ok=True)
+            response = requests.get(url, stream=True)
+            if response.ok:
+                print("Downloading latest OHC file: ", url)
+                with open(dest_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=1024):
+                        f.write(chunk)
+                file_ok = True
+        else:
+            file_ok = True
+
+        if file_ok:
+            local_file_paths.append(dest_path)
+
+    return local_file_paths
+
+def download_latest_ohc_nc_files_ncei():
     local_file_paths = []
     # Get current year and month
     dt_now = datetime.now()
@@ -7110,8 +7157,19 @@ class WindField:
 
         return ret_dict
 
-# Main app class
+# Before initializing the App class download the OHC/SST files
+if AUTO_DOWNLOAD_LATEST_OHC:
+    print("Updating latest OHC files...")
+    #OHC_NC_PATHS = download_latest_ohc_nc_files_ncei()
+    OHC_NC_PATHS = download_latest_ohc_nc_files_coastwatch()
+    print("Done updating OHC files.")
 
+if AUTO_DOWNLOAD_LATEST_SST:
+    print("Updating latest SST file...")
+    SST_NC_PATH = download_latest_sst_nc_file()
+    print("Done updating SST file.")
+
+# Main app class
 class App:
     saved_hidden = {}
     mean_track_obj = None
@@ -12139,17 +12197,6 @@ class App:
         listbox.bind("<Escape>", lambda event: cancel())
         ttk.Button(dialog, text='OK', command=select_basin).pack(side=tk.LEFT, padx=5, pady=5)
         ttk.Button(dialog, text='Cancel', command=cancel).pack(side=tk.LEFT, padx=5, pady=5)
-
-
-if AUTO_DOWNLOAD_LATEST_OHC:
-    print("Updating latest OHC files...")
-    OHC_NC_PATHS = download_latest_ohc_nc_files()
-    print("Done updating OHC files.")
-
-if AUTO_DOWNLOAD_LATEST_SST:
-    print("Updating latest SST file...")
-    SST_NC_PATH = download_latest_sst_nc_file()
-    print("Done updating SST file.")
 
 # Start program GUI
 if __name__ == "__main__":
