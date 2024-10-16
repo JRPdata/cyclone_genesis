@@ -31,10 +31,10 @@
 # TOGGLE ANALYSIS MODE = a key (must have selection loop on tracks); NOTE: TRACK ANALYSIS ONLY PRESENTLY WORKS IN UTC TZ
 #   SAVE FIGURE = s key (or p key) (saves current figure in analysis mode)
 # PRINT TRACK STATS = i key (must be hovering; prints to terminal)
-# DISPLAY SST DATA = 4 key (set DISPLAY_NETCDF to 'tchp') (Tropical Cyclone Heat Potential from AOML)
-# DISPLAY TCHP DATA = 5 key (set DISPLAY_NETCDF to 'tchp') (Tropical Cyclone Heat Potential from AOML)
-# DISPLAY D26 DATA = 6 key (set DISPLAY_NETCDF to 'd26') (Depth of the 26 degree isobar)
-# DISPLAY NO NETCDF DATA = r key (set DISPLAY_NETCDF to None) (Don't display either TCHP or 26 degree isobar)
+# DISPLAY SST DATA = 4 key (set DISPLAY_NETCDF to 'sst') (Day/Night SST from CoastWatch/NOAA)
+# DISPLAY OHC DATA = 5 key (set DISPLAY_NETCDF to 'ohc') (OHC (26C) from the SOHC from NESDIS/NOAA)
+# DISPLAY ISO26C DATA = 6 key (set DISPLAY_NETCDF to 'iso26C') (Depth of the 26 degree isobar from the SOHC from NESDIS/NOAA)
+# DISPLAY NO NETCDF DATA = r key (set DISPLAY_NETCDF to None) (Don't display any NETCDF overlay)
 # HIDE TRACKS BY DETIAL = k key (hide tracks by fields (vmax, lat/lon, etc) and valid time)
 # SAVE HIDDEN TRACKS (SLOT 1) = 1 key (saves the current view - same hidden tracks; will not work after changing ensembles)
 # SAVE HIDDEN TRACKS (SLOT 2) = 2 key (saves the current view - same hidden tracks)
@@ -77,21 +77,38 @@ INTERP_PERIOD_SECONDS = 3600
 # used by presets for Analysis
 output_cat_file_name = 'output_cat_values.json'
 
-TCHP_NC_PATH = 'netcdf/aomlTCHP_2d68_c702_c12c.nc'
-#TCHP_NC_PATH = 'netcdf/aomlTCHP_0d47_b45c_eae4.nc'
-#TCHP_NC_PATH = 'netcdf/aomlTCHP_b01e_9861_5915.nc'
+NETCDF_FOLDER_PATH = 'netcdf'
+
+# Not sure about this data source as D26 == TCHP (so don't use)
+#https://cwcgom.aoml.noaa.gov/erddap/griddap/aomlTCHP.html
+TCHP_NC_PATH = 'netcdf/aomlTCHP_32f9_dc68_adee-2024-09-26.nc'
+
+# https://www.ncei.noaa.gov/data/oceans/sohcs/2024/09/
+# The North Pacific OHC is not masked properly (around -80W) so plot it before North America
+OHC_NC_PATHS = [
+    'netcdf/OHC-NPQG3_v1r0_blend_s202409130000000_e202409262359599_c202409260922177.nc',
+    'netcdf/OHC-NAQG3_v1r0_blend_s202409130000000_e202409262359599_c202409260922256.nc',
+    'netcdf/OHC-SPQG3_v1r0_blend_s202409130000000_e202409262359599_c202409260922501.nc'
+]
+
 # https://coastwatch.noaa.gov/pub/socd2/coastwatch/sst_blended/sst5km/daynight/ghrsst_ospo/2024/20241002000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc
-SST_NC_PATH = 'netcdf/20241001000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc'
-SST_NC_PATH = 'netcdf/20241003000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc'
-SST_NC_PATH = 'netcdf/20241004000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc'
 SST_NC_PATH = 'netcdf/20241005000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc'
+
+# Auto download overwrites the paths given above:
+# Download latest OHC on startup
+AUTO_DOWNLOAD_LATEST_OHC = True
+# Download latest SST on startup
+AUTO_DOWNLOAD_LATEST_SST = True
+
 FINE_SST_BINS = False
 # load netcdf files (regardless of display)
-LOAD_NETCDF = False
+LOAD_NETCDF = True
 # default netcdf display?
 DISPLAY_NETCDF = None
 #DISPLAY_NETCDF = 'd26'
-DISPLAY_NETCDF = 'tchp'
+#DISPLAY_NETCDF = 'tchp'
+DISPLAY_NETCDF = 'ohc'
+#DISPLAY_NETCDF = 'iso26C'
 #DISPLAY_NETCDF = 'sst'
 # Set to True or False to bin the NETCDF data
 BIN_NETCDF_DATA = True
@@ -1074,7 +1091,6 @@ def ab_deck_line_to_dict(line):
         raw_data['valid_time'] = valid_datetime.isoformat()
     return raw_data
 
-
 # for managing tracks (loop selections on them) that cross the antimeridian
 def cut_line_string_at_antimeridian(line_string):
     coordinates = list(line_string.coords)
@@ -1183,6 +1199,114 @@ def download_file(url, local_filename):
         return None
     return dt_mod
 
+def download_latest_ohc_nc_files():
+    local_file_paths = []
+    # Get current year and month
+    dt_now = datetime.now()
+    current_year = dt_now.year
+    current_month = dt_now.month
+
+    # Try to send request and get HTML response
+    for attempt in range(2):
+        # Construct URL
+        url = f'https://www.ncei.noaa.gov/data/oceans/sohcs/{current_year:04}/{current_month:02}/'
+        # Send request and get HTML response
+        response = requests.get(url)
+        if response.ok:
+            break
+        else:
+            if current_month == 1:
+                current_year -= 1
+                current_month = 12
+            else:
+                current_month -= 1
+    else:
+        # If both attempts fail, return
+        print("Failed to get list of latest OHC files...")
+        return []
+
+    soup = BeautifulSoup(response.text, 'html.parser')
+
+    # Find all links ending with .nc
+    links = [a['href'] for a in soup.find_all('a', href=True) if a['href'].endswith('.nc')]
+
+    # Create a dictionary to store the links
+    link_dict = {}
+
+    # Loop through the links and extract datetime and key
+    for link in links:
+        filename = link.split('/')[-1]
+        key = filename.split('_')[0]
+        creation = re.search(r'_c(\d{8})(\d{4})(\d{3})\.nc', filename)
+        datetime_obj = datetime.strptime(creation.groups()[0] + creation.groups()[1] + creation.groups()[2], '%Y%m%d%H%M%f')
+        if key not in link_dict:
+            link_dict[key] = {}
+        link_dict[key][datetime_obj] = link
+
+    # Process the keys in reverse alphabetical order
+    # This is to fix the bug in the North Pacific mask for OHC
+    keys = sorted(link_dict.keys(), reverse=True)
+
+    # Get the latest links for each key
+    latest_links = []
+    for key in keys:
+        datetime_objs = sorted(link_dict[key].keys())
+        latest_link = link_dict[key][datetime_objs[-1]]
+        latest_links.append(latest_link)
+
+    # Download the latest links
+    for link in latest_links: # Limit to 3 files
+        filename = link.split('/')[-1]
+        dest_path = os.path.join(NETCDF_FOLDER_PATH, filename)
+        file_ok = False
+        if not os.path.exists(dest_path):
+            os.makedirs(NETCDF_FOLDER_PATH, exist_ok=True)
+            response = requests.get(url + link, stream=True)
+            if response.ok:
+                print("Downloading latest OHC file: ", link)
+                with open(dest_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=1024):
+                        f.write(chunk)
+                file_ok = True
+        else:
+            file_ok = True
+
+        if file_ok:
+            local_file_paths.append(dest_path)
+
+    return local_file_paths
+
+def download_latest_sst_nc_file():
+    dt_now = datetime.now()
+    # Start 1 day forward to account for clock/TZ mismatch
+    dt_start = dt_now + timedelta(days=1)
+
+    # Try to send request and get the latest SST NC file
+    # Don't try to get files older than ~ 10 days
+    for attempt in range(10):
+        dt = dt_start - timedelta(days=attempt)
+        year = dt.year
+        month = dt.month
+        day = dt.day
+        url = f'https://coastwatch.noaa.gov/pub/socd2/coastwatch/sst_blended/sst5km/daynight/ghrsst_ospo/{year}/{year}{month:02}{day:02}000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc'
+        filename = url.split('/')[-1]
+        dest_path = os.path.join(NETCDF_FOLDER_PATH, filename)
+        os.makedirs(NETCDF_FOLDER_PATH, exist_ok=True)
+        file_ok = False
+        if not os.path.exists(dest_path):
+            response = requests.get(url)
+            if response.ok:
+                print("Dowloading latest SST file:", filename)
+                filename = url.split('/')[-1]
+                with open(filename, 'wb') as f:
+                    f.write(response.content)
+                return dest_path
+        else:
+            # Already have latest
+            return dest_path
+
+    print("Failed to get list of latest SST file...")
+    return None
 
 def get_adt_urls():
     # Define the URLs
@@ -5745,20 +5869,37 @@ class NetCDFPlotter:
         self.filepath = filepath
         self.tchp = None
         self.d26 = None
+        self.ohc = None
+        self.iso26C = None
         self.sst = None
         self.lat = None
         self.lon = None
         self.first_datetime = None
         self.data_type = data_type
+        self.globe = None
 
     def load_data(self):
-        # Open the NetCDF file and load tchp and depth26 datasets
+        # Open the NetCDF file and load the netcdf datasets
         with nc.Dataset(self.filepath, 'r') as ds:
             if self.data_type in ['tchp', 'd26']:
+                # this is defunct until we figure out what the problem with the dataset is (d26 is currently == tchp)
                 self.tchp = ds.variables['Tropical_Cyclone_Heat_Potential'][:][0]
                 self.d26 = ds.variables['D26'][:][0]
                 self.lat = ds.variables['latitude'][:]
                 self.lon = ds.variables['longitude'][:]
+            elif self.data_type in ['ohc', 'iso26C']:
+                self.ohc = ds.variables['ohc'][:][0]
+                self.iso26C = ds.variables['iso26C'][:][0]
+                self.lat = ds.variables['latitude'][:]
+                self.lon = ds.variables['longitude'][:]
+                if 'crs' in ds.variables:
+                    # Extract the CRS parameters
+                    semimajor_axis = ds.variables['crs'].semi_major_axis
+                    inverse_flattening = ds.variables['crs'].inverse_flattening
+                    longitude_of_prime_meridian = ds.variables['crs'].longitude_of_prime_meridian
+                    self.globe = ccrs.Globe(semimajor_axis=semimajor_axis,
+                                       semiminor_axis=semimajor_axis / (1 + 1 / inverse_flattening),
+                                       ellipse=None)
             elif self.data_type == 'sst':
                 # Get the sst data for the day and convert it from K to C
                 self.sst = ds.variables['analysed_sst'][:][0]  - 273.15
@@ -5767,7 +5908,7 @@ class NetCDFPlotter:
 
             # Assume the time variable is named 'time' and is in hours since a reference date
             time_var = ds.variables['time'][:]
-            time_units = ds.variables['time'].units  # e.g., 'hours since 2000-01-01 00:00:00'
+            time_units = ds.variables['time'].units
 
             # Convert the time to a pandas datetime
             time_dates = nc.num2date(time_var, time_units)
@@ -5839,6 +5980,12 @@ class NetCDFPlotter:
         elif dataset == 'd26':
             data = self.d26
             label = 'D26\n(m)'
+        elif dataset == 'ohc':
+            data = self.ohc
+            label = 'OHC\n(kJ cm^-2)'
+        elif dataset == 'iso26C':
+            data = self.iso26C
+            label = 'ISO26C\n(m)'
         elif dataset == 'sst':
             data = self.sst
             label = 'SST\n(deg C)'
@@ -5862,8 +6009,12 @@ class NetCDFPlotter:
 
         # Create the colormap
         cmap, norm = self.create_colormap(dataset, data_range_min, data_range_max, bins, scale_min, scale_max)
-        mesh = ax.pcolormesh(self.lon, self.lat, data, cmap=cmap, norm=norm, alpha=opacity,
-                             transform=ccrs.PlateCarree())
+        if self.globe is not None:
+            mesh = ax.pcolormesh(self.lon, self.lat, data, cmap=cmap, norm=norm, alpha=opacity,
+                                 transform=ccrs.PlateCarree(globe=self.globe))
+        else:
+            mesh = ax.pcolormesh(self.lon, self.lat, data, cmap=cmap, norm=norm, alpha=opacity,
+                                 transform=ccrs.PlateCarree())
 
         # Create the color bar
         cbar = plt.colorbar(mesh, ax=ax, orientation='horizontal', pad=0.05, fraction = 0.1)
@@ -6882,6 +7033,8 @@ class App:
     blit_show_mean_track = False
     plotter_sst = None
     plotter_tchp_d26 = None
+    plotters_ohc = []
+    plotters_iso26C = []
     if LOAD_NETCDF:
         file_path = SST_NC_PATH
         # load tchp, d26 together
@@ -6891,6 +7044,12 @@ class App:
         file_path = TCHP_NC_PATH
         plotter_tchp_d26 = NetCDFPlotter(file_path, 'tchp')
         plotter_tchp_d26.load_data()
+
+        file_paths = OHC_NC_PATHS
+        for file_path in file_paths:
+            plotter_ohc = NetCDFPlotter(file_path, 'ohc')
+            plotter_ohc.load_data()
+            plotters_ohc.append(plotter_ohc)
 
     lon_lat_tc_records = []
     str_tree = None
@@ -8757,9 +8916,10 @@ class App:
         cls.ax.set_yscale('linear')
         cls.ax.set_facecolor('black')
 
-
         if LOAD_NETCDF and DISPLAY_NETCDF is not None:
             # Draw the netcdf data for SSTs, or TCHP, or Depth of the 26th isobar (D26)
+            plotters = []
+            plotter = None
             if DISPLAY_NETCDF == 'sst':
                 plotter = cls.plotter_sst
                 abs_scale_min = -5
@@ -8785,18 +8945,32 @@ class App:
                           (90, 100), (100, 125), (125, 150), (150, 175), (175, 200),
                           (200, 225), (225, 250), (250, 275), (275, 300), (300, 999)]
 
+            elif DISPLAY_NETCDF in ['ohc', 'iso26C']:
+                plotters = cls.plotters_ohc
+                abs_scale_min = 0
+                abs_scale_max = 300
+                bins = [(0, 10), (10, 20), (20, 30), (30, 40), (40, 50), (50, 60), (60, 70), (70, 80), (80, 90),
+                        (90, 100), (100, 125), (125, 150), (150, 175), (175, 200),
+                        (200, 225), (225, 250), (250, 275), (275, 300), (300, 999)]
+
             # Plot with clipping, binning, and opacity
 
             if not BIN_NETCDF_DATA:
                 bins = None
 
-            plotter.plot_data(ax=cls.ax, dataset=DISPLAY_NETCDF, data_min=None, data_max=None, bins=bins, opacity=1,
-                              scale_min=abs_scale_min, scale_max=abs_scale_max)
+            if plotter:
+                plotter.plot_data(ax=cls.ax, dataset=DISPLAY_NETCDF, data_min=None, data_max=None, bins=bins, opacity=1,
+                                  scale_min=abs_scale_min, scale_max=abs_scale_max)
+            elif plotters:
+                for plotter in plotters:
+                    plotter.plot_data(ax=cls.ax, dataset=DISPLAY_NETCDF, data_min=None, data_max=None, bins=bins,
+                                      opacity=1, scale_min=abs_scale_min, scale_max=abs_scale_max)
+
 
         # Draw a rectangle patch around the subplot to visualize its boundaries
         extent = cls.ax.get_extent()
-        rect = Rectangle((extent[0], extent[2]), extent[1] - extent[0], extent[3] - extent[2],
-                         linewidth=2, edgecolor='white', facecolor='none')
+
+        rect = Rectangle((-180, -90), 360, 180, linewidth=2, edgecolor='white', facecolor='none')
         cls.ax.add_patch(rect)
 
         # Adjust aspect ratio of the subplot
@@ -9473,8 +9647,8 @@ class App:
         cls.root.bind('b', cls.select_basin_dialog)
 
         cls.root.bind('4', cls.set_netcdf_display_sst)
-        cls.root.bind('5', cls.set_netcdf_display_tchp)
-        cls.root.bind('6', cls.set_netcdf_display_d26)
+        cls.root.bind('5', cls.set_netcdf_display_ohc)
+        cls.root.bind('6', cls.set_netcdf_display_iso26C)
         cls.root.bind('r', cls.set_netcdf_display_none)
 
         cls.adeck_selected = tk.StringVar()
@@ -10489,9 +10663,9 @@ class App:
         ttk.Button(dialog, text='Cancel', command=cancel, style='TButton').pack(side=tk.LEFT, padx=5, pady=5)
 
     @classmethod
-    def set_netcdf_display_d26(cls, event=None):
+    def set_netcdf_display_iso26C(cls, event=None):
         global DISPLAY_NETCDF
-        DISPLAY_NETCDF = 'd26'
+        DISPLAY_NETCDF = 'iso26C'
         cls.redraw_map_with_data(model_cycle=cls.genesis_model_cycle_time)
 
     @classmethod
@@ -10501,15 +10675,15 @@ class App:
         cls.redraw_map_with_data(model_cycle=cls.genesis_model_cycle_time)
 
     @classmethod
-    def set_netcdf_display_sst(cls, event=None):
+    def set_netcdf_display_ohc(cls, event=None):
         global DISPLAY_NETCDF
-        DISPLAY_NETCDF = 'sst'
+        DISPLAY_NETCDF = 'ohc'
         cls.redraw_map_with_data(model_cycle=cls.genesis_model_cycle_time)
 
     @classmethod
-    def set_netcdf_display_tchp(cls, event=None):
+    def set_netcdf_display_sst(cls, event=None):
         global DISPLAY_NETCDF
-        DISPLAY_NETCDF = 'tchp'
+        DISPLAY_NETCDF = 'sst'
         cls.redraw_map_with_data(model_cycle=cls.genesis_model_cycle_time)
 
     @classmethod
@@ -11723,6 +11897,17 @@ class App:
         listbox.bind("<Escape>", lambda event: cancel())
         ttk.Button(dialog, text='OK', command=select_basin).pack(side=tk.LEFT, padx=5, pady=5)
         ttk.Button(dialog, text='Cancel', command=cancel).pack(side=tk.LEFT, padx=5, pady=5)
+
+
+if AUTO_DOWNLOAD_LATEST_OHC:
+    print("Updating latest OHC files...")
+    OHC_NC_PATHS = download_latest_ohc_nc_files()
+    print("Done updating OHC files.")
+
+if AUTO_DOWNLOAD_LATEST_SST:
+    print("Updating latest SST file...")
+    SST_NC_PATH = download_latest_sst_nc_file()
+    print("Done updating SST file.")
 
 # Start program GUI
 if __name__ == "__main__":
