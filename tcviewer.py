@@ -1297,8 +1297,7 @@ def download_latest_sst_nc_file():
             response = requests.get(url)
             if response.ok:
                 print("Dowloading latest SST file:", filename)
-                filename = url.split('/')[-1]
-                with open(filename, 'wb') as f:
+                with open(dest_path, 'wb') as f:
                     f.write(response.content)
                 return dest_path
         else:
@@ -5878,6 +5877,58 @@ class NetCDFPlotter:
         self.data_type = data_type
         self.globe = None
 
+    def bin_data(self, data, bins=None):
+        # If binning is enabled, simplify the data based on the bins
+        if bins:
+            binned_data = np.zeros_like(data)
+            for i, (bin_min, bin_max) in enumerate(bins):
+                binned_data[(data >= bin_min) & (data < bin_max)] = (bin_min + bin_max) / 2
+            return binned_data
+        return data
+
+    def clip_data(self, data, data_min=None, data_max=None):
+        # Clip the data based on provided min and max
+        if data_min is not None:
+            data = np.maximum(data, data_min)
+        if data_max is not None:
+            data = np.minimum(data, data_max)
+        return data
+
+    # Create the colormap function
+    def create_colormap(self, dataset, data_min, data_max, bins, scale_min, scale_max):
+        if dataset == 'sst':
+            colors = ['white', 'cyan', 'blue', 'green', 'yellow', 'orange', 'red', 'purple', 'pink']
+        else:
+            colors = ['black', 'blue', 'cyan', 'green', 'yellow', 'orange', 'red', 'purple', 'pink']
+
+        if bins is not None:
+            # Number of bins, and hence color segments, should match the intervals in bins
+            num_colors = len(bins)
+
+            # Create a continuous colormap from the defined colors
+            continuous_cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors)
+
+            # Extract the lower and upper bounds from the bin tuples
+            bin_edges = np.array([b[0] for b in bins] + [bins[-1][1]])  # Include the upper bound of the last bin
+
+            # Normalize the bin edges to [0, 1] based on data_min and data_max
+            norm_bin_edges = (bin_edges - scale_min) / (scale_max - scale_min)
+
+            # Sample colors based on the normalized bin edges
+            sampled_colors = [continuous_cmap(norm) for norm in norm_bin_edges]
+
+            # Create a ListedColormap using the sampled colors
+            cmap = mcolors.ListedColormap(sampled_colors[:num_colors])
+
+            norm = mcolors.BoundaryNorm(bin_edges, cmap.N)
+
+        else:
+            # Use continuous colormap
+            cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors)
+            norm = mcolors.Normalize(vmin=scale_min, vmax=scale_max)
+
+        return cmap, norm
+
     def load_data(self):
         # Open the NetCDF file and load the netcdf datasets
         with nc.Dataset(self.filepath, 'r') as ds:
@@ -5917,59 +5968,6 @@ class NetCDFPlotter:
             datetime_dates = [datetime(*date.timetuple()[:6]) for date in time_dates]
             if len(datetime_dates) != 0:
                 self.first_datetime = datetime_dates[0]
-
-    def clip_data(self, data, data_min=None, data_max=None):
-        # Clip the data based on provided min and max
-        if data_min is not None:
-            data = np.maximum(data, data_min)
-        if data_max is not None:
-            data = np.minimum(data, data_max)
-        return data
-
-    def bin_data(self, data, bins=None):
-        # If binning is enabled, simplify the data based on the bins
-        if bins:
-            binned_data = np.zeros_like(data)
-            for i, (bin_min, bin_max) in enumerate(bins):
-                binned_data[(data >= bin_min) & (data < bin_max)] = (bin_min + bin_max) / 2
-            return binned_data
-        return data
-
-    # Create the colormap function
-    def create_colormap(self, dataset, data_min, data_max, bins, scale_min, scale_max):
-        if dataset == 'sst':
-            colors = ['white', 'cyan', 'blue', 'green', 'yellow', 'orange', 'red', 'purple', 'pink']
-        else:
-            colors = ['black', 'blue', 'cyan', 'green', 'yellow', 'orange', 'red', 'purple', 'pink']
-
-        if bins is not None:
-            # Number of bins, and hence color segments, should match the intervals in bins
-            num_colors = len(bins)
-
-            # Create a continuous colormap from the defined colors
-            continuous_cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors)
-
-            # Extract the lower and upper bounds from the bin tuples
-            bin_edges = np.array([b[0] for b in bins] + [bins[-1][1]])  # Include the upper bound of the last bin
-
-            # Normalize the bin edges to [0, 1] based on data_min and data_max
-            norm_bin_edges = (bin_edges - scale_min) / (scale_max - scale_min)
-
-            # Sample colors based on the normalized bin edges
-            sampled_colors = [continuous_cmap(norm) for norm in norm_bin_edges]
-
-            # Create a ListedColormap using the sampled colors
-            cmap = mcolors.ListedColormap(sampled_colors[:num_colors])
-
-            norm = mcolors.BoundaryNorm(bin_edges, cmap.N)
-
-
-        else:
-            # Use continuous colormap
-            cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors)
-            norm = mcolors.Normalize(vmin=scale_min, vmax=scale_max)
-
-        return cmap, norm
 
     def plot_data(self, ax=None, dataset='tchp', data_min=None, data_max=None, bins=None, opacity=1.0, scale_min=0,
                   scale_max=300):
@@ -6011,10 +6009,10 @@ class NetCDFPlotter:
         cmap, norm = self.create_colormap(dataset, data_range_min, data_range_max, bins, scale_min, scale_max)
         if self.globe is not None:
             mesh = ax.pcolormesh(self.lon, self.lat, data, cmap=cmap, norm=norm, alpha=opacity,
-                                 transform=ccrs.PlateCarree(globe=self.globe))
+                                 transform=ccrs.PlateCarree(globe=self.globe), rasterized=True, antialiased=False)
         else:
             mesh = ax.pcolormesh(self.lon, self.lat, data, cmap=cmap, norm=norm, alpha=opacity,
-                                 transform=ccrs.PlateCarree())
+                                 transform=ccrs.PlateCarree(), rasterized=True, antialiased=False)
 
         # Create the color bar
         cbar = plt.colorbar(mesh, ax=ax, orientation='horizontal', pad=0.05, fraction = 0.1)
