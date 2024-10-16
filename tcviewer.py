@@ -107,11 +107,14 @@ LOAD_NETCDF = True
 DISPLAY_NETCDF = None
 #DISPLAY_NETCDF = 'd26'
 #DISPLAY_NETCDF = 'tchp'
-DISPLAY_NETCDF = 'ohc'
+#DISPLAY_NETCDF = 'ohc'
 #DISPLAY_NETCDF = 'iso26C'
 #DISPLAY_NETCDF = 'sst'
 # Set to True or False to bin the NETCDF data
 BIN_NETCDF_DATA = True
+
+# Get the values for the netcdf data for each point in a track for print track stats
+CALC_TRACK_STATS_NETCDF_DATA = True
 
 # how often (in minutes) to check for stale data in three classes: tcvitals, adeck, bdeck
 #   for notification purposes only.
@@ -5876,6 +5879,11 @@ class NetCDFPlotter:
         self.first_datetime = None
         self.data_type = data_type
         self.globe = None
+        self.iswrapped = True
+        self.latmin = None
+        self.latmax = None
+        self.lonmin = None
+        self.lonmax = None
 
     def bin_data(self, data, bins=None):
         # If binning is enabled, simplify the data based on the bins
@@ -5929,6 +5937,75 @@ class NetCDFPlotter:
 
         return cmap, norm
 
+    def get_value_near_lat_lon(self, dataset, lat, lon):
+        data = None
+        if dataset == 'tchp':
+            data = self.tchp
+        elif dataset == 'd26':
+            data = self.d26
+        elif dataset == 'ohc':
+            data = self.ohc
+        elif dataset == 'iso26C':
+            data = self.iso26C
+        elif dataset == 'sst':
+            data = self.sst
+        else:
+            return np.nan
+        
+        if not self.iswrapped:
+            if lon < 0:
+                lon = 360 + lon
+
+        if lon > self.lonmax or lon < self.lonmin or lat > self.latmax or lat < self.latmin:
+            return np.nan
+
+        # Check for perfect match first
+        lat_idx = np.argwhere(self.lat == lat)
+        lon_idx = np.argwhere(self.lon == lon)
+        if len(lat_idx) > 0 and len(lon_idx) > 0:
+            match_value = data[lat_idx[0][0], lon_idx[0][0]]
+            if np.ma.is_masked(match_value):
+                # perfect match is masked
+                return np.nan
+            else:
+                return match_value
+
+        # Interpolate since we don't have a perfect match using an inverse square law
+
+        # Find indices of nearest grid points
+        lat_idx = np.argmin(np.abs(self.lat - lat))
+        lon_idx = np.argmin(np.abs(self.lon - lon))
+
+        # Get surrounding indices
+        lat_indices = np.array([max(0, lat_idx - 1), lat_idx, min(len(self.lat) - 1, lat_idx + 1)])
+        lon_indices = np.array([max(0, lon_idx - 1), lon_idx, min(len(self.lon) - 1, lon_idx + 1)])
+
+        geod = Geodesic.WGS84
+        # Calculate distances
+        distances = np.zeros((3, 3))
+        for i, lat_idx in enumerate(lat_indices):
+            for j, lon_idx in enumerate(lon_indices):
+                distance = geod.Inverse(lat, lon, self.lat[lat_idx], self.lon[lon_idx])['s12']
+                distances[i, j] = distance
+
+        # Calculate weights
+        weights = 1 / distances ** 2
+        # Handle the weights properly considering the data might be masked
+        weights = weights * (~data.mask[lat_indices[:, None], lon_indices[None, :]])
+
+        # Handle zero weights case (all masked data)
+        if np.nansum(weights) == 0:
+            return np.nan
+        weights /= np.nansum(weights)
+
+        # Get values at surrounding grid points
+        values = data[lat_indices[:, None], lon_indices[None, :]]
+
+        # Calculate weighted average value
+        weighted_average_value = np.nansum(values * weights)
+
+        return weighted_average_value
+
     def load_data(self):
         # Open the NetCDF file and load the netcdf datasets
         with nc.Dataset(self.filepath, 'r') as ds:
@@ -5957,6 +6034,16 @@ class NetCDFPlotter:
                 self.lat = ds.variables['lat'][:]
                 self.lon = ds.variables['lon'][:]
 
+            self.latmax = np.nanmax(self.lat)
+            self.latmin = np.nanmin(self.lat)
+            self.lonmax = np.nanmax(self.lon)
+            self.lonmin = np.nanmin(self.lon)
+
+            if self.lonmax <= 180 and self.lonmin >= -180:
+                self.iswrapped = True
+            else:
+                self.iswrapped = False
+                
             # Assume the time variable is named 'time' and is in hours since a reference date
             time_var = ds.variables['time'][:]
             time_units = ds.variables['time'].units
@@ -7032,7 +7119,6 @@ class App:
     plotter_sst = None
     plotter_tchp_d26 = None
     plotters_ohc = []
-    plotters_iso26C = []
     if LOAD_NETCDF:
         file_path = SST_NC_PATH
         # load tchp, d26 together
@@ -10109,6 +10195,8 @@ class App:
         if len(cls.plotted_tc_candidates) == 0:
             return
 
+        plotter_sst = cls.plotter_sst
+        plotters_ohc = cls.plotters_ohc
         # note: point_index is a tuple of tc_index, tc_point_index
         if len(cls.nearest_point_indices_overlapped) != 0:
             # annotate storm extrema of previously selected
@@ -10123,6 +10211,9 @@ class App:
                 disturbance_start_time = None
                 disturbance_end_time = None
                 earliest_named_time = None
+                storm_iso26C = []
+                storm_ohc = []
+                storm_sst = []
                 for candidate_info in lat_lon_with_time_step_list:
                     if disturbance_start_time is None:
                         disturbance_start_time = candidate_info['valid_time']
@@ -10138,9 +10229,52 @@ class App:
                             storm_vmax_time_earliest = candidate_info['valid_time']
                             storm_vmax10m = point_vmax
 
+                    if CALC_TRACK_STATS_NETCDF_DATA:
+                        lat = candidate_info['lat']
+                        lon = candidate_info['lon']
+                        if plotter_sst:
+                            sst = plotter_sst.get_value_near_lat_lon('sst', lat, lon)
+                            if not np.isnan(sst):
+                                storm_sst.append(sst)
+                        if plotters_ohc and len(plotters_ohc) > 0:
+                            # we don't know which if any basin is appropriate
+                            ohcs = []
+                            iso26Cs = []
+                            for plotter_ohc in plotters_ohc:
+                                ohc = plotter_ohc.get_value_near_lat_lon('ohc', lat, lon)
+                                iso26C = plotter_ohc.get_value_near_lat_lon('iso26C', lat, lon)
+                                if not np.isnan(ohc):
+                                    ohcs.append(ohc)
+                                if not np.isnan(iso26C):
+                                    iso26Cs.append(iso26C)
+
+                            # take the max due to the problem with masking
+                            if ohcs:
+                                maxohc = np.nanmax(np.array(ohcs))
+                                storm_ohc.append(maxohc)
+                            if iso26Cs:
+                                maxiso26C = np.nanmax(np.array(iso26Cs))
+                                storm_iso26C.append(maxiso26C)
+
                 print(f"Disturbance (Internal ID: {internal_id}) (Model Track stats):")
                 print(f'    ACE (10^-4): {storm_ace:0.1f}')
                 print(f'    Peak VMax @ 10m: {storm_vmax10m:0.1f} kt')
+                if CALC_TRACK_STATS_NETCDF_DATA:
+                    if storm_sst:
+                        sst_mean = np.nanmean(storm_sst)
+                        sst_min = np.nanmin(storm_sst)
+                        sst_max = np.nanmax(storm_sst)
+                        print(f'    Mean SST (Min, Max) (C): {sst_mean:0.1f} ({sst_min:0.1f}, {sst_max:0.1f})')
+                    if storm_ohc:
+                        ohc_mean = np.nanmean(storm_ohc)
+                        ohc_min = np.nanmin(storm_ohc)
+                        ohc_max = np.nanmax(storm_ohc)
+                        print(f'    Mean OHC (Min, Max) (kJ * cm^-2): {ohc_mean:0.1f} ({ohc_min:0.1f}, {ohc_max:0.1f})')
+                    if storm_iso26C:
+                        iso26C_mean = np.nanmean(storm_iso26C)
+                        iso26C_min = np.nanmin(storm_iso26C)
+                        iso26C_max = np.nanmax(storm_iso26C)
+                        print(f'    Mean ISO26C (Min, Max) (m): {iso26C_mean:0.1f} ({iso26C_min:0.1f}, {iso26C_max:0.1f})')
                 print(f'    Disturbance start: {disturbance_start_time}')
                 print(f'    Disturbance end: {disturbance_end_time}')
                 if earliest_named_time is not None:
@@ -10230,10 +10364,13 @@ class App:
                     disturbance_start_time = None
                     disturbance_end_time = None
                     earliest_named_time = None
+                    storm_iso26C = []
+                    storm_ohc = []
+                    storm_sst = []
                     for candidate_info in lat_lon_with_time_step_list:
                         if disturbance_start_time is None:
                             disturbance_start_time = candidate_info['valid_time']
-
+                            
                         disturbance_end_time = candidate_info['valid_time']
                         if 'vmax10m' in candidate_info:
                             point_vmax = candidate_info['vmax10m']
@@ -10245,6 +10382,47 @@ class App:
                                 storm_vmax_time_earliest = candidate_info['valid_time']
                                 storm_vmax10m = point_vmax
 
+                        if CALC_TRACK_STATS_NETCDF_DATA:
+                            lat = candidate_info['lat']
+                            lon = candidate_info['lon']
+                            if plotter_sst:
+                                sst = plotter_sst.get_value_near_lat_lon('sst', lat, lon)
+                                if not np.isnan(sst):
+                                    storm_sst.append(sst)
+                            if plotters_ohc and len(plotters_ohc) > 0:
+                                # we don't know which if any basin is appropriate
+                                ohcs = []
+                                iso26Cs = []
+                                for plotter_ohc in plotters_ohc:
+                                    ohc = plotter_ohc.get_value_near_lat_lon('ohc', lat, lon)
+                                    iso26C = plotter_ohc.get_value_near_lat_lon('iso26C', lat, lon)
+                                    if not np.isnan(ohc):
+                                        ohcs.append(ohc)
+                                    if not np.isnan(iso26C):
+                                        iso26Cs.append(iso26C)
+
+                                # take the max due to the problem with masking
+                                if ohcs:
+                                    maxohc = np.nanmax(np.array(ohcs))
+                                    storm_ohc.append(maxohc)
+                                if iso26Cs:
+                                    maxiso26C = np.nanmax(np.array(iso26Cs))
+                                    storm_iso26C.append(maxiso26C)
+
+                    if CALC_TRACK_STATS_NETCDF_DATA:
+                        if storm_sst:
+                            sst_mean = np.nanmean(storm_sst)
+                            sst_min = np.nanmin(storm_sst)
+                            sst_max = np.nanmax(storm_sst)
+                        if storm_ohc:
+                            ohc_mean = np.nanmean(storm_ohc)
+                            ohc_min = np.nanmin(storm_ohc)
+                            ohc_max = np.nanmax(storm_ohc)
+                        if storm_iso26C:
+                            iso26C_mean = np.nanmean(storm_iso26C)
+                            iso26C_min = np.nanmin(storm_iso26C)
+                            iso26C_max = np.nanmax(storm_iso26C)
+                    
                     if model_name not in by_model_stats:
                         by_model_stats[model_name] = {
                             'storm_ace': [storm_ace],
@@ -10254,6 +10432,19 @@ class App:
                             'earliest_named_time': [earliest_named_time],
                             'disturbance_end_time': [disturbance_end_time]
                         }
+                        if CALC_TRACK_STATS_NETCDF_DATA:
+                            if storm_sst:
+                                by_model_stats[model_name]['sst_mean'] = [sst_mean]
+                                by_model_stats[model_name]['sst_min'] = [sst_min]
+                                by_model_stats[model_name]['sst_max'] = [sst_max]
+                            if storm_ohc:
+                                by_model_stats[model_name]['ohc_mean'] = [ohc_mean]
+                                by_model_stats[model_name]['ohc_min'] = [ohc_min]
+                                by_model_stats[model_name]['ohc_max'] = [ohc_max]
+                            if storm_iso26C:
+                                by_model_stats[model_name]['iso26C_mean'] = [iso26C_mean]
+                                by_model_stats[model_name]['iso26C_min'] = [iso26C_min]
+                                by_model_stats[model_name]['iso26C_max'] = [iso26C_max]
                     else:
                         by_model_stats[model_name]['storm_ace'].append(storm_ace)
                         by_model_stats[model_name]['storm_vmax10m'].append(storm_vmax10m)
@@ -10261,6 +10452,19 @@ class App:
                         by_model_stats[model_name]['disturbance_start_time'].append(disturbance_start_time)
                         by_model_stats[model_name]['earliest_named_time'].append(earliest_named_time)
                         by_model_stats[model_name]['disturbance_end_time'].append(disturbance_end_time)
+                        if CALC_TRACK_STATS_NETCDF_DATA:
+                            if storm_sst:
+                                by_model_stats[model_name]['sst_mean'].append(sst_mean)
+                                by_model_stats[model_name]['sst_min'].append(sst_min)
+                                by_model_stats[model_name]['sst_max'].append(sst_max)
+                            if storm_ohc:
+                                by_model_stats[model_name]['ohc_mean'].append(ohc_mean)
+                                by_model_stats[model_name]['ohc_min'].append(ohc_min)
+                                by_model_stats[model_name]['ohc_max'].append(ohc_max)
+                            if storm_iso26C:
+                                by_model_stats[model_name]['iso26C_mean'].append(iso26C_mean)
+                                by_model_stats[model_name]['iso26C_min'].append(iso26C_min)
+                                by_model_stats[model_name]['iso26C_max'].append(iso26C_max)
 
                     if ensemble_name and 'ensemble_name' not in by_model_stats[model_name]:
                         by_model_stats[model_name]['ensemble_name'] = ensemble_name
@@ -10281,6 +10485,19 @@ class App:
                         'earliest_named_time': [model_stats['earliest_named_time']],
                         'disturbance_end_time': [model_stats['disturbance_end_time']]
                     }
+                    if CALC_TRACK_STATS_NETCDF_DATA:
+                        if 'sst_mean' in model_stats:
+                            by_ensemble_stats[ensemble_name]['sst_mean'] = [model_stats['sst_mean']]
+                            by_ensemble_stats[ensemble_name]['sst_min'] = [model_stats['sst_min']]
+                            by_ensemble_stats[ensemble_name]['sst_max'] = [model_stats['sst_max']]
+                        if 'ohc_mean' in model_stats:
+                            by_ensemble_stats[ensemble_name]['ohc_mean'] = [model_stats['ohc_mean']]
+                            by_ensemble_stats[ensemble_name]['ohc_min'] = [model_stats['ohc_min']]
+                            by_ensemble_stats[ensemble_name]['ohc_max'] = [model_stats['ohc_max']]
+                        if 'iso26C_mean' in model_stats:
+                            by_ensemble_stats[ensemble_name]['iso26C_mean'] = [model_stats['iso26C_mean']]
+                            by_ensemble_stats[ensemble_name]['iso26C_min'] = [model_stats['iso26C_min']]
+                            by_ensemble_stats[ensemble_name]['iso26C_max'] = [model_stats['iso26C_max']]
                 else:
                     by_ensemble_stats[ensemble_name]['storm_ace'].append(model_stats['storm_ace'])
                     by_ensemble_stats[ensemble_name]['storm_vmax10m'].append(model_stats['storm_vmax10m'])
@@ -10288,6 +10505,19 @@ class App:
                     by_ensemble_stats[ensemble_name]['disturbance_start_time'].append(model_stats['disturbance_start_time'])
                     by_ensemble_stats[ensemble_name]['earliest_named_time'].append(model_stats['earliest_named_time'])
                     by_ensemble_stats[ensemble_name]['disturbance_end_time'].append(model_stats['disturbance_end_time'])
+                    if CALC_TRACK_STATS_NETCDF_DATA:
+                        if 'sst_mean' in by_ensemble_stats[ensemble_name]:
+                            by_ensemble_stats[ensemble_name]['sst_mean'].append(model_stats['sst_mean'])
+                            by_ensemble_stats[ensemble_name]['sst_min'].append(model_stats['sst_min'])
+                            by_ensemble_stats[ensemble_name]['sst_max'].append(model_stats['sst_max'])
+                        if 'ohc_mean' in by_ensemble_stats[ensemble_name]:
+                            by_ensemble_stats[ensemble_name]['ohc_mean'].append(model_stats['ohc_mean'])
+                            by_ensemble_stats[ensemble_name]['ohc_min'].append(model_stats['ohc_min'])
+                            by_ensemble_stats[ensemble_name]['ohc_max'].append(model_stats['ohc_max'])
+                        if 'iso26C_mean' in by_ensemble_stats[ensemble_name]:
+                            by_ensemble_stats[ensemble_name]['iso26C_mean'].append(model_stats['iso26C_mean'])
+                            by_ensemble_stats[ensemble_name]['iso26C_min'].append(model_stats['iso26C_min'])
+                            by_ensemble_stats[ensemble_name]['iso26C_max'].append(model_stats['iso26C_max'])
 
             # Initialize dictionaries to store aggregated statistics
             ensemble_stats = {}
@@ -10331,15 +10561,21 @@ class App:
                     if key == 'storm_ace':
                         model_agg[key] = np.sum(valid_values)
                     elif key == 'storm_vmax10m':
-                        model_agg[key] = np.max(valid_values) if have_data else None
+                        model_agg[key] = np.nanmax(valid_values) if have_data else None
                     elif key == 'storm_vmax_time_earliest':
-                        model_agg[key] = np.min(valid_values) if have_data else None
+                        model_agg[key] = np.nanmin(valid_values) if have_data else None
                     elif key == 'disturbance_start_time':
-                        model_agg[key] = np.min(valid_values) if have_data else None
+                        model_agg[key] = np.nanmin(valid_values) if have_data else None
                     elif key == 'earliest_named_time':
-                        model_agg[key] = np.min(valid_values) if have_data else None
+                        model_agg[key] = np.nanmin(valid_values) if have_data else None
                     elif key == 'disturbance_end_time':
-                        model_agg[key] = np.max(valid_values) if have_data else None
+                        model_agg[key] = np.nanmax(valid_values) if have_data else None
+                    elif key[-3:] == 'min':
+                        model_agg[key] = np.nanmin(valid_values) if have_data else None
+                    elif key[-3:] == 'max':
+                        model_agg[key] = np.nanmax(valid_values) if have_data else None
+                    elif key[-4:] == 'mean':
+                        model_agg[key] = np.nanmean(valid_values) if have_data else None
 
                     # Store all valid values for the current parameter
                     storm_values[key] = np.array(valid_values)
@@ -10361,10 +10597,10 @@ class App:
                             timestamps = [value.timestamp() for value in values]
 
                             # Calculate mean, median, min, max of timestamps
-                            mean_timestamp = np.mean(timestamps)
-                            median_timestamp = np.median(timestamps)
-                            min_timestamp = np.min(timestamps)
-                            max_timestamp = np.max(timestamps)
+                            mean_timestamp = np.nanmean(timestamps)
+                            median_timestamp = np.nanmedian(timestamps)
+                            min_timestamp = np.nanmin(timestamps)
+                            max_timestamp = np.nanmax(timestamps)
 
                             # Convert mean, median, min, max timestamps back to datetime objects
                             ensemble_agg_mean[key] = datetime.fromtimestamp(mean_timestamp)
@@ -10382,10 +10618,10 @@ class App:
                     else:
                         # Calculate mean, median, min, max for non-datetime values
                         if key == 'storm_ace':
-                            ensemble_agg_mean[key] = np.mean(values)
-                            ensemble_agg_median[key] = np.median(values)
-                            ensemble_agg_min[key] = np.min(values)
-                            ensemble_agg_max[key] = np.max(values)
+                            ensemble_agg_mean[key] = np.nanmean(values)
+                            ensemble_agg_median[key] = np.nanmedian(values)
+                            ensemble_agg_min[key] = np.nanmin(values)
+                            ensemble_agg_max[key] = np.nanmax(values)
 
                             weighted_ensemble_agg_mean[key] = model_agg[key] * weights[key]
                             # only the mean has significance, these are just placeholders
@@ -10393,15 +10629,17 @@ class App:
                             weighted_ensemble_agg_min[key] = model_agg[key] * weights[key]
                             weighted_ensemble_agg_max[key] = model_agg[key] * weights[key]
                         else:
-                            ensemble_agg_mean[key] = np.mean(values)
-                            ensemble_agg_median[key] = np.median(values)
-                            ensemble_agg_min[key] = np.min(values)
-                            ensemble_agg_max[key] = np.max(values)
+                            ensemble_agg_mean[key] = np.nanmean(values)
+                            ensemble_agg_median[key] = np.nanmedian(values)
+                            ensemble_agg_min[key] = np.nanmin(values)
+                            ensemble_agg_max[key] = np.nanmax(values)
 
-                            weighted_ensemble_agg_mean[key] = np.mean(values) * weights[key]
-                            weighted_ensemble_agg_median[key] = np.median(values) * weights[key]
-                            weighted_ensemble_agg_min[key] = np.min(values) * weights[key]
-                            weighted_ensemble_agg_max[key] = np.max(values) * weights[key]
+                            # don't calculate weighted for sst, ohc, iso26C (as it won't make sense)
+                            if not(key[-3:] == 'min' or key[-3:] == 'max' or key[-4:] == 'mean'):
+                                weighted_ensemble_agg_mean[key] = np.nanmean(values) * weights[key]
+                                weighted_ensemble_agg_median[key] = np.nanmedian(values) * weights[key]
+                                weighted_ensemble_agg_min[key] = np.nanmin(values) * weights[key]
+                                weighted_ensemble_agg_max[key] = np.nanmax(values) * weights[key]
 
                 # Store aggregated statistics for the current ensemble
                 ensemble_stats[ensemble_name] = {
@@ -10445,33 +10683,33 @@ class App:
                                 timestamps = [value.timestamp() for value in values]
                                 if key.endswith('mean'):
                                     # Calculate mean of timestamps
-                                    mean_timestamp = np.mean(timestamps)
+                                    mean_timestamp = np.nanmean(timestamps)
                                     # Convert mean timestamp back to datetime object
                                     all_ensemble_stats['ALL'][key][param] = datetime.fromtimestamp(
                                         mean_timestamp)
                                 elif key.endswith('median'):
                                     # Calculate median of timestamps
-                                    median_timestamp = np.median(timestamps)
+                                    median_timestamp = np.nanmedian(timestamps)
                                     # Convert median timestamp back to datetime object
                                     all_ensemble_stats['ALL'][key][param] = datetime.fromtimestamp(
                                         median_timestamp)
                                 elif key.endswith('min'):
                                     # Calculate min of timestamps
-                                    min_timestamp = np.min(timestamps)
+                                    min_timestamp = np.nanmin(timestamps)
                                     # Convert min timestamp back to datetime object
                                     all_ensemble_stats['ALL'][key][param] = datetime.fromtimestamp(
                                         min_timestamp)
                                 elif key.endswith('max'):
                                     # Calculate max of timestamps
-                                    max_timestamp = np.max(timestamps)
+                                    max_timestamp = np.nanmax(timestamps)
                                     # Convert max timestamp back to datetime object
                                     all_ensemble_stats['ALL'][key][param] = datetime.fromtimestamp(
                                         max_timestamp)
                             else:
                                 if key.endswith('mean'):
-                                    all_ensemble_stats['ALL'][key][param] = np.mean(values)
+                                    all_ensemble_stats['ALL'][key][param] = np.nanmean(values)
                                 elif key.endswith('median'):
-                                    all_ensemble_stats['ALL'][key][param] = np.median(values)
+                                    all_ensemble_stats['ALL'][key][param] = np.nanmedian(values)
                                 elif key.endswith('min'):
                                     all_ensemble_stats['ALL'][key][param] = min(values)
                                 elif key.endswith('max'):
@@ -10503,6 +10741,12 @@ class App:
                                 print(f"    {param} (10^-4): {value:0.1f}")
                             elif param == 'storm_vmax10m':
                                 print(f"    {param} (kts): {value:0.1f}")
+                            elif 'sst' in param:
+                                print(f"    {param} (C): {value:0.1f}")
+                            elif 'ohc' in param:
+                                print(f"    {param} (kJ * cm^-2): {value:0.1f}")
+                            elif 'iso26C' in param:
+                                print(f"    {param} (m): {value:0.1f}")
                             else:
                                 print(f"    {param}: {value}")
 
@@ -10518,7 +10762,7 @@ class App:
                         if param != 'storm_ace' or (key not in \
                             ['weighted_ensemble_agg_median', 'weighted_ensemble_agg_min', 'weighted_ensemble_agg_max']):
 
-                            if param in ['storm_ace' or 'storm_vmax10m']:
+                            if param in ['storm_ace' or 'storm_vmax10m'] or 'sst' in param or 'ohc' in param or 'iso26C' in param:
                                 print(f"    {param}: {value:0.1f}")
                             else:
                                 print(f"    {param}: {value}")
