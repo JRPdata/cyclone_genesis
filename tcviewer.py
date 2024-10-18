@@ -10511,18 +10511,34 @@ class App:
                         by_model_stats[model_name]['earliest_named_time'].append(earliest_named_time)
                         by_model_stats[model_name]['disturbance_end_time'].append(disturbance_end_time)
                         if CALC_TRACK_STATS_NETCDF_DATA:
+                            # need to handle case also when initial points don't include sst/ohc data
                             if storm_sst:
-                                by_model_stats[model_name]['sst_mean'].append(sst_mean)
-                                by_model_stats[model_name]['sst_min'].append(sst_min)
-                                by_model_stats[model_name]['sst_max'].append(sst_max)
+                                if 'sst_mean' not in by_model_stats[model_name]:
+                                    by_model_stats[model_name]['sst_mean'] = [sst_mean]
+                                    by_model_stats[model_name]['sst_min'] = [sst_min]
+                                    by_model_stats[model_name]['sst_max'] = [sst_max]
+                                else:
+                                    by_model_stats[model_name]['sst_mean'].append(sst_mean)
+                                    by_model_stats[model_name]['sst_min'].append(sst_min)
+                                    by_model_stats[model_name]['sst_max'].append(sst_max)
                             if storm_ohc:
-                                by_model_stats[model_name]['ohc_mean'].append(ohc_mean)
-                                by_model_stats[model_name]['ohc_min'].append(ohc_min)
-                                by_model_stats[model_name]['ohc_max'].append(ohc_max)
+                                if 'ohc_mean' not in by_model_stats[model_name]:
+                                    by_model_stats[model_name]['ohc_mean'] = [ohc_mean]
+                                    by_model_stats[model_name]['ohc_min'] = [ohc_min]
+                                    by_model_stats[model_name]['ohc_max'] = [ohc_max]
+                                else:
+                                    by_model_stats[model_name]['ohc_mean'].append(ohc_mean)
+                                    by_model_stats[model_name]['ohc_min'].append(ohc_min)
+                                    by_model_stats[model_name]['ohc_max'].append(ohc_max)
                             if storm_iso26C:
-                                by_model_stats[model_name]['iso26C_mean'].append(iso26C_mean)
-                                by_model_stats[model_name]['iso26C_min'].append(iso26C_min)
-                                by_model_stats[model_name]['iso26C_max'].append(iso26C_max)
+                                if 'iso26C_mean' not in by_model_stats[model_name]:
+                                    by_model_stats[model_name]['iso26C_mean'] = [iso26C_mean]
+                                    by_model_stats[model_name]['iso26C_min'] = [iso26C_min]
+                                    by_model_stats[model_name]['iso26C_max'] = [iso26C_max]
+                                else:
+                                    by_model_stats[model_name]['iso26C_mean'].append(iso26C_mean)
+                                    by_model_stats[model_name]['iso26C_min'].append(iso26C_min)
+                                    by_model_stats[model_name]['iso26C_max'].append(iso26C_max)
 
                     if ensemble_name and 'ensemble_name' not in by_model_stats[model_name]:
                         by_model_stats[model_name]['ensemble_name'] = ensemble_name
