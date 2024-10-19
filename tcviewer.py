@@ -32,6 +32,8 @@
 # TOGGLE ANALYSIS MODE = a key (must have selection loop on tracks); NOTE: TRACK ANALYSIS ONLY PRESENTLY WORKS IN UTC TZ
 #   SAVE FIGURE = s key (or p key) (saves current figure in analysis mode)
 # PRINT TRACK STATS = i key (must be hovering; prints to terminal)
+# PRINT POINT INFO = . key (must be hovering; prints to terminal)
+# PRINT ALL TRACK POINTS INFO = / key (must be hovering; prints to terminal)
 # DISPLAY SST DATA = 4 key (set DISPLAY_NETCDF to 'sst') (Day/Night SST from CoastWatch/NOAA)
 # DISPLAY OHC DATA = 5 key (set DISPLAY_NETCDF to 'ohc') (OHC (26C) from the SOHC from NESDIS/NOAA)
 # DISPLAY ISO26C DATA = 6 key (set DISPLAY_NETCDF to 'iso26C') (Depth of the 26 degree isobar from the SOHC from NESDIS/NOAA)
@@ -64,7 +66,7 @@
 
 ####### CONFIG
 # Process the wind radii data from TCGEN ensembles
-PROCESS_TCGEN_WIND_RADII = True
+#PROCESS_TCGEN_WIND_RADII = True
 PROCESS_TCGEN_WIND_RADII = False
 
 # how smooth (and also large) the (interpolated) 'cone' is
@@ -1048,7 +1050,7 @@ all_genesis_names = list(set(all_tcgen_members + global_det_members))
 def ab_deck_line_to_dict(line):
     raw_data = decode_ab_deck_line(line)
     if raw_data:
-        init_datetime = datetime.strptime(raw_data['YYYYMMDDHH'], '%Y%m%d%H')
+        init_datetime = datetime.strptime(raw_data['yyyymmddhh'], '%Y%m%d%H')
         raw_data['time_step'] = raw_data['tau']
         if 'router' in raw_data.keys():
             if type(raw_data['router']) is int:
@@ -1084,6 +1086,49 @@ def ab_deck_line_to_dict(line):
                 outer_slp = raw_data['pouter']
                 if outer_slp > 0:
                     raw_data['outer_slp'] = outer_slp
+
+        if 'speed' in raw_data.keys() and type(raw_data['speed']) is int:
+            storm_speed = float(raw_data['speed']) * 1.9438452
+            raw_data['storm_speed'] = storm_speed
+
+        if 'dir' in raw_data.keys() and type(raw_data['dir']) is int:
+            storm_direction = int(raw_data['dir'])
+            raw_data['storm_direction'] = storm_direction
+
+        if 'eye' in raw_data.keys() and type(raw_data['eye']) is int:
+            eye = int(raw_data['eye']) * 1852
+            raw_data['eye'] = eye
+
+        if 'gust' in raw_data.keys() and type(raw_data['gust']) is int:
+            gust = float(raw_data['gust']) * 1.9438452
+            raw_data['gust'] = gust
+
+        # Used by CARQ
+        #S  = shallow, estimated top of circulation is 700 mb
+        #M = medium, estimated top of circulation is 400 mb
+        #D = deep, estimated top of circulation is 200 mb
+        #X = no estimate, missing
+
+        if 'depth' in raw_data.keys() and len(raw_data['depth']) > 0 and raw_data['depth'] != 'X':
+            raw_data['depth'] = raw_data['depth']
+        else:
+            raw_data['depth'] = None
+
+        if 'rad' in raw_data.keys() and type(raw_data['rad']) is int:
+            try:
+                radius_rad = [raw_data['rad1'] * 1852, raw_data['rad2'] * 1852, raw_data['rad3'] * 1852, raw_data['rad4'] * 1852]
+                rad = raw_data['rad']
+                raw_data[f'wind_radii_{rad}'] = radius_rad
+            except:
+                pass
+
+        if 'seas' in raw_data.keys() and type(raw_data['seas']) is int:
+            try:
+                radius_rad = [raw_data['seas1'] * 1852, raw_data['seas2'] * 1852, raw_data['seas3'] * 1852, raw_data['seas4'] * 1852]
+                rad = raw_data['seas']
+                raw_data[f'seas_radii_{rad}'] = radius_rad
+            except:
+                pass
 
         raw_data['closed_isobar_delta'] = None
         if mslp and outer_slp:
@@ -1151,7 +1196,7 @@ def decode_ab_deck_line(line):
         # Creating the dictionary
         for i in range(len(columns)):
             if i < len(values):
-                if columns[i] in ['TAU', 'VMAX', 'MSLP', 'RMW', 'GUSTS', 'ROUTER', 'POUTER', 'SPEED']:
+                if columns[i] in ['TAU', 'VMAX', 'MSLP', 'RMW', 'GUSTS', 'EYE', 'MAXSEAS', 'ROUTER', 'POUTER', 'DIR', 'SPEED', 'RAD', 'RAD1', 'RAD2', 'RAD3', 'RAD4', 'SEAS', 'SEAS1', 'SEAS2', 'SEAS3', 'SEAS4']:
                     try:
                         num = int(values[i].strip())
                     except:
@@ -1183,7 +1228,7 @@ def decode_ab_deck_line(line):
                     else:
                         data['lon'] = None
                 else:
-                    data[columns[i]] = values[i].strip()
+                    data[columns[i].lower()] = values[i].strip()
 
     return data
 
@@ -1458,7 +1503,7 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                 model_date = datetime.strptime(date_str, '%Y%m%d%H')
                                 if model_date == latest_date:
                                     ab_deck_line_dict = ab_deck_line_to_dict(line)
-                                    model_id = ab_deck_line_dict['TECH']
+                                    model_id = ab_deck_line_dict['tech']
                                     valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
                                     init_datetime = datetime.fromisoformat(ab_deck_line_dict['init_time'])
                                     if storm_id not in adeck.keys():
@@ -1470,11 +1515,14 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                         ens_name = atcf_ens_model_name_to_ensemble_name[model_id]
                                         atcf_active_ensembles_have[ens_name] = init_datetime
 
-                                    adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
+                                    if valid_datetime.isoformat() in adeck[storm_id][model_id]:
+                                        adeck[storm_id][model_id][valid_datetime.isoformat()].update(ab_deck_line_dict)
+                                    else:
+                                        adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
                                 elif model_date >= (latest_date - timedelta(hours=6)):
                                     # GEFS members ATCF is reported late by 6 hours...
                                     ab_deck_line_dict = ab_deck_line_to_dict(line)
-                                    model_id = ab_deck_line_dict['TECH']
+                                    model_id = ab_deck_line_dict['tech']
                                     init_datetime = datetime.fromisoformat(ab_deck_line_dict['init_time'])
                                     # allow only late GEFS members:
                                     if model_id[0:2] in ['AC', 'AP']:
@@ -1496,7 +1544,10 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                                 ens_name = atcf_ens_model_name_to_ensemble_name[model_id]
                                                 atcf_active_ensembles_have[ens_name] = init_datetime
 
-                                            adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
+                                            if valid_datetime.isoformat() in adeck[storm_id][model_id]:
+                                                adeck[storm_id][model_id][valid_datetime.isoformat()].update(ab_deck_line_dict)
+                                            else:
+                                                adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
 
                     dt_mods_adeck[file_url] = dt_mod
                 except OSError as e:
@@ -1553,7 +1604,7 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                             model_date = datetime.strptime(date_str, '%Y%m%d%H')
                             if model_date == latest_date:
                                 ab_deck_line_dict = ab_deck_line_to_dict(line)
-                                model_id = ab_deck_line_dict['TECH']
+                                model_id = ab_deck_line_dict['tech']
                                 valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
                                 init_datetime = datetime.fromisoformat(ab_deck_line_dict['init_time'])
                                 if storm_id not in adeck.keys():
@@ -1564,11 +1615,15 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                 if model_id in atcf_ens_model_name_to_ensemble_name:
                                     ens_name = atcf_ens_model_name_to_ensemble_name[model_id]
                                     atcf_active_ensembles_have[ens_name] = init_datetime
-                                adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
+
+                                if valid_datetime.isoformat() in adeck[storm_id][model_id]:
+                                    adeck[storm_id][model_id][valid_datetime.isoformat()].update(ab_deck_line_dict)
+                                else:
+                                    adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
                             elif model_date >= (latest_date - timedelta(hours=6)):
                                 # GEPS/EPS/FNMOC members ATCF are usually later than GEFS (allow up to 6 hours late)
                                 ab_deck_line_dict = ab_deck_line_to_dict(line)
-                                model_id = ab_deck_line_dict['TECH']
+                                model_id = ab_deck_line_dict['tech']
                                 # allow late members
                                 valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
                                 init_datetime = datetime.fromisoformat(ab_deck_line_dict['init_time'])
@@ -1591,7 +1646,10 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                     if model_id in atcf_ens_model_name_to_ensemble_name:
                                         ens_name = atcf_ens_model_name_to_ensemble_name[model_id]
                                         atcf_active_ensembles_have[ens_name] = init_datetime
-                                    adeck[storm_id][model_id][valid_time_str] = ab_deck_line_dict
+                                    if valid_time_str in adeck[storm_id][model_id]:
+                                        adeck[storm_id][model_id][valid_time_str].update(ab_deck_line_dict)
+                                    else:
+                                        adeck[storm_id][model_id][valid_time_str] = ab_deck_line_dict
 
                 dt_mods_adeck2[local_filename] = dt_mod
             except OSError as e:
@@ -1652,14 +1710,17 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                 if len(parts) > 4:
                                     ab_deck_line_dict = ab_deck_line_to_dict(line)
                                     # id should be 'BEST'
-                                    bdeck_id = ab_deck_line_dict['TECH']
+                                    bdeck_id = ab_deck_line_dict['tech']
                                     valid_datetime = datetime.fromisoformat(ab_deck_line_dict['valid_time'])
                                     if storm_id not in bdeck.keys():
                                         bdeck[storm_id] = {}
                                     if bdeck_id not in bdeck[storm_id].keys():
                                         bdeck[storm_id][bdeck_id] = {}
                                     ab_deck_line_dict['basin'] = basin_id.upper()
-                                    bdeck[storm_id][bdeck_id][valid_datetime.isoformat()] = ab_deck_line_dict
+                                    if valid_datetime.isoformat() in bdeck[storm_id][bdeck_id]:
+                                        bdeck[storm_id][bdeck_id][valid_datetime.isoformat()].update(ab_deck_line_dict)
+                                    else:
+                                        bdeck[storm_id][bdeck_id][valid_datetime.isoformat()] = ab_deck_line_dict
 
                         dt_mods_bdeck[file_url] = dt_mod
                 except OSError as e:
@@ -2295,6 +2356,99 @@ def tcvitals_line_to_dict(line):
             storm_vitals['outer_slp'] = int(outer_slp)
         except:
             storm_vitals['outer_slp'] = None
+
+        try:
+            storm_speed = float(storm_vitals['storm_speed']) * 10 * 1.9438452
+            storm_vitals['storm_speed'] = storm_speed
+        except:
+            pass
+
+        try:
+            storm_direction = int(storm_vitals['storm_direction'])
+            storm_vitals['storm_direction'] = storm_direction
+        except:
+            pass
+
+        try:
+            storm_vitals['rmw'] = int(storm_vitals['radius_max_wind'])
+        except:
+            pass
+
+        try:
+            if storm_vitals['valid_time']:
+                if storm_vitals['max_forecast_time'] >= 0:
+                    max_tau = int(storm_vitals['max_forecast_time'])
+                    storm_vitals['max_forecast_valid_time'] = storm_vitals['max_forecast_time'] + timedelta(hours=max_tau)
+
+                    forecast_latu = storm_vitals['forecast_latitude']
+                    forecast_latd = storm_vitals['forecast_latitude_indicator']
+                    forecast_lonu = storm_vitals['forecast_longitude']
+                    forecast_lond = storm_vitals['forecast_longitude_indicator']
+
+                    if forecast_latd == 'N':
+                        forecast_latsigned = float(latu) / 10.0
+                    else:
+                        forecast_latsigned = -1.0 * float(latu) / 10.0
+                    storm_vitals['max_forecast_lat'] = forecast_latsigned
+
+                    if forecast_lond == 'E':
+                        forecast_lonsigned = float(forecast_lonu) / 10.0
+                    else:
+                        forecast_lonsigned = -1.0 * float(forecast_lonu) / 10.0
+                    storm_vitals['max_forecast_lon'] = forecast_lonsigned
+        except:
+            pass
+
+        try:
+            radius_34_ne = int(storm_vitals['radius_34_ne'])
+            radius_34_se = int(storm_vitals['radius_34_se'])
+            radius_34_sw = int(storm_vitals['radius_34_sw'])
+            radius_34_nw = int(storm_vitals['radius_34_nw'])
+            radius_34 = [radius_34_ne, radius_34_se, radius_34_sw, radius_34_nw]
+            wind_radii_34 = []
+            for radius_34_quad in radius_34:
+                if radius_34_quad < 0:
+                    wind_radii_34.append(None)
+                else:
+                    wind_radii_34.append(radius_34_quad)
+            
+            storm_vitals['wind_radii_34'] = wind_radii_34
+        except:
+            pass
+
+        try:
+            radius_50_ne = int(storm_vitals['radius_50_ne'])
+            radius_50_se = int(storm_vitals['radius_50_se'])
+            radius_50_sw = int(storm_vitals['radius_50_sw'])
+            radius_50_nw = int(storm_vitals['radius_50_nw'])
+            radius_50 = [radius_50_ne, radius_50_se, radius_50_sw, radius_50_nw]
+            wind_radii_50 = []
+            for radius_50_quad in radius_50:
+                if radius_50_quad < 0:
+                    wind_radii_50.append(None)
+                else:
+                    wind_radii_50.append(radius_50_quad)
+
+            storm_vitals['wind_radii_50'] = wind_radii_50
+        except:
+            pass
+
+        try:
+            radius_64_ne = int(storm_vitals['radius_64_ne'])
+            radius_64_se = int(storm_vitals['radius_64_se'])
+            radius_64_sw = int(storm_vitals['radius_64_sw'])
+            radius_64_nw = int(storm_vitals['radius_64_nw'])
+            radius_64 = [radius_64_ne, radius_64_se, radius_64_sw, radius_64_nw]
+            wind_radii_64 = []
+            for radius_64_quad in radius_64:
+                if radius_64_quad < 0:
+                    wind_radii_64.append(None)
+                else:
+                    wind_radii_64.append(radius_64_quad)
+
+            storm_vitals['wind_radii_64'] = wind_radii_64
+        except:
+            pass
 
         storm_vitals['closed_isobar_delta'] = None
         try:
@@ -8437,6 +8591,9 @@ class App:
                         else:
                             candidate_info['mslp_value'] = None
 
+                        if 'rmw' in candidate:
+                            candidate_info['rmw'] = candidate['rmw']
+
                         if prev_lon:
                             prev_lon_f = float(prev_lon)
                             if abs(prev_lon_f - lon) > 270:
@@ -8812,6 +8969,9 @@ class App:
                         candidate_info['subtropical'] = candidate['subtropical']
                     else:
                         candidate_info['subtropical'] = 'Unknown'
+
+                    if 'rmw' in candidate:
+                        candidate_info['rmw'] = candidate['rmw']
 
                     if PROCESS_TCGEN_WIND_RADII:
                         wind_radii_speed_indices = ['34', '50', '64']
@@ -9993,6 +10153,14 @@ class App:
                 cls.print_track_stats()
             return
 
+        if event.key == '.':
+            cls.print_point_info()
+            return
+
+        if event.key == '/':
+            cls.print_points_info()
+            return
+
         if event.key == 'x':
             # annotate storm extrema
             cls.annotate_storm_extrema()
@@ -10246,6 +10414,46 @@ class App:
             if model_cycle != cls.genesis_model_cycle_time:
                 cls.genesis_model_cycle_time_navigate = model_cycle
                 cls.redraw_map_with_data(model_cycle=model_cycle)
+
+    @classmethod
+    def print_point_info(cls, arg_tc_point_index=None):
+        if len(cls.plotted_tc_candidates) == 0:
+            return
+
+        # note: point_index is a tuple of tc_index, tc_point_index
+        if len(cls.nearest_point_indices_overlapped) != 0:
+            # print point (candidate) info of selected of previously selected
+            num, cursor_point_index = cls.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
+            internal_id, tc_index, tc_point_index = cursor_point_index
+            if not cls.plotted_tc_candidates or (tc_index + 1) > len(cls.plotted_tc_candidates):
+                return
+
+            if arg_tc_point_index is None:
+                prev_selected_point = cls.plotted_tc_candidates[tc_index][1][tc_point_index]
+                point_num = tc_point_index + 1
+            else:
+                prev_selected_point = cls.plotted_tc_candidates[tc_index][1][arg_tc_point_index]
+                point_num = arg_tc_point_indexr + 1
+            num_points = len(cls.plotted_tc_candidates[tc_index][1])
+            print(f"Disturbance (Internal ID: {internal_id}) (Point info # {point_num} / {num_points}):")
+            print(json.dumps(prev_selected_point, default=lambda o: o.isoformat() if isinstance(o, datetime) else None, sort_keys=True, indent=4))
+
+    @classmethod
+    def print_points_info(cls):
+        if len(cls.plotted_tc_candidates) == 0:
+            return
+
+        # note: point_index is a tuple of tc_index, tc_point_index
+        if len(cls.nearest_point_indices_overlapped) != 0:
+            # print point (candidate) info of selected of previously selected
+            num, cursor_point_index = cls.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
+            internal_id, tc_index, tc_point_index = cursor_point_index
+            if not cls.plotted_tc_candidates or (tc_index + 1) > len(cls.plotted_tc_candidates):
+                return
+
+            num_points = len(cls.plotted_tc_candidates[tc_index][1])
+            for i in range(num_points):
+                cls.print_point_info(arg_tc_point_index=i)
 
     # print track stats to terminal for hovered track
     @classmethod
