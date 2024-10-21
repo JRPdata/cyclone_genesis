@@ -2972,17 +2972,30 @@ class AnalysisDialog(tk.Toplevel):
                                iid in filtered_storm_ids]
 
         # Initialize a dictionary to store interpolated values for each valid time
-        track_values = {dt: {'lat': [], 'lon': [], 'vmax10m': []} for dt in all_datetimes}
+        #track_values = {dt: {'lat': [], 'lon': [], 'vmax10m': []} for dt in all_datetimes}
+        track_values = {}
 
         # Interpolate each individual track hourly and populate the dictionary
         for internal_id, tc_candidate in filtered_candidates:
             # Extract valid times and corresponding values for interpolation
             valid_times = [tc['valid_time'] for tc in tc_candidate]
+
+            # assuming start_date and end_date are datetime objects
+            start_date = min(all_datetimes)
+            end_date = max(all_datetimes)
+            hours = []
+            current_date = start_date
+            while current_date <= end_date:
+                hours.append(current_date.replace(minute=0, second=0, microsecond=0).timestamp())
+                current_date += timedelta(hours=1)
+
+            hourly_times = np.array(hours)
+
             lats = [tc['lat'] for tc in tc_candidate]
             lons = [tc['lon'] for tc in tc_candidate]
             vmaxs = [tc['vmax10m'] for tc in tc_candidate]
 
-            # Convert valid times to datetime objects and then to timestamps
+            # Convert valid times to timestamps
             valid_times = np.array([dt.timestamp() for dt in valid_times])
 
             # Interpolate values hourly
@@ -2991,7 +3004,6 @@ class AnalysisDialog(tk.Toplevel):
             f_vmax = interp1d(valid_times, vmaxs, kind='linear', fill_value='extrapolate')
 
             # Evaluate interpolating functions at hourly intervals
-            hourly_times = np.array([dt.timestamp() for dt in all_datetimes])
             interp_lats = f_lat(hourly_times)
             interp_lons = f_lon(hourly_times)
             interp_vmaxs = f_vmax(hourly_times)
@@ -3005,7 +3017,10 @@ class AnalysisDialog(tk.Toplevel):
             interp_vmaxs[mask] = np.nan
 
             # Populate the dictionary with interpolated values
-            for i, dt in enumerate(all_datetimes):
+            for i, ts in enumerate(hourly_times):
+                dt = datetime.fromtimestamp(ts)
+                if dt not in track_values:
+                    track_values[dt] = {'lat': [], 'lon': [], 'vmax10m': []}
                 track_values[dt]['lat'].append(interp_lats[i])
                 track_values[dt]['lon'].append(interp_lons[i])
                 track_values[dt]['vmax10m'].append(interp_vmaxs[i])
@@ -10469,7 +10484,20 @@ class App:
             num, cursor_point_index = cls.nearest_point_indices_overlapped.get_prev_enum_key_tuple()
             if cursor_point_index is not None:
                 cursor_internal_id, tc_index, tc_point_index = cursor_point_index
-                internal_id, lat_lon_with_time_step_list = cls.plotted_tc_candidates[tc_index]
+                candidate = cls.plotted_tc_candidates[tc_index]
+                internal_id, lat_lon_with_time_step_list = candidate
+
+                tz = 'UTC'
+                timezone = pytz.timezone(tz)
+                offset = datetime.now(timezone).strftime('%z')
+                hours, minutes = int(offset[:3]), int(offset[0] + offset[3:])
+                formatted_offset = f"{'+' if hours >= 0 else '-'}{abs(hours):02}:{abs(minutes):02}"
+                tz_previous_selected = f"(UTC{formatted_offset}) {tz}"
+
+                all_datetimes = AnalysisDialog.get_unique_datetimes([candidate], [internal_id], tz_previous_selected)
+                # replace lat lon time step list with interpolated (this allows for irregular forecast hours, like with OFCL)
+                lat_lon_with_time_step_list = AnalysisDialog.calculate_mean_track_interp([candidate], all_datetimes, [internal_id])
+
                 # print out statistics for track
                 storm_ace = 0.0
                 storm_vmax10m = 0.0
@@ -10481,18 +10509,21 @@ class App:
                 storm_ohc = []
                 storm_sst = []
                 for candidate_info in lat_lon_with_time_step_list:
+                    valid_time = candidate_info['valid_time']
                     if disturbance_start_time is None:
-                        disturbance_start_time = candidate_info['valid_time']
+                        disturbance_start_time = valid_time
 
-                    disturbance_end_time = candidate_info['valid_time']
+                    disturbance_end_time = valid_time
                     if 'vmax10m' in candidate_info:
                         point_vmax = candidate_info['vmax10m']
+                        # only use synoptic hours (some forecasts might have off synoptic hours)
                         if point_vmax >= 34.0:
-                            storm_ace += pow(10, -4) * np.power(point_vmax, 2)
+                            if valid_time.hour % 6 == 0:
+                                storm_ace += pow(10, -4) * np.power(point_vmax, 2)
                             if earliest_named_time is None:
-                                earliest_named_time = candidate_info['valid_time']
+                                earliest_named_time = valid_time
                         if point_vmax > storm_vmax10m:
-                            storm_vmax_time_earliest = candidate_info['valid_time']
+                            storm_vmax_time_earliest = valid_time
                             storm_vmax10m = point_vmax
 
                     if CALC_TRACK_STATS_NETCDF_DATA:
@@ -10614,6 +10645,13 @@ class App:
                 # won't work for now until fixed in code
                 lookup_model_name_ensemble_name = model_name_to_ensemble_name
 
+            tz = 'UTC'
+            timezone = pytz.timezone(tz)
+            offset = datetime.now(timezone).strftime('%z')
+            hours, minutes = int(offset[:3]), int(offset[0] + offset[3:])
+            formatted_offset = f"{'+' if hours >= 0 else '-'}{abs(hours):02}:{abs(minutes):02}"
+            tz_previous_selected = f"(UTC{formatted_offset}) {tz}"
+
             by_model_stats = {}
             for internal_id, tc in filtered_candidates:
                 if tc and tc[0] and 'model_name' in tc[0]:
@@ -10622,7 +10660,10 @@ class App:
                     if possible_ensemble and model_name in lookup_model_name_ensemble_name:
                         ensemble_name = lookup_model_name_ensemble_name[model_name]
 
-                    lat_lon_with_time_step_list = tc
+                    all_datetimes = AnalysisDialog.get_unique_datetimes([(internal_id, tc)], [internal_id], tz_previous_selected)
+                    # replace lat lon time step list with interpolated (this allows for irregular forecast hours, like with OFCL)
+                    lat_lon_with_time_step_list = AnalysisDialog.calculate_mean_track_interp([(internal_id, tc)], all_datetimes, [internal_id])
+
                     # print out statistics for track
                     storm_ace = 0.0
                     storm_vmax10m = 0.0
@@ -10634,18 +10675,20 @@ class App:
                     storm_ohc = []
                     storm_sst = []
                     for candidate_info in lat_lon_with_time_step_list:
+                        valid_time = candidate_info['valid_time']
                         if disturbance_start_time is None:
-                            disturbance_start_time = candidate_info['valid_time']
+                            disturbance_start_time = valid_time
                             
-                        disturbance_end_time = candidate_info['valid_time']
+                        disturbance_end_time = valid_time
                         if 'vmax10m' in candidate_info:
                             point_vmax = candidate_info['vmax10m']
                             if point_vmax >= 34.0:
-                                storm_ace += pow(10, -4) * np.power(point_vmax, 2)
+                                if valid_time.hour % 6 == 0:
+                                    storm_ace += pow(10, -4) * np.power(point_vmax, 2)
                                 if earliest_named_time is None:
-                                    earliest_named_time = candidate_info['valid_time']
+                                    earliest_named_time = valid_time
                             if point_vmax > storm_vmax10m:
-                                storm_vmax_time_earliest = candidate_info['valid_time']
+                                storm_vmax_time_earliest = valid_time
                                 storm_vmax10m = point_vmax
 
                         if CALC_TRACK_STATS_NETCDF_DATA:
