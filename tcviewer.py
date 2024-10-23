@@ -44,7 +44,7 @@
 # LOAD HIDDEN TRACKS (SLOT 1) = 8 key (re-hides the tracks saved in slot 1 pressing '1')
 # LOAD HIDDEN TRACKS (SLOT 2) = 9 key ("" from slot 2 from pressing '2')
 # BLIT MEAN TRACK = m key (temporarily, draw the mean track from the selected tracks)
-# EXECUTE CUSTOM PYTHON CODE = F8 key (executes code in clipboard! BE CAUTIOUS WHEN USING!)
+# EXECUTE CUSTOM PYTHON CODE = F8 key (executes code in clipboard! BE CAUTIOUS WHEN USING!) (see sample code: custom_code_eps.py and custom_code_global_det.py)
 
 # Click on (colored) legend for valid time days to cycle between what to display
 #   (relative to (00Z) start of earliest model init day)
