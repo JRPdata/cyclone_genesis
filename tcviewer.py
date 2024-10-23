@@ -44,7 +44,7 @@
 # LOAD HIDDEN TRACKS (SLOT 1) = 8 key (re-hides the tracks saved in slot 1 pressing '1')
 # LOAD HIDDEN TRACKS (SLOT 2) = 9 key ("" from slot 2 from pressing '2')
 # BLIT MEAN TRACK = m key (temporarily, draw the mean track from the selected tracks)
-
+# EXECUTE CUSTOM PYTHON CODE = F8 key (executes code in clipboard! BE CAUTIOUS WHEN USING!)
 
 # Click on (colored) legend for valid time days to cycle between what to display
 #   (relative to (00Z) start of earliest model init day)
@@ -375,6 +375,9 @@ import os
 import requests
 import traceback
 import re
+
+# for executing code
+import pyperclip
 
 # for parsing ADT information
 from bs4 import BeautifulSoup
@@ -2139,8 +2142,11 @@ def get_tc_model_init_times_relative_to(init_date, genesis_previous_selected):
         init_date = datetime.fromisoformat(init_date)
 
     if genesis_previous_selected == 'GLOBAL-DET':
+        ens = False
         db_file_path = tc_candidates_db_file_path
     else:
+        ens = True
+        all_ens = genesis_previous_selected == 'ALL-TCGEN'
         db_file_path = tc_candidates_tcgen_db_file_path
 
     conn = None
@@ -2150,8 +2156,20 @@ def get_tc_model_init_times_relative_to(init_date, genesis_previous_selected):
         # Connect to the SQLite database
         conn = sqlite3.connect(db_file_path)
         cursor = conn.cursor()
-        cursor.execute('SELECT DISTINCT init_date FROM completed WHERE init_date <= ? ORDER BY init_date DESC LIMIT 1',
-                       (datetime.isoformat(init_date),))
+        if ens:
+            if all_ens:
+                cursor.execute(
+                    'SELECT DISTINCT init_date FROM ens_status WHERE init_date <= ? ORDER BY init_date DESC LIMIT 1',
+                    (datetime.isoformat(init_date),))
+            else:
+                cursor.execute(
+                    'SELECT DISTINCT init_date FROM ens_status WHERE init_date <= ? AND ensemble_name == ? ORDER BY init_date DESC LIMIT 1',
+                    (datetime.isoformat(init_date), genesis_previous_selected,))
+        else:
+            cursor.execute(
+                'SELECT DISTINCT init_date FROM completed WHERE init_date <= ? ORDER BY init_date DESC LIMIT 1',
+                (datetime.isoformat(init_date),))
+
         results = cursor.fetchall()
         if results:
             for row in results:
@@ -2159,9 +2177,19 @@ def get_tc_model_init_times_relative_to(init_date, genesis_previous_selected):
                 model_init_times['at'] = datetime.fromisoformat(init_time)
 
         if model_init_times['at']:
-            cursor.execute(
-                'SELECT DISTINCT init_date FROM completed WHERE init_date > ? ORDER BY init_date ASC LIMIT 1',
-                (datetime.isoformat(model_init_times['at']),))
+            if ens:
+                if all_ens:
+                    cursor.execute(
+                        'SELECT DISTINCT init_date FROM ens_status WHERE init_date > ? ORDER BY init_date ASC LIMIT 1',
+                        (datetime.isoformat(model_init_times['at']),))
+                else:
+                    cursor.execute(
+                        'SELECT DISTINCT init_date FROM ens_status WHERE init_date > ? AND ensemble_name == ? ORDER BY init_date ASC LIMIT 1',
+                        (datetime.isoformat(model_init_times['at']), genesis_previous_selected,))
+            else:
+                cursor.execute(
+                    'SELECT DISTINCT init_date FROM completed WHERE init_date > ? ORDER BY init_date ASC LIMIT 1',
+                    (datetime.isoformat(model_init_times['at']),))
             results = cursor.fetchall()
             if results:
                 for row in results:
@@ -2169,9 +2197,19 @@ def get_tc_model_init_times_relative_to(init_date, genesis_previous_selected):
                     model_init_times['next'] = datetime.fromisoformat(init_time)
 
         if model_init_times['at']:
-            cursor.execute(
-                'SELECT DISTINCT init_date FROM completed WHERE init_date < ? ORDER BY init_date DESC LIMIT 1',
-                (datetime.isoformat(model_init_times['at']),))
+            if ens:
+                if all_ens:
+                    cursor.execute(
+                        'SELECT DISTINCT init_date FROM ens_status WHERE init_date < ? ORDER BY init_date DESC LIMIT 1',
+                        (datetime.isoformat(model_init_times['at']),))
+                else:
+                    cursor.execute(
+                        'SELECT DISTINCT init_date FROM ens_status WHERE init_date < ? AND ensemble_name == ? ORDER BY init_date DESC LIMIT 1',
+                        (datetime.isoformat(model_init_times['at']), genesis_previous_selected,))
+            else:
+                cursor.execute(
+                    'SELECT DISTINCT init_date FROM completed WHERE init_date < ? ORDER BY init_date DESC LIMIT 1',
+                    (datetime.isoformat(model_init_times['at']),))
             results = cursor.fetchall()
             if results:
                 for row in results:
@@ -8000,7 +8038,7 @@ class App:
         if cls.dt_mods_genesis:
             # genesis_source_type is either 'global-det' or 'tcgen'
             for genesis_source_type, model_init_times, model_completed_times, \
-                ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times():
+                    ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times():
 
                 max_dt = datetime.min
 
@@ -8026,7 +8064,7 @@ class App:
 
         else:
             for genesis_source_type, model_init_times, model_completed_times, \
-                ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times():
+                    ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times():
 
                 if not model_completed_times:
                     continue
@@ -8128,39 +8166,39 @@ class App:
         cls.exit_button_adeck.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.reload_button_adeck = ttk.Button(cls.adeck_mode_frame, text="(RE)LOAD", command=cls.reload_adeck,
-                                              style="White.TButton")
+                                             style="White.TButton")
         cls.reload_button_adeck.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_adeck_mode = ttk.Label(cls.adeck_mode_frame, text="ADECK MODE. Models: 0", style="TLabel")
         cls.label_adeck_mode.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.adeck_selected_combobox = ttk.Combobox(cls.adeck_mode_frame, width=14, textvariable=cls.adeck_selected,
-                                                    state='readonly', style='Black.TCombobox', height=20)
+                                                   state='readonly', style='Black.TCombobox', height=20)
         cls.adeck_selected_combobox.pack(side=tk.LEFT, padx=5, pady=5)
         cls.adeck_selected_combobox['state'] = 'readonly'  # Set the state according to configure colors
         cls.adeck_selected_combobox['values'] = (
-        'ALL', 'STATISTICAL', 'GLOBAL', 'GEFS-MEMBERS', 'GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF', 'ALL-ATCF', 'REGIONAL', 'CONSENSUS', 'OFFICIAL')
+            'ALL', 'STATISTICAL', 'GLOBAL', 'GEFS-MEMBERS', 'GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF', 'ALL-ATCF', 'REGIONAL', 'CONSENSUS', 'OFFICIAL')
         cls.adeck_selected_combobox.current(10)
         cls.adeck_previous_selected = cls.adeck_selected.get()
 
         cls.adeck_selected_combobox.bind("<<ComboboxSelected>>", cls.adeck_combo_selected_models_event)
 
         cls.adeck_selection_info_label = ttk.Label(cls.adeck_mode_frame,
-                                                    text="",
-                                                    style="TLabel")
+                                                   text="",
+                                                   style="TLabel")
         cls.adeck_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.adeck_selection_info_label = ttk.Label(cls.adeck_mode_frame,
-                                                      text="",
-                                                      style="TLabel")
+                                                   text="",
+                                                   style="TLabel")
         cls.adeck_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.switch_to_genesis_button = ttk.Button(cls.adeck_mode_frame, text="SWITCH TO GENESIS MODE",
-                                                   command=cls.switch_mode, style="TButton")
+                                                  command=cls.switch_mode, style="TButton")
         cls.switch_to_genesis_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
         cls.adeck_config_button = ttk.Button(cls.adeck_mode_frame, text="CONFIG \u2699",
-                                              command=cls.show_config_adeck_dialog, style="TButton")
+                                             command=cls.show_config_adeck_dialog, style="TButton")
         cls.adeck_config_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
     @classmethod
@@ -8168,36 +8206,36 @@ class App:
         cls.genesis_mode_frame = ttk.Frame(cls.top_frame, style="TopFrame.TFrame")
 
         cls.exit_button_genesis = ttk.Button(cls.genesis_mode_frame, text="EXIT", command=cls.root.quit,
-                                              style="TButton")
+                                             style="TButton")
         cls.exit_button_genesis.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.reload_button_genesis = ttk.Button(cls.genesis_mode_frame, text="(RE)LOAD", command=cls.reload_genesis,
-                                                style="White.TButton")
+                                               style="White.TButton")
         cls.reload_button_genesis.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_genesis_mode = ttk.Label(cls.genesis_mode_frame, text="GENESIS MODE: Start valid day: YYYY-MM-DD",
-                                            style="TLabel")
+                                           style="TLabel")
         cls.label_genesis_mode.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.prev_genesis_cycle_button = ttk.Button(cls.genesis_mode_frame, text="PREV CYCLE",
-                                                    command=cls.prev_genesis_cycle, style="TButton")
+                                                   command=cls.prev_genesis_cycle, style="TButton")
         cls.prev_genesis_cycle_button.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.prev_genesis_cycle_button = ttk.Button(cls.genesis_mode_frame, text="NEXT CYCLE",
-                                                    command=cls.next_genesis_cycle, style="TButton")
+                                                   command=cls.next_genesis_cycle, style="TButton")
         cls.prev_genesis_cycle_button.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.latest_genesis_cycle_button = ttk.Button(cls.genesis_mode_frame, text="LATEST CYCLE",
-                                                      command=cls.latest_genesis_cycle, style="TButton")
+                                                     command=cls.latest_genesis_cycle, style="TButton")
         cls.latest_genesis_cycle_button.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.genesis_models_label = ttk.Label(cls.genesis_mode_frame,
-                                              text="Models: GFS [--/--Z], ECM[--/--Z], NAV[--/--Z], CMC[--/--Z]",
-                                              style="TLabel")
+                                             text="Models: GFS [--/--Z], ECM[--/--Z], NAV[--/--Z], CMC[--/--Z]",
+                                             style="TLabel")
         cls.genesis_models_label.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.genesis_selected_combobox = ttk.Combobox(cls.genesis_mode_frame, width=14, textvariable=cls.genesis_selected,
-                                                    state='readonly', style='Black.TCombobox')
+                                                     state='readonly', style='Black.TCombobox')
         cls.genesis_selected_combobox.pack(side=tk.LEFT, padx=5, pady=5)
         cls.genesis_selected_combobox['state'] = 'readonly'  # Set the state according to configure colors
         cls.genesis_selected_combobox['values'] = (
@@ -8207,16 +8245,16 @@ class App:
         cls.genesis_selected_combobox.bind("<<ComboboxSelected>>", cls.genesis_combo_selected_models_event)
 
         cls.genesis_selection_info_label = ttk.Label(cls.genesis_mode_frame,
-                                                      text="",
-                                                      style="TLabel")
+                                                     text="",
+                                                     style="TLabel")
         cls.genesis_selection_info_label.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.switch_to_adeck_button = ttk.Button(cls.genesis_mode_frame, text="SWITCH TO ADECK MODE",
-                                                 command=cls.switch_mode, style="TButton")
+                                                command=cls.switch_mode, style="TButton")
         cls.switch_to_adeck_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
         cls.genesis_config_button = ttk.Button(cls.genesis_mode_frame, text="CONFIG \u2699",
-                                                command=cls.show_config_genesis_dialog, style="TButton")
+                                               command=cls.show_config_genesis_dialog, style="TButton")
         cls.genesis_config_button.pack(side=tk.RIGHT, padx=5, pady=5)
 
     @classmethod
@@ -8224,14 +8262,14 @@ class App:
         # cls.tools_frame = ttk.Frame(cls.tools_frame, style="Tools.TFrame")
 
         cls.toggle_selection_loop_button = ttk.Button(cls.tools_frame, text="\u27B0 SELECT",
-                                                       command=cls.toggle_selection_loop_mode, style="TButton")
+                                                      command=cls.toggle_selection_loop_mode, style="TButton")
         cls.toggle_selection_loop_button.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_coords_prefix = ttk.Label(cls.tools_frame, text="Cursor position:", style="TLabel")
         cls.label_mouse_coords_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_coords = ttk.Label(cls.tools_frame, text="(-tt.tttt, -nnn.nnnn)",
-                                            style="FixedWidthWhite.TLabel")
+                                           style="FixedWidthWhite.TLabel")
         cls.label_mouse_coords.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_prefix = ttk.Label(cls.tools_frame, text="(Hover) Matches:", style="TLabel")
@@ -8241,35 +8279,35 @@ class App:
         cls.label_mouse_hover_matches.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_coords = ttk.Label(cls.tools_frame, text="(-tt.tttt, -nnn.nnnn)",
-                                                       style="FixedWidthWhite.TLabel")
+                                                      style="FixedWidthWhite.TLabel")
         cls.label_mouse_hover_info_coords.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_valid_time_prefix = ttk.Label(cls.tools_frame, text="Valid time:", style="TLabel")
         cls.label_mouse_hover_info_valid_time_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_valid_time = ttk.Label(cls.tools_frame, text="YYYY-MM-DD hhZ",
-                                                           style="FixedWidthWhite.TLabel")
+                                                          style="FixedWidthWhite.TLabel")
         cls.label_mouse_hover_info_valid_time.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_model_init_prefix = ttk.Label(cls.tools_frame, text="Model init:", style="TLabel")
         cls.label_mouse_hover_info_model_init_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_model_init = ttk.Label(cls.tools_frame, text="YYYY-MM-DD hhZ",
-                                                           style="FixedWidthWhite.TLabel")
+                                                          style="FixedWidthWhite.TLabel")
         cls.label_mouse_hover_info_model_init.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_vmax10m_prefix = ttk.Label(cls.tools_frame, text="Vmax @ 10m:", style="TLabel")
         cls.label_mouse_hover_info_vmax10m_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_vmax10m = ttk.Label(cls.tools_frame, text="---.- kt",
-                                                        style="FixedWidthWhite.TLabel")
+                                                       style="FixedWidthWhite.TLabel")
         cls.label_mouse_hover_info_vmax10m.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_mslp_prefix = ttk.Label(cls.tools_frame, text="MSLP:", style="TLabel")
         cls.label_mouse_hover_info_mslp_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_mslp = ttk.Label(cls.tools_frame, text="----.- hPa",
-                                                     style="FixedWidthWhite.TLabel")
+                                                    style="FixedWidthWhite.TLabel")
         cls.label_mouse_hover_info_mslp.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_roci_prefix = ttk.Label(cls.tools_frame, text="ROCI:", style="TLabel")
@@ -8279,11 +8317,11 @@ class App:
         cls.label_mouse_hover_info_roci.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_isobar_delta_prefix = ttk.Label(cls.tools_frame, text="Isobar delta:",
-                                                                    style="TLabel")
+                                                                   style="TLabel")
         cls.label_mouse_hover_info_isobar_delta_prefix.pack(side=tk.LEFT, padx=5, pady=5)
 
         cls.label_mouse_hover_info_isobar_delta = ttk.Label(cls.tools_frame, text="--- hPa",
-                                                             style="FixedWidthWhite.TLabel")
+                                                            style="FixedWidthWhite.TLabel")
         cls.label_mouse_hover_info_isobar_delta.pack(side=tk.LEFT, padx=5, pady=5)
 
     @classmethod
@@ -8443,10 +8481,10 @@ class App:
             for geometry in custom_gdf.geometry:
                 if isinstance(geometry, Polygon):
                     cls.ax.add_geometries([geometry], crs=ccrs.PlateCarree(), edgecolor='magenta', facecolor='none',
-                                           linewidth=2)
+                                          linewidth=2)
                 else:
                     cls.ax.add_geometries([geometry], crs=ccrs.PlateCarree(), edgecolor='magenta', facecolor='none',
-                                           linewidth=2)
+                                          linewidth=2)
 
         if label_column:
             for idx, row in custom_gdf.iterrows():
@@ -8544,7 +8582,7 @@ class App:
                     # only limit labels to detail
                     is_visible = contour_visible
                     obj = cls.ax.add_geometries([geom], crs=ccrs.PlateCarree(), edgecolor=edge_color, facecolor='none',
-                                                 linewidth=2, visible=is_visible)
+                                                linewidth=2, visible=is_visible)
                     cls.overlay_rvor_contour_dict['contour_objs'][contour_id] = [obj]
                 else:
                     # Draw labels
@@ -8554,8 +8592,8 @@ class App:
                     label = row['label']
                     # obj = cls.ax.text(x, y, label, transform=ccrs.PlateCarree(), color='black', fontsize=12, ha='center', va='center', bbox=dict(facecolor=edge_color, edgecolor='black', pad=2), alpha=alpha_label_visible)
                     obj = cls.ax.text(x, y, label, transform=ccrs.PlateCarree(), color='black', fontsize=12,
-                                       ha='center', va='center',
-                                       bbox=dict(facecolor=edge_color, edgecolor='black', pad=2), visible=is_visible)
+                                      ha='center', va='center',
+                                      bbox=dict(facecolor=edge_color, edgecolor='black', pad=2), visible=is_visible)
                     obj_bbox = obj.get_bbox_patch()
                     # obj_bbox.set_alpha(alpha_label_visible)
                     obj_bbox.set_visible(is_visible)
@@ -8719,8 +8757,8 @@ class App:
 
                         for vmaxmarker in lons.keys():
                             scatter = cls.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
-                                                      facecolors='none', edgecolors=cls.time_step_marker_colors[i],
-                                                      s=marker_sizes[vmaxmarker] ** 2, alpha=opacity, antialiased=False)
+                                                     facecolors='none', edgecolors=cls.time_step_marker_colors[i],
+                                                     s=marker_sizes[vmaxmarker] ** 2, alpha=opacity, antialiased=False)
                             if internal_id not in cls.scatter_objects:
                                 cls.scatter_objects[internal_id] = []
                             cls.scatter_objects[internal_id].append(scatter)
@@ -8787,19 +8825,19 @@ class App:
             else:
                 edgecolor = "#A63579"
             legend_object = cls.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels',
-                                             color=list(reversed(cls.time_step_legend_fg_colors))[i],
-                                             fontsize=8, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
-                                                                                           edgecolor=edgecolor,
-                                                                                           facecolor=color, alpha=1.0))
+                                            color=list(reversed(cls.time_step_legend_fg_colors))[i],
+                                            fontsize=8, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
+                                                                                          edgecolor=edgecolor,
+                                                                                          facecolor=color, alpha=1.0))
             cls.time_step_legend_objects.append(legend_object)
 
         # Draw the second legend items inline using display coordinates
         for i, label in enumerate(reversed(vmax_labels)):
             x_pos, y_pos = 160, 155 + i * 35
             cls.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color='white',
-                             fontsize=12, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
-                                                                            edgecolor='#FFFFFF', facecolor='#000000',
-                                                                            alpha=1.0))
+                            fontsize=12, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
+                                                                           edgecolor='#FFFFFF', facecolor='#000000',
+                                                                           alpha=1.0))
 
         cls.redraw_fig_canvas(stale_bg=True)
         cls.label_adeck_mode.config(text=f"ADECK MODE: Start valid day: " + datetime.fromisoformat(valid_day).strftime(
@@ -8859,7 +8897,7 @@ class App:
             most_recent_model_timestamps[model_name] = datetime.min
 
         for genesis_source_type, model_init_times, model_completed_times, \
-            ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times(is_ensemble=is_ensemble, model_cycle=model_cycle):
+                ensemble_completed_times, completed_ensembles in cls.get_latest_genesis_data_times(is_ensemble=is_ensemble, model_cycle=model_cycle):
 
             if not model_init_times:
                 continue
@@ -9097,8 +9135,8 @@ class App:
 
                     for vmaxmarker in lons.keys():
                         scatter = cls.ax.scatter(lons[vmaxmarker], lats[vmaxmarker], marker=vmaxmarker,
-                                                  facecolors='none', edgecolors=cls.time_step_marker_colors[i],
-                                                  s=marker_sizes[vmaxmarker] ** 2, alpha=opacity, antialiased=False)
+                                                 facecolors='none', edgecolors=cls.time_step_marker_colors[i],
+                                                 s=marker_sizes[vmaxmarker] ** 2, alpha=opacity, antialiased=False)
                         if internal_id not in cls.scatter_objects:
                             cls.scatter_objects[internal_id] = []
                         cls.scatter_objects[internal_id].append(scatter)
@@ -9154,7 +9192,7 @@ class App:
                     # TODO MODIFY (ONLY FOR TESTING)
                     path_dicts, gpd_dicts = WindField.get_wind_radii_paths_and_gpds_for_steps(
                         lat_lon_with_time_step_list = visible_llwtsl, wind_radii_selected_list = [34])
-                    
+
                     # TODO: probabilistic wind radii graphic with boundary path (path patch)
                     wind_field_gpd_dicts.append(gpd_dicts)
 
@@ -9198,19 +9236,19 @@ class App:
             else:
                 edgecolor = "#A63579"
             legend_object = cls.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels',
-                                             color=list(reversed(cls.time_step_legend_fg_colors))[i],
-                                             fontsize=8, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
-                                                                                           edgecolor=edgecolor,
-                                                                                           facecolor=color, alpha=1.0))
+                                            color=list(reversed(cls.time_step_legend_fg_colors))[i],
+                                            fontsize=8, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
+                                                                                          edgecolor=edgecolor,
+                                                                                          facecolor=color, alpha=1.0))
             cls.time_step_legend_objects.append(legend_object)
 
         # Draw the second legend items inline using display coordinates
         for i, label in enumerate(reversed(vmax_labels)):
             x_pos, y_pos = 160, 155 + i * 35
             cls.ax.annotate(label, xy=(x_pos, y_pos), xycoords='figure pixels', color='white',
-                             fontsize=12, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
-                                                                            edgecolor='#FFFFFF', facecolor='#000000',
-                                                                            alpha=1.0))
+                            fontsize=12, ha='left', va='center', bbox=dict(boxstyle='round,pad=0.3',
+                                                                           edgecolor='#FFFFFF', facecolor='#000000',
+                                                                           alpha=1.0))
 
         cls.redraw_fig_canvas(stale_bg=True)
 
@@ -9266,7 +9304,7 @@ class App:
                 pass
 
         cls.fig = plt.figure(figsize=(screen_width / CHART_DPI, screen_height / CHART_DPI), dpi=CHART_DPI,
-                              facecolor='black')
+                             facecolor='black')
 
         # cls.fig.add_subplot(111, projection=ccrs.PlateCarree())
         cls.ax = plt.axes(projection=ccrs.PlateCarree())
@@ -9297,14 +9335,14 @@ class App:
                     for i in list(range(len(edges))):
                         if (i+1) != len(edges):
                             bins.append((edges[i], edges[i+1]))
-                        
+
             elif DISPLAY_NETCDF in ['tchp', 'd26']:
                 plotter = cls.plotter_tchp_d26
                 abs_scale_min = 0
                 abs_scale_max = 300
                 bins = [(0, 10), (10, 20), (20, 30), (30, 40), (40, 50), (50, 60), (60, 70), (70, 80), (80, 90),
-                          (90, 100), (100, 125), (125, 150), (150, 175), (175, 200),
-                          (200, 225), (225, 250), (250, 275), (275, 300), (300, 999)]
+                        (90, 100), (100, 125), (125, 150), (150, 175), (175, 200),
+                        (200, 225), (225, 250), (250, 275), (275, 300), (300, 999)]
 
             elif DISPLAY_NETCDF in ['ohc', 'iso26C']:
                 plotters = cls.plotters_ohc
@@ -9404,6 +9442,16 @@ class App:
             cls.display_adt(url)
         else:
             cls.set_focus_on_map()
+
+    @classmethod
+    def exec_custom_code(cls, event=None):
+        code = pyperclip.paste()
+        print("Running code...")
+        try:
+            exec(code)
+        except Exception as e:
+            print(f"Error executing code: {e}")
+        print("Done running code!")
 
     @classmethod
     def get_adt(cls):
@@ -10011,6 +10059,7 @@ class App:
         cls.root.bind('5', cls.set_netcdf_display_ohc)
         cls.root.bind('6', cls.set_netcdf_display_iso26C)
         cls.root.bind('r', cls.set_netcdf_display_none)
+        cls.root.bind('<F8>', cls.exec_custom_code)
 
         cls.adeck_selected = tk.StringVar()
         cls.genesis_selected = tk.StringVar()
@@ -10050,6 +10099,10 @@ class App:
             model_cycle = model_cycles['next']
 
         if model_cycle:
+            # must set these, otherwise prev/next won't work properly afterwards
+            cls.genesis_model_cycle_time = model_cycle
+            cls.genesis_model_cycle_time_navigate = model_cycle
+
             # clear map
             cls.redraw_map_with_data(model_cycle=model_cycle)
 
@@ -10119,8 +10172,8 @@ class App:
 
     @classmethod
     def next_genesis_cycle(cls):
-        nav_time = cls.genesis_model_cycle_time_navigate
         cls.update_genesis_data_staleness()
+        nav_time = cls.genesis_model_cycle_time_navigate
         if cls.genesis_model_cycle_time is None:
             cls.genesis_model_cycle_time = datetime.now()
             model_cycles = get_tc_model_init_times_relative_to(cls.genesis_model_cycle_time, cls.genesis_previous_selected)
@@ -10259,7 +10312,7 @@ class App:
 
                 if not removed_any:
                     cls.clear_storm_extrema_annotations()
-                
+
                 cls.ax.set_yscale('linear')
             else:
                 cls.clear_storm_extrema_annotations()
@@ -10722,7 +10775,7 @@ class App:
                         valid_time = candidate_info['valid_time']
                         if disturbance_start_time is None:
                             disturbance_start_time = valid_time
-                            
+
                         disturbance_end_time = valid_time
                         if 'vmax10m' in candidate_info:
                             point_vmax = candidate_info['vmax10m']
@@ -10775,7 +10828,7 @@ class App:
                             iso26C_mean = np.nanmean(storm_iso26C)
                             iso26C_min = np.nanmin(storm_iso26C)
                             iso26C_max = np.nanmax(storm_iso26C)
-                    
+
                     if model_name not in by_model_stats:
                         by_model_stats[model_name] = {
                             'storm_ace': [storm_ace],
@@ -11104,7 +11157,7 @@ class App:
                     print(f"  {key}:")
                     for param, value in values.items():
                         if param != 'storm_ace' or (key not in \
-                            ['weighted_ensemble_agg_median', 'weighted_ensemble_agg_min', 'weighted_ensemble_agg_max']):
+                                                    ['weighted_ensemble_agg_median', 'weighted_ensemble_agg_min', 'weighted_ensemble_agg_max']):
 
                             if param == 'storm_ace':
                                 print(f"    {param} (10^-4): {value:0.1f}")
@@ -11129,7 +11182,7 @@ class App:
                     for param, value in values.items():
 
                         if param != 'storm_ace' or (key not in \
-                            ['weighted_ensemble_agg_median', 'weighted_ensemble_agg_min', 'weighted_ensemble_agg_max']):
+                                                    ['weighted_ensemble_agg_median', 'weighted_ensemble_agg_min', 'weighted_ensemble_agg_max']):
 
                             if param in ['storm_ace' or 'storm_vmax10m'] or 'sst' in param or 'ohc' in param or 'iso26C' in param:
                                 print(f"    {param}: {value:0.1f}")
@@ -11524,9 +11577,9 @@ class App:
         # Row for point time
         ttk.Label(frame, text="Point Time").grid(row=n, column=0, padx=5, pady=5)
         ttk.Button(frame, text="Now", command=lambda: cls.hide_set_current_time(cls.time_vars['point'])).grid(row=n,
-                                                                                                     column=1,
-                                                                                                     padx=5,
-                                                                                                     pady=5)
+                                                                                                              column=1,
+                                                                                                              padx=5,
+                                                                                                              pady=5)
         for i, (key, var) in enumerate(cls.time_vars['point'].items()):
             ttk.Entry(frame, textvariable=var, width=4).grid(row=n, column=i + 2, padx=5, pady=5, sticky="ew")
 
@@ -11534,9 +11587,9 @@ class App:
         # Row for min time
         ttk.Label(frame, text="Min Time").grid(row=n, column=0, padx=5, pady=5)
         ttk.Button(frame, text="Now", command=lambda: cls.hide_set_current_time(cls.time_vars['min'])).grid(row=n,
-                                                                                                     column=1,
-                                                                                                     padx=5,
-                                                                                                     pady=5)
+                                                                                                            column=1,
+                                                                                                            padx=5,
+                                                                                                            pady=5)
         for i, (key, var) in enumerate(cls.time_vars['min'].items()):
             if key != 'tolerance':
                 ttk.Entry(frame, textvariable=var, width=4).grid(row=n, column=i + 2, padx=5, pady=5, sticky="ew")
@@ -11545,9 +11598,9 @@ class App:
         # Row for max time
         ttk.Label(frame, text="Max Time").grid(row=n, column=0, padx=5, pady=5)
         ttk.Button(frame, text="Now", command=lambda: cls.hide_set_current_time(cls.time_vars['max'])).grid(row=n,
-                                                                                                     column=1,
-                                                                                                     padx=5,
-                                                                                                     pady=5)
+                                                                                                            column=1,
+                                                                                                            padx=5,
+                                                                                                            pady=5)
         for i, (key, var) in enumerate(cls.time_vars['max'].items()):
             if key != 'tolerance':
                 ttk.Entry(frame, textvariable=var, width=4).grid(row=n, column=i + 2, padx=5, pady=5, sticky="ew")
@@ -11555,13 +11608,13 @@ class App:
         n += 1
         # buttons
         all_all_btn = ttk.Button(frame, text="All T All F",
-                            command=lambda: [cls.hide_by_field(by_all_all=True), cls.on_hide_by_field_dialog_close(dialog)],
-                            style='TButton', width=12)
+                                 command=lambda: [cls.hide_by_field(by_all_all=True), cls.on_hide_by_field_dialog_close(dialog)],
+                                 style='TButton', width=12)
         all_all_btn.grid(row=n, column=0, padx=20, pady=5)
 
         all_any_btn = ttk.Button(frame, text="All T Any F",
-                            command=lambda: [cls.hide_by_field(by_all_any=True), cls.on_hide_by_field_dialog_close(dialog)],
-                            style='TButton', width=12)
+                                 command=lambda: [cls.hide_by_field(by_all_any=True), cls.on_hide_by_field_dialog_close(dialog)],
+                                 style='TButton', width=12)
         all_any_btn.grid(row=n, column=1, padx=20, pady=5)
 
         any_all_btn = ttk.Button(frame, text="Any T All F",
@@ -11570,8 +11623,8 @@ class App:
         any_all_btn.grid(row=n, column=2, padx=20, pady=5)
 
         any_any_btn = ttk.Button(frame, text="Any T Any F",
-                             command=lambda: [cls.hide_by_field(by_any_any=True), cls.on_hide_by_field_dialog_close(dialog)],
-                             style='TButton', width=12)
+                                 command=lambda: [cls.hide_by_field(by_any_any=True), cls.on_hide_by_field_dialog_close(dialog)],
+                                 style='TButton', width=12)
         any_any_btn.grid(row=n, column=3, padx=20, pady=5)
 
         # Cancel button
@@ -11633,7 +11686,7 @@ class App:
 
         # OK button
         ok_btn = ttk.Button(dialog, text="OK",
-                           command=lambda: [cls.update_rvor_levels(), cls.on_rvor_dialog_close(dialog)], style='TButton')
+                            command=lambda: [cls.update_rvor_levels(), cls.on_rvor_dialog_close(dialog)], style='TButton')
         ok_btn.grid(row=8, column=0)
 
         # Cancel button
@@ -11645,13 +11698,17 @@ class App:
         dialog.bind("<Escape>", lambda e: cls.on_rvor_dialog_close(dialog))
 
     @classmethod
-    def switch_mode(cls):
-        cls.mode = "GENESIS" if cls.mode == "ADECK" else "ADECK"
+    def switch_mode(cls, mode = None):
+        if mode:
+            cls.mode = mode
+        else:
+            cls.mode = "GENESIS" if cls.mode == "ADECK" else "ADECK"
         cls.update_mode()
         cls.set_focus_on_map()
 
     @classmethod
-    def take_screenshot(cls, *args):
+    def take_screenshot(cls, *args, silent=False, prefix=None):
+
         # Get the current UTC date and time
         current_time = datetime_utcnow().strftime("%Y-%m-%d-%H-%M-%S")
 
@@ -11663,7 +11720,13 @@ class App:
         screenshot = ImageGrab.grab()
 
         # Save the screenshot as a PNG file
-        screenshot.save(f"screenshots/{current_time}.png")
+        if prefix is None:
+            prefix = ''
+        screenshot.save(f"screenshots/{prefix}{current_time}.png")
+
+        if silent is not None and silent:
+            # no dialog window in silent mode (useful for exec scripts)
+            return
 
         # Create a custom dialog window
         dialog = tk.Toplevel(cls.root, bg="#000000")
@@ -11769,7 +11832,7 @@ class App:
         cls.ax.set_yscale('linear')
 
         gl = cls.ax.gridlines(draw_labels=["bottom", "left"], x_inline=False, y_inline=False, auto_inline=False,
-                               color='white', alpha=0.5, linestyle='--')
+                              color='white', alpha=0.5, linestyle='--')
         # Move axis labels inside the subplot
         cls.ax.tick_params(axis='both', direction='in', labelsize=16)
         # https://github.com/SciTools/cartopy/issues/1642
@@ -11838,10 +11901,10 @@ class App:
         # cls.ax.set_yscale('linear')
 
         cls.circle_handle = Circle((lon, lat), radius=cls.calculate_radius_pixels(),
-                                    color=DEFAULT_ANNOTATE_MARKER_COLOR, fill=False, linestyle='dotted', linewidth=2,
-                                    alpha=0.8,
-                                    transform=ccrs.PlateCarree())
-        
+                                   color=DEFAULT_ANNOTATE_MARKER_COLOR, fill=False, linestyle='dotted', linewidth=2,
+                                   alpha=0.8,
+                                   transform=ccrs.PlateCarree())
+
         # as we are not using cartopy's Circle patches we have to update axes ourself
         cls.circle_handle.axes = cls.ax
         #cls.ax.add_patch(cls.circle_handle)
