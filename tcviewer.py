@@ -411,7 +411,7 @@ from shapely.geometry import LineString
 import geopandas as gpd
 
 # for selection loop tool
-from shapely.geometry import Polygon, MultiPolygon
+from shapely.geometry import box, Polygon, MultiPolygon
 from shapely.strtree import STRtree
 # for selection loop tool
 from matplotlib.patches import Polygon as MPLPolygon
@@ -496,14 +496,58 @@ for basin_name in basins_gdf['basin_name'].unique():
             basin_short_name = shape_basin_names_to_threshold_names_map[basin_name] + suffix
             if basin_short_name in basin_extents:
                 basin_extents[basin_short_name] = basin_extents[basin_short_name].union(row.bounds)
-                basin_polys[basin_short_name] = basin_polys[basin_short_name].union(row.bounds)
+                basin_polys[basin_short_name] = basin_polys[basin_short_name].union(row.bounds).reset_index(drop=True)
             else:
                 basin_extents[basin_short_name] = row.bounds
-                basin_polys[basin_short_name] = gpd.GeoSeries([row])
+                basin_polys[basin_short_name] = gpd.GeoSeries([row]).reset_index(drop=True)
     else:
         basin_short_name = shape_basin_names_to_threshold_names_map[basin_name]
         basin_extents[basin_short_name] = geom_u_bounds
-        basin_polys[basin_short_name] = geom
+        basin_polys[basin_short_name] = geom.reset_index(drop=True)
+
+
+# Add custom regions for zoom/select
+custom_regions = {
+    "Arabian Sea": [(40, 80), (40, 30), (0, 30), (0, 80)],
+    "Atlantic MDR": [(20, 0), (20, -70), (0, -70), (0, 0)],
+    "Bay of Bengal": [(25, 100), (25, 80), (0, 80), (0, 100)],
+    "Cape Verde": [(20, -10), (20, -35), (0, -35), (0, -10)],
+    "Caribbean": [(5, -60), (25, -60), (25, -90), (5, -90)],
+    "Central America": [(20, -70), (20, -105), (0, -105), (0, -70)],
+    "NC Pacific": [(30, -150), (30, -180), (0, -180), (0, -150)],
+    "Gulf of Mexico": [(15, -80), (32, -80), (32, -100), (15, -100)],
+    "NE Pacific": [(30, -75), (30, -150), (0, -150), (0, -75)],
+    "US East Coast": [(50, -65), (50, -85), (20, -85), (20, -65)],
+    "Philippines": [(22, 130), (22, 115), (0, 115), (0, 130)],
+    "South China Sea": [(25, 125), (25, 99), (0, 99), (0, 125)]
+}
+
+# Create a geopandas GeoDataFrame from the custom regions dictionary
+gdf = gpd.GeoDataFrame(
+    geometry=[Polygon([(lon, lat) for lat, lon in coords]) for coords in custom_regions.values()],
+    index=custom_regions.keys()
+)
+
+# Add the geometry bounds to the basin_extents and basin_polys dictionaries
+custom_extents = {}
+custom_polys = {}
+for name, geom in gdf.geometry.items():
+    custom_extents[name] = geom.bounds
+    custom_polys[name] = gpd.GeoSeries(geom).set_crs("EPSG:4326")
+
+# Refine the rough custom region polys (geoseries) when applicable using the more refined basin polys
+# These can be further refined as needed (for the moment they are only two make sure Atlantic/Pacific are separate)
+# Note: these are not mutually exclusive regions even after refinement (Caribbean, GoM, MDR polys overlap)
+custom_polys["Caribbean"] = custom_polys["Caribbean"].intersection(basin_polys["NA"])
+custom_polys["Gulf of Mexico"] = custom_polys["Gulf of Mexico"].intersection(basin_polys["NA"])
+
+# NEP RSMC doesn't extend west past -140 lon.
+bbox = box(-140, 0, -75, 60)  # minx, miny, maxx, maxy
+custom_polys["NE Pacific"] = custom_polys["NE Pacific"].intersection(basin_polys["EP"]).intersection(bbox)
+
+# NCP RSMC is between -180 and -140 lon.
+bbox = box(-180, 0, -140, 60)  # minx, miny, maxx, maxy
+custom_polys["NC Pacific"] = custom_polys["NC Pacific"].intersection(bbox)
 
 ### plot greater houston boundary
 # Load the shapefile using Geopandas
@@ -1021,8 +1065,8 @@ ALL-TCGEN : 128
 '''
 global_det_members = ['GFS', 'CMC', 'ECM', 'NAV']
 num_global_det_members = len(global_det_members)
-# TODO: modify when NAVGEM WORKS AGAIN
-active_global_det_members = ['GFS', 'CMC', 'ECM']
+# Modify if a global model becomes inoperable
+active_global_det_members = ['GFS', 'CMC', 'ECM', 'NAV']
 num_active_global_det_members = {
     'GLOBAL-DET': len(active_global_det_members)
 }
@@ -11201,12 +11245,14 @@ class App:
     @classmethod
     def select_basin_dialog(cls, event=None):
         dialog = tk.Toplevel(cls.root)
-        dialog.title('Select Basin')
-        dialog.geometry(f"300x200+{int(cls.root.winfo_width()/2-150)}+{int(cls.root.winfo_height()/2-100)}")
+        dialog.title('Select Basin/Region')
+        dialog.geometry(f"300x400+{int(cls.root.winfo_width()/2-150)}+{int(cls.root.winfo_height()/2-100)}")
 
         listbox = tk.Listbox(dialog, bg=default_bg, fg=default_fg)
         for basin_name in sorted(basin_extents.keys(), key=lambda x: ['N', 'E', 'W', 'I', 'S'].index(x[0])):
             listbox.insert(tk.END, basin_name)
+        for custom_name in custom_extents.keys():
+            listbox.insert(tk.END, custom_name)
 
         listbox.pack(fill=tk.BOTH, expand=1)
         listbox.selection_set(0)
@@ -11217,8 +11263,11 @@ class App:
             dialog.destroy()
 
         def select_basin(event):
-            selected_basin = listbox.get(listbox.curselection())
-            SelectionLoops.add_poly(basin_polys[selected_basin])
+            selected_region = listbox.get(listbox.curselection())
+            if selected_region in basin_polys:
+                SelectionLoops.add_poly(basin_polys[selected_region])
+            elif selected_region in custom_polys:
+                SelectionLoops.add_poly(custom_polys[selected_region])
             cls.update_selection_info_label()
             cancel()
 
@@ -12437,13 +12486,15 @@ class App:
     @classmethod
     def zoom_to_basin_dialog(cls, event=None):
         dialog = tk.Toplevel(cls.root)
-        dialog.title('Zoom to Basin')
-        dialog.geometry(f"300x200+{int(cls.root.winfo_width()/2-150)}+{int(cls.root.winfo_height()/2-100)}")
+        dialog.title('Zoom to Basin/Region')
+        dialog.geometry(f"300x400+{int(cls.root.winfo_width()/2-150)}+{int(cls.root.winfo_height()/2-100)}")
 
         listbox = tk.Listbox(dialog, bg=default_bg, fg=default_fg)
         # show in order (first letter)
         for basin_name in sorted(basin_extents.keys(), key=lambda x: ['N', 'E', 'W', 'I', 'S'].index(x[0])):
             listbox.insert(tk.END, basin_name)
+        for custom_name in custom_extents.keys():
+            listbox.insert(tk.END, custom_name)
 
         listbox.pack(fill=tk.BOTH, expand=1)
         listbox.selection_set(0)
@@ -12454,9 +12505,12 @@ class App:
             dialog.destroy()
 
         def select_basin(event):
-            selected_basin = listbox.get(listbox.curselection())
+            selected_region = listbox.get(listbox.curselection())
             cancel()
-            cls.zoom_in(extents=basin_extents[selected_basin])
+            if selected_region in basin_extents:
+                cls.zoom_in(extents=basin_extents[selected_region])
+            elif selected_region in custom_extents:
+                cls.zoom_in(extents=custom_extents[selected_region])
 
         listbox.bind('<Return>', select_basin)
         listbox.bind('<Up>', lambda event: listbox.select_set(0))
