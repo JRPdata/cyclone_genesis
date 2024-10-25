@@ -82,7 +82,7 @@ output_cat_file_name = 'output_cat_values.json'
 
 NETCDF_FOLDER_PATH = 'netcdf'
 
-# Not sure about this data source as D26 == TCHP (so don't use)
+# Switched to using OHC from NCIE, so this is defunct but left as reference
 #https://cwcgom.aoml.noaa.gov/erddap/griddap/aomlTCHP.html
 TCHP_NC_PATH = 'netcdf/aomlTCHP_32f9_dc68_adee-2024-09-26.nc'
 
@@ -6306,7 +6306,7 @@ class NetCDFPlotter:
         # Open the NetCDF file and load the netcdf datasets
         with nc.Dataset(self.filepath, 'r') as ds:
             if self.data_type in ['tchp', 'd26']:
-                # this is defunct until we figure out what the problem with the dataset is (d26 is currently == tchp)
+                # this is defunct as we are using OHC now from NCEI
                 self.tchp = ds.variables['Tropical_Cyclone_Heat_Potential'][:][0]
                 self.d26 = ds.variables['D26'][:][0]
                 self.lat = ds.variables['latitude'][:]
@@ -7432,9 +7432,10 @@ class App:
         plotter_sst = NetCDFPlotter(file_path, 'sst')
         plotter_sst.load_data()
 
-        file_path = TCHP_NC_PATH
+        # using OHC instead
+        """file_path = TCHP_NC_PATH
         plotter_tchp_d26 = NetCDFPlotter(file_path, 'tchp')
-        plotter_tchp_d26.load_data()
+        plotter_tchp_d26.load_data()"""
 
         file_paths = OHC_NC_PATHS
         for file_path in file_paths:
