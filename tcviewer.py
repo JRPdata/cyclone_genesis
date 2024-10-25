@@ -1018,8 +1018,7 @@ atcf_ens_num_models_by_ensemble = {
 atcf_ens_names_in_all = ['GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF']
 
 # for statistics in case one of the ensembles is under maintenance (not reporting)
-# TODO: ADD BACK FNMOC WHEN WORKING AGAIN
-atcf_active_ensembles_all = ['GEFS-ATCF', 'GEPS-ATCF']
+atcf_active_ensembles_all = ['GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF']
 
 # Create a dictionary to map model names to ensemble names
 atcf_ens_model_name_to_ensemble_name = {}
@@ -1055,8 +1054,7 @@ tcgen_num_models_by_ensemble = {
 tcgen_names_in_all = ['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN']
 
 # for statistics in case one of the ensembles is under maintenance (not reporting)
-# TODO: ADD BACK FNMOC WHEN WORKING AGAIN
-tcgen_active_ensembles_all = ['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN']
+tcgen_active_ensembles_all = ['GEFS-TCGEN', 'GEPS-TCGEN', 'EPS-TCGEN', 'FNMOC-TCGEN']
 
 '''
 # Member counts of above
@@ -2493,7 +2491,7 @@ def tcvitals_line_to_dict(line):
                     wind_radii_34.append(None)
                 else:
                     wind_radii_34.append(radius_34_quad)
-            
+
             storm_vitals['wind_radii_34'] = wind_radii_34
         except:
             pass
@@ -6249,7 +6247,7 @@ class NetCDFPlotter:
             data = self.sst
         else:
             return np.nan
-        
+
         if not self.iswrapped:
             if lon < 0:
                 lon = 360 + lon
@@ -6341,7 +6339,7 @@ class NetCDFPlotter:
                 self.iswrapped = True
             else:
                 self.iswrapped = False
-                
+
             # Assume the time variable is named 'time' and is in hours since a reference date
             time_var = ds.variables['time'][:]
             time_units = ds.variables['time'].units
@@ -10928,18 +10926,33 @@ class App:
                     by_ensemble_stats[ensemble_name]['earliest_named_time'].append(model_stats['earliest_named_time'])
                     by_ensemble_stats[ensemble_name]['disturbance_end_time'].append(model_stats['disturbance_end_time'])
                     if CALC_TRACK_STATS_NETCDF_DATA:
-                        if 'sst_mean' in by_ensemble_stats[ensemble_name]:
-                            by_ensemble_stats[ensemble_name]['sst_mean'].append(model_stats['sst_mean'])
-                            by_ensemble_stats[ensemble_name]['sst_min'].append(model_stats['sst_min'])
-                            by_ensemble_stats[ensemble_name]['sst_max'].append(model_stats['sst_max'])
-                        if 'ohc_mean' in by_ensemble_stats[ensemble_name]:
-                            by_ensemble_stats[ensemble_name]['ohc_mean'].append(model_stats['ohc_mean'])
-                            by_ensemble_stats[ensemble_name]['ohc_min'].append(model_stats['ohc_min'])
-                            by_ensemble_stats[ensemble_name]['ohc_max'].append(model_stats['ohc_max'])
-                        if 'iso26C_mean' in by_ensemble_stats[ensemble_name]:
-                            by_ensemble_stats[ensemble_name]['iso26C_mean'].append(model_stats['iso26C_mean'])
-                            by_ensemble_stats[ensemble_name]['iso26C_min'].append(model_stats['iso26C_min'])
-                            by_ensemble_stats[ensemble_name]['iso26C_max'].append(model_stats['iso26C_max'])
+                        if 'sst_mean' in model_stats:
+                            if 'sst_mean' in by_ensemble_stats[ensemble_name]:
+                                by_ensemble_stats[ensemble_name]['sst_mean'].append(model_stats['sst_mean'])
+                                by_ensemble_stats[ensemble_name]['sst_min'].append(model_stats['sst_min'])
+                                by_ensemble_stats[ensemble_name]['sst_max'].append(model_stats['sst_max'])
+                            else:
+                                by_ensemble_stats[ensemble_name]['sst_mean'] = [model_stats['sst_mean']]
+                                by_ensemble_stats[ensemble_name]['sst_min'] = [model_stats['sst_min']]
+                                by_ensemble_stats[ensemble_name]['sst_max'] = [model_stats['sst_max']]
+                        if 'ohc_mean' in model_stats:
+                            if 'ohc_mean' in by_ensemble_stats[ensemble_name]:
+                                by_ensemble_stats[ensemble_name]['ohc_mean'].append(model_stats['ohc_mean'])
+                                by_ensemble_stats[ensemble_name]['ohc_min'].append(model_stats['ohc_min'])
+                                by_ensemble_stats[ensemble_name]['ohc_max'].append(model_stats['ohc_max'])
+                            else:
+                                by_ensemble_stats[ensemble_name]['ohc_mean'] = [model_stats['ohc_mean']]
+                                by_ensemble_stats[ensemble_name]['ohc_min'] = [model_stats['ohc_min']]
+                                by_ensemble_stats[ensemble_name]['ohc_max'] = [model_stats['ohc_max']]
+                        if 'iso26C_mean' in model_stats:
+                            if 'iso26C_mean' in by_ensemble_stats[ensemble_name]:
+                                by_ensemble_stats[ensemble_name]['iso26C_mean'].append(model_stats['iso26C_mean'])
+                                by_ensemble_stats[ensemble_name]['iso26C_min'].append(model_stats['iso26C_min'])
+                                by_ensemble_stats[ensemble_name]['iso26C_max'].append(model_stats['iso26C_max'])
+                            else:
+                                by_ensemble_stats[ensemble_name]['iso26C_mean'] = [model_stats['iso26C_mean']]
+                                by_ensemble_stats[ensemble_name]['iso26C_min'] = [model_stats['iso26C_min']]
+                                by_ensemble_stats[ensemble_name]['iso26C_max'] = [model_stats['iso26C_max']]
 
             # Initialize dictionaries to store aggregated statistics
             ensemble_stats = {}
