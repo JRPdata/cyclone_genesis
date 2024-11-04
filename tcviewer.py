@@ -1665,8 +1665,8 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
                                     adeck[storm_id][model_id][valid_datetime.isoformat()].update(ab_deck_line_dict)
                                 else:
                                     adeck[storm_id][model_id][valid_datetime.isoformat()] = ab_deck_line_dict
-                            elif model_date >= (latest_date - timedelta(hours=6)):
-                                # GEPS/EPS/FNMOC members ATCF are usually later than GEFS (allow up to 6 hours late)
+                            elif model_date >= (latest_date - timedelta(hours=12)):
+                                # GEPS/EPS/FNMOC members ATCF are usually later than GEFS (allow up to 12 hours late)
                                 ab_deck_line_dict = ab_deck_line_to_dict(line)
                                 model_id = ab_deck_line_dict['tech']
                                 # allow late members
