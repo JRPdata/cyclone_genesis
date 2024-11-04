@@ -948,11 +948,11 @@ def analyze_storm(storms_dfs, df_adeck):
         for weight_type in ['unweighted', 'weighted']:
             print(f"\n{weight_type.capitalize()}:")
             for model_name, best_run in best_runs_per_model[weight_type].items():
-                print(f"  {model_name}: {best_run['init_time']} (RMSE: {best_run['rmse']})")
+                print(f"  {model_name}: {best_run['init_time']} (RMSE: {best_run['rmse']:.1f})")
 
         print(f"\nBest run overall ({metric}):")
         for weight_type in ['unweighted', 'weighted']:
-            print(f"  {weight_type.capitalize()}: {best_run_overall[weight_type]} (RMSE: {best_rmse_overall[weight_type]})")
+            print(f"  {weight_type.capitalize()}: {best_run_overall[weight_type]} (RMSE: {best_rmse_overall[weight_type]:.1f})")
 
         # Calculate the aggregated statistics for all models
         all_model_stats = {}
