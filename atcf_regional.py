@@ -47,20 +47,20 @@ root_dir = "atcf_regional"
 # store the advisories here
 nhc_advisory_dir = "nhc_public_adv"
 
-do_update = False
+do_update = True
 
 # Define the start URLs for each model (the first model init time of interest -- i.e. after genesis)
 # Get from the home page under ATCF data
 start_urls = [
-    "https://www.emc.ncep.noaa.gov/hurricane/HFSAForecast/RT2024_NATL/MILTON14L/MILTON14L.2024100518/14l.2024100518.hfsa.trak.atcfunix",
-    "https://www.emc.ncep.noaa.gov/hurricane/HFSBForecast/RT2024_NATL/MILTON14L/MILTON14L.2024100518/14l.2024100518.hfsb.trak.atcfunix",
-    "https://www.emc.ncep.noaa.gov/gc_wmb/vxt/HWRFForecast/RT2024_NATL/MILTON14L/MILTON14L.2024100518/milton14l.2024100518.trak.hwrf.atcfunix",
-    "https://www.emc.ncep.noaa.gov/gc_wmb/vxt/HMONForecast/RT2024_NATL/MILTON14L/MILTON14L.2024100518/milton14l.2024100518.trak.hmon.atcfunix"
+    "https://www.emc.ncep.noaa.gov/hurricane/HFSAForecast/RT2024_NATL/EIGHTEEN18L/EIGHTEEN18L.2024110400/18l.2024110400.hfsa.trak.atcfunix",
+    "https://www.emc.ncep.noaa.gov/hurricane/HFSBForecast/RT2024_NATL/EIGHTEEN18L/EIGHTEEN18L.2024110400/18l.2024110400.hfsb.trak.atcfunix",
+    "https://www.emc.ncep.noaa.gov/gc_wmb/vxt/HWRFForecast/RT2024_NATL/EIGHTEEN18L/EIGHTEEN18L.2024110400/eighteen18l.2024110400.trak.hwrf.atcfunix",
+    "https://www.emc.ncep.noaa.gov/gc_wmb/vxt/HMONForecast/RT2024_NATL/EIGHTEEN18L/EIGHTEEN18L.2024110400/eighteen18l.2024110400.trak.hmon.atcfunix"
 ]
 
 # if requested_storm_statistics = [] then do all of them
 #requested_storm_statistics = []
-requested_storm_statistics = ['AL142024']
+requested_storm_statistics = ['AL182024']
 
 # Map timezone abbreviations to their corresponding timezone names
 tz_map = {
@@ -68,6 +68,10 @@ tz_map = {
     'EDT': 'US/Eastern',
     'MDT': 'US/Mountain',
     'PDT': 'US/Pacific',
+    'CST': 'US/Central',
+    'EST': 'US/Eastern',
+    'MST': 'US/Mountain',
+    'PST': 'US/Pacific',
     'AST': 'America/Puerto_Rico',  # Atlantic Standard Time
     'CVT': 'Atlantic/Cape_Verde'  # Cape Verde Time
 }
@@ -414,7 +418,7 @@ def df_from_ofcl_advisory(html):
         text = pre.get_text()
         lines = text.split('\n')
         for line in lines:
-            if re.search(r'SUMMARY OF \d+ (?:AM|PM) (?:CDT|EDT|MDT|PDT)...', line):
+            if re.search(r'SUMMARY OF \d+ (?:AM|PM) (?:CDT|EDT|MDT|PDT|CST|EST|MST|PST)...', line):
                 summary_pre = pre
                 break
         if summary_pre:
