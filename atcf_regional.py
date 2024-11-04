@@ -47,7 +47,7 @@ root_dir = "atcf_regional"
 # store the advisories here
 nhc_advisory_dir = "nhc_public_adv"
 
-do_update = True
+do_update = False
 
 # Define the start URLs for each model (the first model init time of interest -- i.e. after genesis)
 # Get from the home page under ATCF data
@@ -1002,6 +1002,20 @@ def analyze_storm(storms_dfs, df_adeck):
 
     return stats, model_stats, all_model_stats
 
+def print_ace(df_adeck):
+    print('\n\n\n\n')
+    print('==========================================')
+    print(f'        ACE values (kt^2 * 10^-4)')
+    print('==========================================')
+    for (model_name, init_time), run_df in df_adeck.groupby(['model_id', 'init_datetime']):
+        run_df.drop_duplicates(inplace=True)
+        run_df = run_df.sort_values(by='valid_datetime')
+        run_df.reset_index(inplace=True)
+        filtered_df = run_df[(run_df['tau'] % 6 == 0) & (run_df['vmax'] >= 34)]
+        filtered_df.reset_index(inplace=True)
+        model_ace = pow(10, -4) * np.sum(np.power(filtered_df['vmax'], 2))
+        print(model_name, init_time, round(model_ace, 1))
+    print('\n\n\n\n')
 
 pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 500)
@@ -1013,6 +1027,8 @@ if do_update:
 
 # Load the DataFrames
 df_adeck, storms_dfs = load_data('atcf_data')
+
+print_ace(df_adeck)
 
 print(storms_dfs)
 
