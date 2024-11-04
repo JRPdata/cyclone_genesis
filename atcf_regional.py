@@ -210,6 +210,13 @@ def download_atcf_regional_tracks(urls):
             atcf_storm_id = f'{basin}{number}{datetime_obj.year}'
             atcf_storm_ids.add(atcf_storm_id)
 
+            storm_dir = os.path.join(model_dir, atcf_storm_id)
+            file_path = os.path.join(storm_dir, f"{atcf_storm_id}{datetime_str}.atcfunix")
+            if not os.path.exists(file_path):
+                with open(file_path, "w") as f:
+                    f.write(atcf_file)
+                print(f"Downloaded file: {file_path}")
+
             # Loop through each 6-hour interval until a 404 is encountered
             last_datetime_str = None
             next_datetime_str = None
