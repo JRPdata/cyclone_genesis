@@ -47,7 +47,7 @@ root_dir = "atcf_regional"
 # store the advisories here
 nhc_advisory_dir = "nhc_public_adv"
 
-do_update = False
+do_update = True
 
 # Define the start URLs for each model (the first model init time of interest -- i.e. after genesis)
 # Get from the home page under ATCF data
@@ -55,7 +55,11 @@ start_urls = [
     "https://www.emc.ncep.noaa.gov/hurricane/HFSAForecast/RT2024_NATL/EIGHTEEN18L/EIGHTEEN18L.2024110400/18l.2024110400.hfsa.trak.atcfunix",
     "https://www.emc.ncep.noaa.gov/hurricane/HFSBForecast/RT2024_NATL/EIGHTEEN18L/EIGHTEEN18L.2024110400/18l.2024110400.hfsb.trak.atcfunix",
     "https://www.emc.ncep.noaa.gov/gc_wmb/vxt/HWRFForecast/RT2024_NATL/EIGHTEEN18L/EIGHTEEN18L.2024110400/eighteen18l.2024110400.trak.hwrf.atcfunix",
-    "https://www.emc.ncep.noaa.gov/gc_wmb/vxt/HMONForecast/RT2024_NATL/EIGHTEEN18L/EIGHTEEN18L.2024110400/eighteen18l.2024110400.trak.hmon.atcfunix"
+    "https://www.emc.ncep.noaa.gov/gc_wmb/vxt/HMONForecast/RT2024_NATL/EIGHTEEN18L/EIGHTEEN18L.2024110400/eighteen18l.2024110400.trak.hmon.atcfunix",
+    "https://www.emc.ncep.noaa.gov/hurricane/HFSAForecast/RT2024_NATL/RAFAEL18L/RAFAEL18L.2024110418/18l.2024110418.hfsa.trak.atcfunix",
+    "https://www.emc.ncep.noaa.gov/hurricane/HFSBForecast/RT2024_NATL/RAFAEL18L/RAFAEL18L.2024110418/18l.2024110418.hfsb.trak.atcfunix",
+    "https://www.emc.ncep.noaa.gov/gc_wmb/vxt/HWRFForecast/RT2024_NATL/RAFAEL18L/RAFAEL18L.2024110418/rafael18l.2024110418.trak.hwrf.atcfunix",
+    "https://www.emc.ncep.noaa.gov/gc_wmb/vxt/HMONForecast/RT2024_NATL/RAFAEL18L/RAFAEL18L.2024110418/rafael18l.2024110418.trak.hmon.atcfunix"
 ]
 
 # if requested_storm_statistics = [] then do all of them
