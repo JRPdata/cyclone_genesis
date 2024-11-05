@@ -87,6 +87,7 @@ NETCDF_FOLDER_PATH = 'netcdf'
 TCHP_NC_PATH = 'netcdf/aomlTCHP_32f9_dc68_adee-2024-09-26.nc'
 
 # https://www.ncei.noaa.gov/data/oceans/sohcs/2024/09/
+# https://coastwatch.noaa.gov/thredds/catalog/OHC/NA/14Day/2024/
 # The North Pacific OHC is not masked properly (around -80W) so plot it before North America
 OHC_NC_PATHS = [
     'netcdf/OHC-NPQG3_v1r0_blend_s202409130000000_e202409262359599_c202409260922177.nc',
@@ -1304,7 +1305,11 @@ def download_latest_ohc_nc_files_coastwatch():
     for basin in basins:
         for attempt in range(2):
             year = current_year - attempt
-            url = f'https://coastwatch.noaa.gov/pub/socd2/coastwatch/ocean_heat/{basin}{suffix}/{year}/'
+            #url = f'https://coastwatch.noaa.gov/pub/socd2/coastwatch/ocean_heat/{basin}{suffix}/{year}/'
+            basin_upper = basin.upper()
+            url = f'https://coastwatch.noaa.gov/thredds/catalog/OHC/{basin_upper}/14Day/{year}/catalog.html'
+            #download location
+            download_base_url = f'https://coastwatch.noaa.gov/thredds/fileServer/OHC/{basin_upper}/14Day/{year}/'
             response = requests.get(url)
             if response.ok:
                 soup = BeautifulSoup(response.text, 'html.parser')
@@ -1312,7 +1317,7 @@ def download_latest_ohc_nc_files_coastwatch():
                 file_numbers = [int(re.search(r'_(\d{3})\.nc', link).group(1)) for link in links]
                 latest_file_number = max(file_numbers)
                 latest_file = [link for link in links if re.search(r'_(\d{3})\.nc', link).group(1) == str(latest_file_number).zfill(3)][0]
-                latest_files[basin] = url + latest_file
+                latest_files[basin] = download_base_url + latest_file.split("/")[-1]
                 break
         else:
             return None
