@@ -3074,6 +3074,7 @@ class AnalysisDialog(tk.Toplevel):
             lats = [tc['lat'] for tc in tc_candidate]
             lons = [tc['lon'] for tc in tc_candidate]
             vmaxs = [tc['vmax10m'] for tc in tc_candidate]
+            mslps = [tc['mslp_value'] for tc in tc_candidate]
 
             # Convert valid times to timestamps
             valid_times = np.array([dt.timestamp() for dt in valid_times])
@@ -3082,11 +3083,13 @@ class AnalysisDialog(tk.Toplevel):
             f_lat = interp1d(valid_times, lats, kind='linear', fill_value='extrapolate')
             f_lon = interp1d(valid_times, lons, kind='linear', fill_value='extrapolate')
             f_vmax = interp1d(valid_times, vmaxs, kind='linear', fill_value='extrapolate')
+            f_mslp = interp1d(valid_times, mslps, kind='linear', fill_value='extrapolate')
 
             # Evaluate interpolating functions at hourly intervals
             interp_lats = f_lat(hourly_times)
             interp_lons = f_lon(hourly_times)
             interp_vmaxs = f_vmax(hourly_times)
+            interp_mslps = f_mslp(hourly_times)
 
             # Set values outside the candidate's interpolate range to NaN
             min_time = np.min(valid_times)
@@ -3095,15 +3098,17 @@ class AnalysisDialog(tk.Toplevel):
             interp_lats[mask] = np.nan
             interp_lons[mask] = np.nan
             interp_vmaxs[mask] = np.nan
+            interp_mslps[mask] = np.nan
 
             # Populate the dictionary with interpolated values
             for i, ts in enumerate(hourly_times):
                 dt = datetime.fromtimestamp(ts)
                 if dt not in track_values:
-                    track_values[dt] = {'lat': [], 'lon': [], 'vmax10m': []}
+                    track_values[dt] = {'lat': [], 'lon': [], 'vmax10m': [], 'mslp_value': []}
                 track_values[dt]['lat'].append(interp_lats[i])
                 track_values[dt]['lon'].append(interp_lons[i])
                 track_values[dt]['vmax10m'].append(interp_vmaxs[i])
+                track_values[dt]['mslp_value'].append(interp_mslps[i])
 
         # Calculate the mean for each valid time
         mean_track = []
@@ -3112,7 +3117,8 @@ class AnalysisDialog(tk.Toplevel):
                 mean_lat = np.nanmean(values['lat'])
                 mean_lon = np.nanmean(values['lon'])
                 mean_vmax = np.nanmean(values['vmax10m'])
-                mean_track.append({'valid_time': dt, 'lat': mean_lat, 'lon': mean_lon, 'vmax10m': mean_vmax})
+                mean_mslp = np.nanmean(values['mslp_value'])
+                mean_track.append({'valid_time': dt, 'lat': mean_lat, 'lon': mean_lon, 'vmax10m': mean_vmax, 'mslp_value': mean_mslp})
 
         return mean_track
 
@@ -10597,6 +10603,7 @@ class App:
                 # print out statistics for track
                 storm_ace = 0.0
                 storm_vmax10m = 0.0
+                storm_min_mslp = np.nan
                 storm_vmax_time_earliest = None
                 disturbance_start_time = None
                 disturbance_end_time = None
@@ -10621,6 +10628,12 @@ class App:
                         if point_vmax > storm_vmax10m:
                             storm_vmax_time_earliest = valid_time
                             storm_vmax10m = point_vmax
+
+                    if 'mslp_value' in candidate_info:
+                        point_mslp = candidate_info['mslp_value']
+                        # only use synoptic hours (some forecasts might have off synoptic hours)
+                        if np.isnan(storm_min_mslp) or point_mslp < storm_min_mslp:
+                            storm_min_mslp = point_mslp
 
                     if CALC_TRACK_STATS_NETCDF_DATA:
                         lat = candidate_info['lat']
@@ -10652,6 +10665,8 @@ class App:
                 print(f"Disturbance (Internal ID: {internal_id}) (Model Track stats):")
                 print(f'    ACE (10^-4): {storm_ace:0.1f}')
                 print(f'    Peak VMax @ 10m: {storm_vmax10m:0.1f} kt')
+                if not np.isnan(storm_min_mslp):
+                    print(f'    Min. MSLP: {storm_min_mslp:0.1f} hPa')
                 if CALC_TRACK_STATS_NETCDF_DATA:
                     if storm_sst:
                         sst_mean = np.nanmean(storm_sst)
@@ -10763,6 +10778,7 @@ class App:
                     # print out statistics for track
                     storm_ace = 0.0
                     storm_vmax10m = 0.0
+                    storm_min_mslp = np.nan
                     storm_vmax_time_earliest = None
                     disturbance_start_time = None
                     disturbance_end_time = None
@@ -10786,6 +10802,12 @@ class App:
                             if point_vmax > storm_vmax10m:
                                 storm_vmax_time_earliest = valid_time
                                 storm_vmax10m = point_vmax
+
+                        if 'mslp_value' in candidate_info:
+                            point_mslp = candidate_info['mslp_value']
+                            # only use synoptic hours (some forecasts might have off synoptic hours)
+                            if np.isnan(storm_min_mslp) or point_mslp < storm_min_mslp:
+                                storm_min_mslp = point_mslp
 
                         if CALC_TRACK_STATS_NETCDF_DATA:
                             lat = candidate_info['lat']
@@ -10832,6 +10854,7 @@ class App:
                         by_model_stats[model_name] = {
                             'storm_ace': [storm_ace],
                             'storm_vmax10m': [storm_vmax10m],
+                            'storm_min_mslp': [storm_min_mslp],
                             'storm_vmax_time_earliest': [storm_vmax_time_earliest],
                             'disturbance_start_time': [disturbance_start_time],
                             'earliest_named_time': [earliest_named_time],
@@ -10853,6 +10876,7 @@ class App:
                     else:
                         by_model_stats[model_name]['storm_ace'].append(storm_ace)
                         by_model_stats[model_name]['storm_vmax10m'].append(storm_vmax10m)
+                        by_model_stats[model_name]['storm_min_mslp'].append(storm_min_mslp)
                         by_model_stats[model_name]['storm_vmax_time_earliest'].append(storm_vmax_time_earliest)
                         by_model_stats[model_name]['disturbance_start_time'].append(disturbance_start_time)
                         by_model_stats[model_name]['earliest_named_time'].append(earliest_named_time)
@@ -10901,6 +10925,7 @@ class App:
                     by_ensemble_stats[ensemble_name] = {
                         'storm_ace': [model_stats['storm_ace']],
                         'storm_vmax10m': [model_stats['storm_vmax10m']],
+                        'storm_min_mslp': [model_stats['storm_min_mslp']],
                         'storm_vmax_time_earliest': [model_stats['storm_vmax_time_earliest']],
                         'disturbance_start_time': [model_stats['disturbance_start_time']],
                         'earliest_named_time': [model_stats['earliest_named_time']],
@@ -10922,6 +10947,7 @@ class App:
                 else:
                     by_ensemble_stats[ensemble_name]['storm_ace'].append(model_stats['storm_ace'])
                     by_ensemble_stats[ensemble_name]['storm_vmax10m'].append(model_stats['storm_vmax10m'])
+                    by_ensemble_stats[ensemble_name]['storm_min_mslp'].append(model_stats['storm_min_mslp'])
                     by_ensemble_stats[ensemble_name]['storm_vmax_time_earliest'].append(model_stats['storm_vmax_time_earliest'])
                     by_ensemble_stats[ensemble_name]['disturbance_start_time'].append(model_stats['disturbance_start_time'])
                     by_ensemble_stats[ensemble_name]['earliest_named_time'].append(model_stats['earliest_named_time'])
@@ -10998,6 +11024,8 @@ class App:
                         model_agg[key] = np.sum(valid_values)
                     elif key == 'storm_vmax10m':
                         model_agg[key] = np.nanmax(valid_values) if have_data else None
+                    elif key == 'storm_min_mslp':
+                        model_agg[key] = np.nanmin(valid_values) if have_data else None
                     elif key == 'storm_vmax_time_earliest':
                         model_agg[key] = np.nanmin(valid_values) if have_data else None
                     elif key == 'disturbance_start_time':
@@ -11177,6 +11205,8 @@ class App:
                                 print(f"    {param} (10^-4): {value:0.1f}")
                             elif param == 'storm_vmax10m':
                                 print(f"    {param} (kts): {value:0.1f}")
+                            elif param == 'storm_min_mslp':
+                                print(f"    {param} (hPa): {value:0.1f}")
                             elif 'sst' in param:
                                 print(f"    {param} (C): {value:0.1f}")
                             elif 'ohc' in param:
@@ -11198,7 +11228,7 @@ class App:
                         if param != 'storm_ace' or (key not in \
                                                     ['weighted_ensemble_agg_median', 'weighted_ensemble_agg_min', 'weighted_ensemble_agg_max']):
 
-                            if param in ['storm_ace' or 'storm_vmax10m'] or 'sst' in param or 'ohc' in param or 'iso26C' in param:
+                            if param in ['storm_ace' or 'storm_vmax10m' or 'storm_min_mslp'] or 'sst' in param or 'ohc' in param or 'iso26C' in param:
                                 print(f"    {param}: {value:0.1f}")
                             else:
                                 print(f"    {param}: {value}")
