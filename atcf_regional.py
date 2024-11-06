@@ -1012,7 +1012,7 @@ def print_ace(df_adeck):
     print(f'        ACE values (kt^2 * 10^-4)')
     print('==========================================')
     for (model_name, init_time), run_df in df_adeck.groupby(['model_id', 'init_datetime']):
-        run_df.drop_duplicates(inplace=True)
+        run_df.drop_duplicates(subset='tau', inplace=True)
         run_df = run_df.sort_values(by='valid_datetime')
         run_df.reset_index(inplace=True)
         filtered_df = run_df[(run_df['tau'] % 6 == 0) & (run_df['vmax'] >= 34)]
