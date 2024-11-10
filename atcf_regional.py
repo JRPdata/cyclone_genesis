@@ -739,7 +739,7 @@ def analyze_storm(storms_dfs, df_adeck):
                 if len(future_idx_list) > 0:
                     future_idx = future_idx_list[0]
                 else:
-                    future_idx = valid_times_dt[-1]
+                    future_idx = valid_times_dt.index[-1]
 
                 # Handle edge cases
                 if prior_idx == future_idx:
