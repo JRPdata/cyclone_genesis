@@ -19,6 +19,7 @@
 # Spatial-temporal Intersections are done using the (interpolations of the) Radius of Max Wind (RMW) parameter from the GEFS tracker output
 # For choosing the sensing time, the time is essentially truncated to the minute covers the most of the storm's RMW (the point coordinate of the (1-minute duration, quadrilateral) swaths' corner closest to the interpolated MSLP center).  A more complicated method, rounding to the nearest minute, is possible but likely not needed, so not implemented.
 
+import traceback
 from datetime import datetime, timedelta
 from geographiclib.geodesic import Geodesic
 from matplotlib.patches import Circle
@@ -120,7 +121,7 @@ def fetch_tle_data():
     tle_data_dict = {}
 
     for satellite, tle_url in urls.items():
-        response = requests.get(tle_url)
+        response = requests.get(tle_url, verify=False)
         tle_lines = response.text.strip().split('\n')
         if len(tle_lines) == 3:
             tle_data_dict[satellite] = (tle_lines[0], tle_lines[1], tle_lines[2])
@@ -208,7 +209,14 @@ def calculate_swaths_and_plot(nadir_paths, start_dt, label_interval=30, opacity=
 
             # Create a shapely LineString from the segment path
             line_string = LineString(zip(segment_lons, segment_lats))
-            fixed_line = antimeridian.fix_line_string(line_string)
+            try:
+                fixed_line = antimeridian.fix_line_string(line_string)
+            except Exception:
+                print("line_string, type:", type(line_string))
+                print("len lons,lats:", len(segment_lons), len(segment_lats))
+                print(line_string.coords[:])
+                print(traceback.format_exc())
+
 
             # Plot the fixed line(s)
             plot_fixed_line(ax, fixed_line, color)
@@ -336,7 +344,14 @@ def shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swa
             # Filter warnings to catch only those related to winding
             warnings.simplefilter("always")  # Enable all warnings
 
-            fixed_left_polygon = antimeridian.fix_polygon(left_polygon)
+            try:
+                fixed_left_polygon = antimeridian.fix_polygon(left_polygon)
+            except:
+                print("left_polygon, type:", type(left_polygon))
+                print("left_polygon.exterior.coords:")
+                print(list(left_polygon.exterior.coords))
+                print(traceback.format_exc())
+
 
             # Log the warnings
             for warning in caught_warnings:
@@ -352,8 +367,14 @@ def shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swa
         with warnings.catch_warnings(record=True) as caught_warnings:
             # Filter warnings to catch only those related to winding
             warnings.simplefilter("always")  # Enable all warnings
+            try:
+                fixed_right_polygon = antimeridian.fix_polygon(right_polygon)
+            except:
+                print("right_polygon, type:", type(right_polygon))
+                print("right_polygon.exterior.coords:")
+                print(list(left_polygon.exterior.coords))
+                print(traceback.format_exc())
 
-            fixed_right_polygon = antimeridian.fix_polygon(right_polygon)
 
             # Log the warnings
             for warning in caught_warnings:

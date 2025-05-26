@@ -38,7 +38,7 @@
 # DISPLAY OHC DATA = 5 key (set DISPLAY_NETCDF to 'ohc') (OHC (26C) from the SOHC from NESDIS/NOAA)
 # DISPLAY ISO26C DATA = 6 key (set DISPLAY_NETCDF to 'iso26C') (Depth of the 26 degree isobar from the SOHC from NESDIS/NOAA)
 # DISPLAY NO NETCDF DATA = r key (set DISPLAY_NETCDF to None) (Don't display any NETCDF overlay)
-# HIDE TRACKS BY DETIAL = k key (hide tracks by fields (vmax, lat/lon, etc) and valid time)
+# HIDE TRACKS BY DETAIL = k key (hide tracks by fields (vmax, lat/lon, etc) and valid time) (for nowcasting: using stale forecast data to prune ensemble members)
 # SAVE HIDDEN TRACKS (SLOT 1) = 1 key (saves the current view - same hidden tracks; will not work after changing ensembles)
 # SAVE HIDDEN TRACKS (SLOT 2) = 2 key (saves the current view - same hidden tracks)
 # LOAD HIDDEN TRACKS (SLOT 1) = 8 key (re-hides the tracks saved in slot 1 pressing '1')
@@ -100,13 +100,13 @@ SST_NC_PATH = 'netcdf/20241005000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLO
 
 # Auto download overwrites the paths given above:
 # Download latest OHC on startup
-AUTO_DOWNLOAD_LATEST_OHC = True
+AUTO_DOWNLOAD_LATEST_OHC = False
 # Download latest SST on startup
-AUTO_DOWNLOAD_LATEST_SST = True
+AUTO_DOWNLOAD_LATEST_SST = False
 
 FINE_SST_BINS = False
 # load netcdf files (regardless of display)
-LOAD_NETCDF = True
+LOAD_NETCDF = False
 # default netcdf display?
 DISPLAY_NETCDF = None
 #DISPLAY_NETCDF = 'd26'
@@ -1319,7 +1319,10 @@ def download_latest_ohc_nc_files_coastwatch():
                 latest_file = [link for link in links if re.search(r'_(\d{3})\.nc', link).group(1) == str(latest_file_number).zfill(3)][0]
                 latest_files[basin] = download_base_url + latest_file.split("/")[-1]
                 break
+            else:
+                print(url, response)
         else:
+            print(f'Failed to download {basin}')
             return None
 
     # Download the latest files
@@ -2471,9 +2474,9 @@ def tcvitals_line_to_dict(line):
                     forecast_lond = storm_vitals['forecast_longitude_indicator']
 
                     if forecast_latd == 'N':
-                        forecast_latsigned = float(latu) / 10.0
+                        forecast_latsigned = float(forecast_latu) / 10.0
                     else:
-                        forecast_latsigned = -1.0 * float(latu) / 10.0
+                        forecast_latsigned = -1.0 * float(forecast_latu) / 10.0
                     storm_vitals['max_forecast_lat'] = forecast_latsigned
 
                     if forecast_lond == 'E':

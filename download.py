@@ -35,7 +35,7 @@ def datetime_utcnow():
 #  2 is notification level: messages for when download runs complete
 #  3 is potentially not important (could not download files (as in an incomplete model run))
 #  4 is for verbose debugging (print curl/grib_copy statements)
-print_level_importance = 2
+print_level_importance = 4
 
 # how often to check (seconds)
 backoff_time = 600
@@ -49,7 +49,8 @@ disturbances_db_file_path = '/home/db/Documents/JRPdata/cyclone-genesis/disturba
 
 # GFS and NAV are in the same thread as they use the same server
 # These are the models that are downloaded
-model_names_to_download_thread_groupings = [['EPS-TCGEN'], ['GEFS-TCGEN', 'GEPS-TCGEN', 'FNMOC-TCGEN', 'GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF', 'GFS', 'NAV'], ['CMC'], ['ECM']]
+#model_names_to_download_thread_groupings = [['EPS-TCGEN'], ['GEFS-TCGEN', 'GEPS-TCGEN', 'FNMOC-TCGEN', 'GEFS-ATCF', 'GEPS-ATCF', 'FNMOC-ATCF', 'GFS', 'NAV'], ['CMC'], ['ECM']]
+model_names_to_download_thread_groupings = [['EPS-TCGEN'], ['GEFS-TCGEN', 'GEPS-TCGEN', 'FNMOC-TCGEN']]
 
 # use this to download individual grib files for NAVGEM so we can split them with grib_copy
 tmp_download_dir = '/tmp'
@@ -974,7 +975,7 @@ def download_step(model_name, model_timestamp, time_step_int):
         # finish url is a check to see whether we are actually done if we have no tc files in the listed dir
         finish_hour = convert_model_time_step_to_str('ECM', all_time_steps_by_model['ECM'][model_hour][-1])
         finish_model_url = url_folder_by_model['ECM']
-        finish_url_folder = f'{finish_model_url}/{model_date}/{model_hour}z/ifs/0p4-beta/enfo/'
+        finish_url_folder = f'{finish_model_url}/{model_date}/{model_hour}z/ifs/0p25/enfo/'
         finish_file_name = f'{model_date}{model_hour}0000-{finish_hour}h-enfo-tf.bufr'
         finish_url_path = f'{finish_url_folder}{finish_file_name}'
         r = generate_curl_commands_eps(timestamp_prefix, url_folder, file_name_prefix, finish_url_path, output_dir)
@@ -1010,7 +1011,7 @@ def download_step(model_name, model_timestamp, time_step_int):
         url_base_file_name = f'gfs.t{model_hour}z.pgrb2.0p25.f{time_step}'
         r = generate_curl_commands_gfs(timestamp_prefix, idx_file_name, url_folder, url_base_file_name, output_dir, params)
     elif model_name == 'ECM':
-        url_folder = f'{model_url_folder}/{model_date}/{model_hour}z/ifs/0p4-beta/oper/'
+        url_folder = f'{model_url_folder}/{model_date}/{model_hour}z/ifs/0p25/oper/'
         idx_file_name = f'{model_date}{model_hour}0000-{time_step}h-oper-fc.index'
         # we will add the .grib2 extension before we download
         url_base_file_name = f'{model_date}{model_hour}0000-{time_step}h-oper-fc'

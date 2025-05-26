@@ -1703,6 +1703,8 @@ def get_disturbances_from_bufr_files(ensemble_model_name, model_files_by_stamp):
             #gefs_test = '/home/db/metview/JRPdata/globalmodeldata/gefs-tcgen/2024081600/2024081600_storms.ac00.atcf_gen.altg.2024081600.txt'
             df = read_tc_bufr_to_df(model_file_path)
             if df is not None:
+                # debug output to csv
+                #df.to_csv(f'{model_file_path}.csv', index=False)
                 # Drop all invalid rows
                 df = df[df['Valid']]
                 if is_ensemble:
