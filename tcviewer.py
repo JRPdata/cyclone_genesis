@@ -2446,7 +2446,7 @@ def tcvitals_line_to_dict(line):
             storm_vitals['outer_slp'] = None
 
         try:
-            storm_speed = float(storm_vitals['storm_speed']) * 10 * 1.9438452
+            storm_speed = float(storm_vitals['storm_speed']) / 10 * 1.9438452
             storm_vitals['storm_speed'] = storm_speed
         except:
             pass
