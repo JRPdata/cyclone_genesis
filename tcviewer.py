@@ -9730,7 +9730,7 @@ class App:
             # sanity check
             return official_models
 
-    # Hide (selected) tracks by field
+    # Hide/Keep (selected) tracks by field
     @classmethod
     def hide_by_field(cls, by_all_all = False, by_all_any = False, by_any_all = False, by_any_any = False):
         # Given selected tracks (selectop loop) or all the tracks (if no selection loops):
@@ -9740,8 +9740,8 @@ class App:
         # (by_all_any) for all track poiints (in the time range) (per candidate), any field must satisfy
         # (by_any_all) for any track points (in the time range) (per candidate), all fields must satisfy
         # (by_all_any) for any track poiints (in the time range) (per candidate), any field must satisfy
-        # We then take the disjoint union of the constrained candidates to get the set of candidates to hide
-
+        # We then take the disjoint union of the constrained candidates to get the set of candidates to keep/hide
+        keep_tracks = cls.hidekeepvar.get()
         field_data = {}
         any_valid = False
         for key, vars in cls.field_vars.items():
@@ -9918,7 +9918,11 @@ class App:
         filtered_ids = {internal_id for internal_id, _ in filtered_candidates}
 
         # Return the symmetric difference, which gives us the disjoint union of ids
-        internal_ids_to_hide = field_filtered_ids.symmetric_difference(filtered_ids)
+        internal_ids_to_keep = field_filtered_ids.symmetric_difference(filtered_ids)
+        if keep_tracks:
+            internal_ids_to_hide = internal_ids_to_keep
+        else:
+            internal_ids_to_hide = field_filtered_ids - internal_ids_to_keep
 
         if len(internal_ids_to_hide) > 0:
             # hide the candidates
@@ -11526,7 +11530,7 @@ class App:
         dialog.title("Hide (Selected) Tracks by Field")
 
         height = 540
-        width = 925
+        width = 1010
         dialog.geometry(f"{width}x{height}")  # Set the width to 300 and height to 250
         dialog.geometry(
             f"+{tk_root.winfo_x() - width // 2 + tk_root.winfo_width() // 2}+{tk_root.winfo_y() - height // 2 + tk_root.winfo_height() // 2}")
@@ -11658,30 +11662,37 @@ class App:
                 ttk.Entry(frame, textvariable=var, width=4).grid(row=n, column=i + 2, padx=5, pady=5, sticky="ew")
 
         n += 1
+        
+        cls.hidekeepvar = tk.IntVar(value=True)
+        chk = ttk.Checkbutton(frame, text=f"Keep Tracks", variable=cls.hidekeepvar, style='TCheckbutton')
+        cls.hidekeepvar.set(True)
+        chk.grid(row=n, column=0, padx=10, pady=5)
+
+        
         # buttons
         all_all_btn = ttk.Button(frame, text="All T All F",
                                  command=lambda: [cls.hide_by_field(by_all_all=True), cls.on_hide_by_field_dialog_close(dialog)],
                                  style='TButton', width=12)
-        all_all_btn.grid(row=n, column=0, padx=20, pady=5)
+        all_all_btn.grid(row=n, column=1, padx=20, pady=5)
 
         all_any_btn = ttk.Button(frame, text="All T Any F",
                                  command=lambda: [cls.hide_by_field(by_all_any=True), cls.on_hide_by_field_dialog_close(dialog)],
                                  style='TButton', width=12)
-        all_any_btn.grid(row=n, column=1, padx=20, pady=5)
+        all_any_btn.grid(row=n, column=2, padx=20, pady=5)
 
         any_all_btn = ttk.Button(frame, text="Any T All F",
                                  command=lambda: [cls.hide_by_field(by_any_all=True), cls.on_hide_by_field_dialog_close(dialog)],
                                  style='TButton', width=12)
-        any_all_btn.grid(row=n, column=2, padx=20, pady=5)
+        any_all_btn.grid(row=n, column=3, padx=20, pady=5)
 
         any_any_btn = ttk.Button(frame, text="Any T Any F",
                                  command=lambda: [cls.hide_by_field(by_any_any=True), cls.on_hide_by_field_dialog_close(dialog)],
                                  style='TButton', width=12)
-        any_any_btn.grid(row=n, column=3, padx=20, pady=5)
+        any_any_btn.grid(row=n, column=4, padx=20, pady=5)
 
         # Cancel button
-        cancel_btn = ttk.Button(frame, text="Cancel", command=lambda e: cls.on_hide_by_field_dialog_close(dialog), style='TButton', width=8)
-        cancel_btn.grid(row=n, column=4, padx=20, pady=5)
+        cancel_btn = ttk.Button(frame, text="Cancel", command=lambda: [cls.on_hide_by_field_dialog_close(dialog)], style='TButton', width=8)
+        cancel_btn.grid(row=n, column=5, padx=20, pady=5)
 
         dialog.bind("<Escape>", lambda e: cls.on_hide_by_field_dialog_close(dialog))
 
