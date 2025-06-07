@@ -4756,6 +4756,9 @@ class AnalysisDialog(tk.Toplevel):
                 self.canvas_track_spread.get_tk_widget().destroy()
                 self.canvas_track_spread = None
 
+            if self.tz_previous_selected != 'UTC':
+                return
+
             # The following is only used here to get counts
             num_tracks_with_data = 0
             series_data = []
@@ -11662,13 +11665,13 @@ class App:
                 ttk.Entry(frame, textvariable=var, width=4).grid(row=n, column=i + 2, padx=5, pady=5, sticky="ew")
 
         n += 1
-        
+
         cls.hidekeepvar = tk.IntVar(value=True)
         chk = ttk.Checkbutton(frame, text=f"Keep Tracks", variable=cls.hidekeepvar, style='TCheckbutton')
         cls.hidekeepvar.set(True)
         chk.grid(row=n, column=0, padx=10, pady=5)
 
-        
+
         # buttons
         all_all_btn = ttk.Button(frame, text="All T All F",
                                  command=lambda: [cls.hide_by_field(by_all_all=True), cls.on_hide_by_field_dialog_close(dialog)],
