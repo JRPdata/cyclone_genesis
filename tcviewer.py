@@ -34,6 +34,7 @@
 # PRINT TRACK STATS = i key (must be hovering; prints to terminal)
 # PRINT POINT INFO = . key (must be hovering; prints to terminal)
 # PRINT ALL TRACK POINTS INFO = / key (must be hovering; prints to terminal)
+# DISPLAY ADT DATA = t key (OSPO+CIMSS) (not in GENESIS mode)
 # DISPLAY SST DATA = 4 key (set DISPLAY_NETCDF to 'sst') (Day/Night SST from CoastWatch/NOAA)
 # DISPLAY OHC DATA = 5 key (set DISPLAY_NETCDF to 'ohc') (OHC (26C) from the SOHC from NESDIS/NOAA)
 # DISPLAY ISO26C DATA = 6 key (set DISPLAY_NETCDF to 'iso26C') (Depth of the 26 degree isobar from the SOHC from NESDIS/NOAA)
@@ -324,7 +325,7 @@ annotations_color_level = {
     'TC End': 0
 }
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pytz
 def datetime_utcnow():
     return datetime.now(pytz.utc).replace(tzinfo=None)
@@ -1281,7 +1282,7 @@ def decode_ab_deck_line(line):
 # Function to download a file from a URL
 def download_file(url, local_filename):
     try:
-        with requests.get(url, stream=True) as r:
+        with requests.get(url, stream=True, verify=False) as r:
             r.raise_for_status()
             with open(local_filename, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
@@ -1310,7 +1311,7 @@ def download_latest_ohc_nc_files_coastwatch():
             url = f'https://coastwatch.noaa.gov/thredds/catalog/OHC/{basin_upper}/14Day/{year}/catalog.html'
             #download location
             download_base_url = f'https://coastwatch.noaa.gov/thredds/fileServer/OHC/{basin_upper}/14Day/{year}/'
-            response = requests.get(url)
+            response = requests.get(url, verify=False)
             if response.ok:
                 soup = BeautifulSoup(response.text, 'html.parser')
                 links = [a['href'] for a in soup.find_all('a', href=True) if a['href'].endswith('.nc')]
@@ -1332,7 +1333,7 @@ def download_latest_ohc_nc_files_coastwatch():
         file_ok = False
         if not os.path.exists(dest_path):
             os.makedirs(NETCDF_FOLDER_PATH, exist_ok=True)
-            response = requests.get(url, stream=True)
+            response = requests.get(url, stream=True, verify=False)
             if response.ok:
                 print("Downloading latest OHC file: ", url)
                 with open(dest_path, 'wb') as f:
@@ -1359,7 +1360,7 @@ def download_latest_ohc_nc_files_ncei():
         # Construct URL
         url = f'https://www.ncei.noaa.gov/data/oceans/sohcs/{current_year:04}/{current_month:02}/'
         # Send request and get HTML response
-        response = requests.get(url)
+        response = requests.get(url, verify=False)
         if response.ok:
             break
         else:
@@ -1409,7 +1410,7 @@ def download_latest_ohc_nc_files_ncei():
         file_ok = False
         if not os.path.exists(dest_path):
             os.makedirs(NETCDF_FOLDER_PATH, exist_ok=True)
-            response = requests.get(url + link, stream=True)
+            response = requests.get(url + link, stream=True, verify=False)
             if response.ok:
                 print("Downloading latest OHC file: ", link)
                 with open(dest_path, 'wb') as f:
@@ -1442,7 +1443,7 @@ def download_latest_sst_nc_file():
         os.makedirs(NETCDF_FOLDER_PATH, exist_ok=True)
         file_ok = False
         if not os.path.exists(dest_path):
-            response = requests.get(url)
+            response = requests.get(url, verify=False)
             if response.ok:
                 print("Dowloading latest SST file:", filename)
                 with open(dest_path, 'wb') as f:
@@ -1457,12 +1458,14 @@ def download_latest_sst_nc_file():
 
 def get_adt_urls():
     # Define the URLs
-    ospo_url = "https://www.ospo.noaa.gov/products/ocean/tropical/adt.html"
+    now_utc = datetime.now(timezone.utc)
+    current_year = now_utc.year
+    ospo_url = f"https://www.ospo.noaa.gov/Visualization02/pub/Ocean/Tropical/ADT/{current_year}/text/"
     cimss_url = "https://tropic.ssec.wisc.edu/real-time/adt/adt.html"
 
     # Send HTTP requests and get the HTML responses
-    ospo_response = requests.get(ospo_url)
-    cimss_response = requests.get(cimss_url)
+    ospo_response = requests.get(ospo_url, verify=False)
+    cimss_response = requests.get(cimss_url, verify=False)
 
     # Parse the HTML content using BeautifulSoup
     ospo_soup = BeautifulSoup(ospo_response.content, 'html.parser')
@@ -1472,9 +1475,22 @@ def get_adt_urls():
     ospo_adt_urls = []
     for link in ospo_soup.find_all('a', href=True):
         href = link['href']
-        if href.startswith('/tropical-data/') and href.endswith('.txt') and '/adt/' in href:
-            adt_url = f"https://www.ospo.noaa.gov{href}"
-            ospo_adt_urls.append(adt_url)
+        if href.endswith('list.txt'):
+            # Find the parent tr and then find the td with the datetime
+            parent_tr = link.find_parent('tr')
+            datetime_td = parent_tr.find_all('td')[2]  # 3rd td contains the datetime
+            datetime_str = datetime_td.text.strip()
+            
+            # Parse the datetime string
+            datetime_format = '%Y-%m-%d %H:%M'
+            file_datetime = datetime.strptime(datetime_str, datetime_format).replace(tzinfo=timezone.utc)
+            
+            # Check if the datetime is within the last 24 hours
+            
+            time_diff = now_utc - file_datetime
+            if time_diff < timedelta(hours=24):
+                adt_url = f"{ospo_url}{href}"
+                ospo_adt_urls.append(adt_url)
 
     # Find all ADT URLs on the WISC page
     cimss_adt_urls = []
@@ -1739,7 +1755,7 @@ def get_deck_files(storms, urls_a, urls_b, do_update_adeck, do_update_adeck2, do
             for url in urls_b:
                 file_url = url.format(year=year, basin_id=basin_id.lower(), storm_number=storm_number)
                 try:
-                    response = requests.get(file_url)
+                    response = requests.get(file_url, verify=False)
                     if response.status_code == 200:
                         dt_mod = get_modification_date_from_header(response.headers)
 
@@ -1805,7 +1821,7 @@ def get_recent_storms(urls):
     for url in urls:
         response = None
         try:
-            response = requests.get(url)
+            response = requests.get(url, verify=False)
         except:
             pass
 
@@ -2239,7 +2255,7 @@ def diff_dicts(old_dict, new_dict):
 
 def http_get_modification_date(url):
     try:
-        response = requests.head(url)
+        response = requests.head(url, verify=False)
         if response.status_code // 100 == 2:
             return get_modification_date_from_header(response.headers)
         # If the request was not successful, return None
@@ -2251,7 +2267,7 @@ def http_get_modification_date(url):
 
 def parse_adt(url):
     # Send a GET request to the URL
-    response = requests.get(url)
+    response = requests.get(url, verify=False)
 
     # Check if the request was successful
     if response.status_code != 200:
