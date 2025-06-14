@@ -37,6 +37,9 @@ def datetime_utcnow():
 #  4 is for verbose debugging (print curl/grib_copy statements)
 print_level_importance = 4
 
+# absolute wall time ins econds to wait for curl to finish (may need to tweak for slow downloads, large file sizes)
+curl_wall_timeout_secs = 120
+
 # how often to check (seconds)
 backoff_time = 600
 # wait between downloads (seconds)
@@ -729,22 +732,41 @@ def generate_curl_commands_eps(timestamp_prefix, url_folder, file_name_prefix, f
         curl_command = f"curl -y 30 -Y 30 -f -v -s  --list-only {url}"
         print_level(4, curl_command)
 
-        # Run the subprocess and capture its output
-        result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        time.sleep(sleep_time)
-        if result.returncode == 9:
-            # Likely could not change directory to get directory listing since it doesn't exist yet
-            print_level(3, f"Warning: Could not change directory to {url_folder}")
-            return -1
-        elif result.returncode != 0:
-            print_level(3, f"Warning: Command failed with exit code {result.returncode}")
-            print_level(3, f"Command: {curl_command}")
-            print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
-            return -2
+        retry = True
+        while(retry):
+            retry = False
+                        
+            try:
+                result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=curl_wall_timeout_secs)
+                time.sleep(sleep_time)
+            except subprocess.TimeoutExpired as e:
+                # wall timeout
+                retry = True
+                continue
+            except subprocess.CalledProcessError as e:                    
+                if result.returncode == 6:
+                    # DNS ERROR? Retry
+                    retry = True
+                    continue
 
+            if result.returncode == 9:
+                # Likely could not change directory to get directory listing since it doesn't exist yet
+                print_level(3, f"Warning: Could not change directory to {url_folder}")
+                return -1
+            elif result.returncode == 6:
+                # DNS ERROR? Retry
+                retry = True
+                continue
+            elif result.returncode != 0:
+                print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+                print_level(3, f"Command: {curl_command}")
+                print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
+                return -2
+        
         stdout = result.stdout
         if not stdout:
             print_level(3, f"Warning: No stdout or no files from file listing of: {url_folder}")
+            print_level(3, f"Return code: {result.returncode}")
             return -1
 
         files_list_str = result.stdout.decode('utf-8')
@@ -803,20 +825,38 @@ def generate_curl_commands_eps(timestamp_prefix, url_folder, file_name_prefix, f
             curl_command = f"curl --create-dirs -y 30 -Y 30 -f -v -s {url} -o {output_file}"
             print_level(4, curl_command)
 
-            # Run the subprocess and capture its output
-            result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            time.sleep(sleep_time)
-            if result.returncode != 0:
-                print_level(3, f"Warning: Command failed with exit code {result.returncode}")
-                print_level(3, f"Command: {curl_command}")
-                print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
-
+            retry = True
+            while(retry):
+                retry = False
+                
                 try:
-                    # clear directory if no files ready yet
-                    os.rmdir(output_dir_timestamp)
-                except:
-                    pass
-                return -2
+                    result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=curl_wall_timeout_secs)
+                    time.sleep(sleep_time)
+                except subprocess.TimeoutExpired as e:
+                    # wall timeout
+                    retry = True
+                    continue
+                except subprocess.CalledProcessError as e:                    
+                    if result.returncode == 6:
+                        # DNS ERROR? Retry
+                        retry = True
+                        continue
+                
+                if result.returncode == 6:
+                    # DNS ERROR? Retry
+                    retry = True
+                    continue
+                elif result.returncode != 0:
+                    print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+                    print_level(3, f"Command: {curl_command}")
+                    print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
+
+                    try:
+                        # clear directory if no files ready yet
+                        os.rmdir(output_dir_timestamp)
+                    except:
+                        pass
+                    return -2
 
     if is_gribs_complete:
         # assume that all the files that would be created were got, and create the flag directory 'COMPLETE'
@@ -842,19 +882,33 @@ def generate_curl_commands_gfdl(timestamp_prefix, url_folder, url_base_file_name
         curl_command = f"curl --create-dirs -y 30 -Y 30 -f -v -s {url} -o {output_file}"
         print_level(4, curl_command)
 
-        # Run the subprocess and capture its output
-        result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        time.sleep(sleep_time)
-        if result.returncode != 0:
-            print_level(3, f"Warning: Command failed with exit code {result.returncode}")
-            print_level(3, f"Command: {curl_command}")
-            print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
+
+        retry = True
+        while(retry):
+            retry = False      
             try:
-                # clear directory if no files ready yet
-                os.rmdir(output_dir_timestamp)
-            except:
-                pass
-            return -2
+                result = subprocess.run(curl_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=curl_wall_timeout_secs)
+                time.sleep(sleep_time)
+            except subprocess.TimeoutExpired as e:
+                # wall timeout
+                retry = True
+                continue
+            except subprocess.CalledProcessError as e:                    
+                if result.returncode == 6:
+                    # DNS ERROR? Retry
+                    retry = True
+                    continue
+            
+            if result.returncode != 0:
+                print_level(3, f"Warning: Command failed with exit code {result.returncode}")
+                print_level(3, f"Command: {curl_command}")
+                print_level(3, f"Error output: {result.stderr.decode('utf-8')}")
+                try:
+                    # clear directory if no files ready yet
+                    os.rmdir(output_dir_timestamp)
+                except:
+                    pass
+                return -2
 
     return 0
 
