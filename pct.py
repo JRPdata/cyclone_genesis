@@ -31,6 +31,14 @@ from matplotlib.colors import Normalize
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
+# for convex hull for creating a mask for points outside the swath
+from shapely.geometry import Point, MultiPoint
+from shapely.ops import unary_union, polygonize
+from shapely.geometry import LineString
+from matplotlib.path import Path
+from scipy.spatial import Delaunay
+
+
 ## THETA (Θ) is used for calculation of the PCT
 # optionally, use other numbers
 USE_POPULAR_THETA = True
@@ -41,6 +49,13 @@ DEFAULT_THETA_36 = 1.18
 
 # Plot a bounding box, with a radius of lat,lon degrees from center
 PLOT_RADIUS_DEG = 5
+
+# Regrid size
+H_GRID_POINTS = 1500
+V_GRID_POINTS = 1500
+
+# Transparent mask, otherwise black mask
+TRANSPARENT_MASK = True
 
 # from Lee et al, 2002 to match NRL color scheme (clip and scale to these ranges)
 PCT_MIN89, PCT_MAX89 = 220, 310
@@ -676,8 +691,6 @@ def plot_pct(file_path, center_lat, center_lon):
         g = normalize(tb_v_all, tbv_min_temp, tbv_max_temp)      # GREEN from TB_V
         b = normalize(tb_h_all, tbh_min_temp, tbh_max_temp)      # BLUE from TB_H
 
-
-
         # Defunct, left for reference for plotting raw TB
         # for raw TB
         #im1 = ax.scatter(lon_89a[mask_89a], lat_89a[mask_89a], c=pct_89a[mask_89a], s=1,
@@ -690,22 +703,71 @@ def plot_pct(file_path, center_lat, center_lon):
         # Stack into RGB image (shape: [n_points, 3])
         # rgb = np.stack((r, g, b), axis=-1)
 
-
-        # Define output grid
-        lon_grid = np.linspace(min(lon_all), max(lon_all), 500)
-        lat_grid = np.linspace(min(lat_all), max(lat_all), 500)
+        # interpolate to fixed grid size
+        lon_grid = np.linspace(min(lon_all), max(lon_all), H_GRID_POINTS)
+        lat_grid = np.linspace(min(lat_all), max(lat_all), V_GRID_POINTS)
         lon_mesh, lat_mesh = np.meshgrid(lon_grid, lat_grid)
 
-        # Interpolate each color channel separately
         r_grid = 1 - griddata((lon_all, lat_all), r, (lon_mesh, lat_mesh), method='nearest')
         g_grid = griddata((lon_all, lat_all), g, (lon_mesh, lat_mesh), method='nearest')
         b_grid = griddata((lon_all, lat_all), b, (lon_mesh, lat_mesh), method='nearest')
 
-        # Stack to RGB image
-        #rgb_grid = np.stack((r_grid, g_grid, b_grid), axis=-1)
         rgb_grid = np.clip(np.stack((r_grid, g_grid, b_grid), axis=-1), 0, 1)
 
+        # boundary polygon
+        def alpha_shape(points, alpha=1.5):
+            """
+            Compute the alpha shape (concave hull) of a set of points.
+            Returns a Shapely polygon.
+            """
+            if len(points) < 4:
+                return MultiPoint(list(points)).convex_hull
 
+            tri = Delaunay(points)
+            edges = set()
+            edge_points = []
+
+            for ia, ib, ic in tri.simplices:
+                pa = points[ia]
+                pb = points[ib]
+                pc = points[ic]
+
+                a = np.linalg.norm(pa - pb)
+                b = np.linalg.norm(pb - pc)
+                c = np.linalg.norm(pc - pa)
+
+                s = (a + b + c) / 2.0
+                area = max(s * (s - a) * (s - b) * (s - c), 1e-10)
+                circum_r = a * b * c / (4.0 * np.sqrt(area))
+
+                if circum_r < 1.0 / alpha:
+                    edges.add(frozenset((ia, ib)))
+                    edges.add(frozenset((ib, ic)))
+                    edges.add(frozenset((ic, ia)))
+
+            for edge in edges:
+                i, j = tuple(edge)
+                edge_points.append((points[i], points[j]))
+
+            m = MultiPoint(points)
+            mls = unary_union([LineString([p1, p2]) for p1, p2 in edge_points])
+            triangles = list(polygonize(mls))
+            return unary_union(triangles)
+
+        # shape from swath points
+        swath_polygon = alpha_shape(np.column_stack((lon_all, lat_all)), alpha=1.0)
+        swath_path = Path(np.array(swath_polygon.exterior.coords))
+
+        # mask outside the swath
+        points_grid = np.column_stack((lon_mesh.ravel(), lat_mesh.ravel()))
+        mask = swath_path.contains_points(points_grid).reshape(lon_mesh.shape)
+
+        # Apply mask
+        if TRANSPARENT_MASK:
+            rgb_grid[~mask] = np.nan
+        else:
+            # BLACK MASK
+            rgb_grid[~mask] = 0
 
         # === Plot ===
         plt.figure(figsize=(10, 8))
