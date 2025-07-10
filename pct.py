@@ -769,20 +769,22 @@ def plot_pct(file_path, center_lat, center_lon):
             # BLACK MASK
             rgb_grid[~mask] = 0
 
-        # === Plot ===
+        # Plot
         plt.figure(figsize=(10, 8))
 
-        # --- Your existing code for ax ---
         ax = plt.axes(projection=ccrs.PlateCarree())
-        ax.set_extent([center_lon - PLOT_RADIUS_DEG, center_lon + PLOT_RADIUS_DEG,
-                    center_lat - PLOT_RADIUS_DEG, center_lat + PLOT_RADIUS_DEG], crs=ccrs.PlateCarree())
+
+        # Use actual interpolation extent from lon_grid and lat_grid
+        extent = [lon_grid[0], lon_grid[-1], lat_grid[0], lat_grid[-1]]
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
+
         ax.coastlines(resolution="10m")
         ax.add_feature(cfeature.BORDERS, linestyle=':')
 
-        lon_min, lon_max, lat_min, lat_max = ax.get_extent(crs=ccrs.PlateCarree())
-
-        xticks = np.arange(np.floor(lon_min), np.ceil(lon_max)+1, 1)
-        yticks = np.arange(np.floor(lat_min), np.ceil(lat_max)+1, 1)
+        # Generate ticks based on extent
+        lon_min, lon_max, lat_min, lat_max = extent
+        xticks = np.arange(np.floor(lon_min), np.ceil(lon_max) + 1, 1)
+        yticks = np.arange(np.floor(lat_min), np.ceil(lat_max) + 1, 1)
 
         ax.set_xticks(xticks, crs=ccrs.PlateCarree())
         ax.set_yticks(yticks, crs=ccrs.PlateCarree())
@@ -791,15 +793,13 @@ def plot_pct(file_path, center_lat, center_lon):
 
         ax.gridlines(xlocs=xticks, ylocs=yticks, color='black', linestyle='--', linewidth=0.5)
 
-        ax.set_extent([target_lon_min, target_lon_max, target_lat_min, target_lat_max], crs=ccrs.PlateCarree())
-
-        # In imshow:
+        # Display the PCT image
         ax.imshow(
             rgb_grid,
             origin='lower',
-            extent=[target_lon_min, target_lon_max, target_lat_min, target_lat_max],
+            extent=extent,
             transform=ccrs.PlateCarree(),
-            interpolation='none'  # don't blur pixels
+            interpolation='none'
         )
 
         plt.title(f"PCT {freq_str} - GCOM-W1 (JAXA)\n{scan_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}")
