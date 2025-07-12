@@ -1,18 +1,46 @@
-# Plot (passive Microwave) GCOM-W1 PCT (Polarized Corrected Temperature) imagery for 89 GHz, 36.5 GHz channels
+# Plot (passive Microwave) PCT (Polarized Corrected Temperature) imagery for 89 GHz, 36 GHz channels
+# from L1 data from GCOM-W1 (AMSR2, L1B) or GPM (GMI, L1B or L1C)
+
 # EXPERIMENTAL! (DO NOT USE)
-# Some of JAXA's AMTK reference tool code (AMTK_AMSR2_Ver1.14) was ported over to python to align the 36.5 GHz data, which isn't geolocated
+
+# Note: Some of JAXA's AMTK reference tool code (AMTK_AMSR2_Ver1.14) was ported over to python to align the 36.5 GHz data, which isn't geolocated
 # (i.e. "coregistration" routines used for alignment of low freq. channels)
 
+# for GCOM-W1 AMSR
 # Uses JAXA L1B data in HDF5 format
-# ie. /standard/GCOM-W/GCOM-W.AMSR2/L1B/2/2025/07/GW1AM2_202507060651_015D_L1SGBTBR_2220220.h5 from JAXA's (free) distribution server
+# ie. /standard/GCOM-W/GCOM-W.AMSR2/L1B/2/2025/07/GW1AM2_202507060651_015D_L1SGBTBR_2220220.h5 from JAXA's (free) distribution server (https://gportal.jaxa.jp/)
 # thank you JAXA!
-
 # Tip: Use JAXA's tool to find pass numbers of interest: https://www.eorc.jaxa.jp/AMSR/am_orbit/amsr_orbit_ja.html
+# Also: AMSR Tb preview @ https://www.eorc.jaxa.jp/AMSR/viewer/
+# Data source citations:
+# Japan Aerospace Exploration Agency. 2012. GCOM-W/AMSR2 L1B Brightness Temperature. https://doi.org/10.57746/EO.01gs73ans548qghaknzdjyxd2h
 
-# Credits to some various authors in comments below
 
-# Note: Color scheme is not an exact match to NRL though does attempt to references older paper's algorithm for PCT.
-# for 89GHz uses both horns to plot data (higher res than 36.5 GHz)
+# for GPM GMI (works with L1B (JAXA or GES DISC file naming) or L1C files (GES DISC L1C product))
+# Tip: Use JAXA's orbit search to find Orbits of interest: https://www.eorc.jaxa.jp/GPM/doc/calval/orbit/orbit_search_e.htm
+# Also: GMI preview @ https://sharaku.eorc.jaxa.jp/trmm/RT3/index.html
+# L1B Data is available from JAXA above, and also multiple places from GPM: https://gpm.nasa.gov/data/sources
+###
+# Latency notes for GMI data:
+# the DISC archive at https://disc.gsfc.nasa.gov/ is public and free and does not require registration (but seems to have the highest latency +2-3 hours after the other sources?)
+# The JAXA production data has the second lowest latency (~half hour after PPS)
+# GPM's PPS (production) has the lowest latency
+# Both JAXA and PPS have near-real-time access upon request, only if necessary (did not request so do not know the difference in latency for those servers)
+###
+# Data source citations:
+# Tb: GPM Science Team (2022), GPM GMI Brightness Temperatures L1B 1.5 hours 13 km V07, Greenbelt, MD, USA, Goddard Earth Sciences Data and Information Services Center (GES DISC), Accessed: [Data Access Date], 10.5067/GPM/GMI/GPM/1B/07
+# Tc: Wesley Berg (2022), GPM GMI Common Calibrated Brightness Temperatures Collocated L1C 1.5 hours 13 km V07, Greenbelt, MD, USA, Goddard Earth Sciences Data and Information Services Center (GES DISC), Accessed: [Data Access Date], 10.5067/GPM/GMI/GPM/1C/07
+
+# Credits to other various authors in comments below for PCT technique
+######
+
+# Important Note: Color scheme is not an exact match to NRL though does attempt to references older paper's algorithm for PCT.
+# for 89GHz uses both horns to plot data (higher res than 36 GHz)
+
+# Note: for GCOM-W1 AMSR 89GHz is considered high frequency in respective docs, but for GPM GMI it is bundled together as a low frequency group (Swath 1)
+
+# Co-registration adjustment is done only for GCOM-W1 (using the JAXA AMTK algorithms) (this is a correction for lat,lons)
+# No co-registration adjustment is done for GPM GMI (the L1C-R does do so for some higher frequency data we don't use, but only maps onto existing low freq lat/lons (89GHz))
 
 import sys
 from tqdm import tqdm
@@ -38,6 +66,13 @@ from shapely.geometry import LineString
 from matplotlib.path import Path
 from scipy.spatial import Delaunay
 
+# FILL VALUE FOR GMI; also using this as a fill value for Radio interference for GCOMW1 AMSR Pixel Quality (QC)
+MISSING_FLOAT = -9999.9
+
+# Use Pixel Quality for 89 GHz Channels for Quality Control (only for GCOM-W1; GMI's QC is built in)
+# No Pixel Quality is avail for 36 GHz: p.65 AMSR2_Level1_Product_Format_EN.pdf (actually only unsigned char);
+# p.120 of AMSR2_Product_IO_Tool_Kit_manual_EN.pdf has format for 89GHz
+GCOM_AMSR_DO_QC_CHECK = True
 
 ## THETA (Θ) is used for calculation of the PCT
 # optionally, use other numbers
@@ -75,6 +110,7 @@ TBH_MIN36, TBH_MAX36 = 180, 310
 
 # not used, built into data
 # (for reference; TB data are integers; scale by this factor to obtain unscaled value)
+# Only used for GCOM-W1 AMSR2
 DEFAULT_INT_SCALE_FACTOR = 0.01 # K
 
 # Optional fine-tuned theta values (non-NRL scheme?)
@@ -86,13 +122,11 @@ csv36_path = "microwave_theta_36ghz.csv"
 THETA89_DF = pd.read_csv(csv89_path)
 THETA36_DF = pd.read_csv(csv36_path)
 
-
 # === Port from AMTK (JAXA) ===
 
 CHANNELS = ["6G", "7G", "10G", "18G", "23G", "36G"]
 
 ### ports from AMTK tool (JAXA)
-
 AM2_LATLON_06 = 40010
 AM2_LATLON_07 = 40020
 AM2_LATLON_10 = 40030
@@ -102,6 +136,28 @@ AM2_LATLON_36 = 40060
 AM2_LATLON_89A = 40070
 AM2_LATLON_89B = 40080
 
+### custom to differentiate other datasets
+# 10-89 GHz
+GPMGMI_LATLON_LOWFREQ = 50010
+# 166,183 GHz
+GPMGMI_LATLON_HIGHFREQ = 50020
+# the channel array index in swath, i.e. [swath, sample, channel]
+GPMGMI_CHANNELS = {
+    '10V': 0,
+    '10H': 1,
+    '18V': 2,
+    '18H': 3,
+    '23V': 4,
+    '36V': 5,
+    '36H': 6,
+    '89V': 7,
+    '89H': 8,
+    '166V': 0,
+    '166H': 1,
+    '183V': 2,
+    '183H': 3
+}
+
 DATASET_MAPS = {
     AM2_LATLON_89A: {
         'lat': "Latitude of Observation Point for 89A",
@@ -110,6 +166,16 @@ DATASET_MAPS = {
     AM2_LATLON_89B: {
         'lat': "Latitude of Observation Point for 89B",
         'lon': "Longitude of Observation Point for 89B"
+    },
+    GPMGMI_LATLON_LOWFREQ: {
+        'lat': "Latitude",
+        'lon': "Longitude",
+        'swath': 'S1'
+    },
+    GPMGMI_LATLON_HIGHFREQ: {
+        'lat': "Latitude",
+        'lon': "Longitude",
+        'swath': "S2"
     }
     # No entry for AM2_LATLON_36, it will be generated from 89A + 89B
 }
@@ -290,7 +356,13 @@ def get_latlon(f, from_scan, to_scan, dataset_no, coef36=None):
     Returns:
         lat, lon: 2D arrays
     """
-    if dataset_no in (AM2_LATLON_89A, AM2_LATLON_89B):
+    if dataset_no in (GPMGMI_LATLON_LOWFREQ, GPMGMI_LATLON_HIGHFREQ):
+        ds_map = DATASET_MAPS[dataset_no]
+        lat_data = f[ds_map['swath']][ds_map['lat']][from_scan:to_scan + 1, :]
+        lon_data = f[ds_map['swath']][ds_map['lon']][from_scan:to_scan + 1, :]
+        return lat_data, lon_data
+    
+    elif dataset_no in (AM2_LATLON_89A, AM2_LATLON_89B):
         ds_map = DATASET_MAPS[dataset_no]
         lat_data = f[ds_map['lat']][from_scan:to_scan + 1, :]
         lon_data = f[ds_map['lon']][from_scan:to_scan + 1, :]
@@ -515,17 +587,16 @@ def compute_pct(tb_v, tb_h, theta):
 def normalize(x, vmin, vmax):
     return np.clip((x - vmin) / (vmax - vmin), 0, 1)
 
-def get_center_scan_time(lat, lon, scan_time, center_lat, center_lon,
-                         points_per_scan=486, tai_utc_offset=37):
+def get_center_scan_time(file_type, lat, lon, scan_time, center_lat, center_lon,
+                         tai_utc_offset=37):
     """
     Find the scan time (UTC) closest to the image center.
 
     Parameters:
         lat, lon          : 1D arrays of lat/lon values (same shape)
-        scan_time         : 1D array of scan times (TAI seconds since 1993-01-01)
+        scan_time         : for GPMGMI: a structure; for GCOMW1-AMSR2: 1D array of scan times (TAI seconds since 1993-01-01)
         center_lat/lon    : float, center of the image in degrees
-        points_per_scan   : int, number of data points per scan (default: 486 for 89 GHz)
-        tai_utc_offset    : int, (leap) seconds to subtract from TAI to get UTC (default: 37s)
+        tai_utc_offset    : int, (leap) seconds to subtract from TAI to get UTC for GCOMW1 AMSR2 (default: 37s)
 
     Returns:
         utc_time (datetime) : UTC time of scan nearest to image center
@@ -549,16 +620,29 @@ def get_center_scan_time(lat, lon, scan_time, center_lat, center_lon,
     closest_idx = np.argmin(dists)
 
     # Convert flat index to scan index
-    points_per_scan = lat.shape[1]  # = 486
+    points_per_scan = lat.shape[1]  # = 486 for 89GHz AMSR2
     scan_idx = closest_idx // points_per_scan
 
+    if file_type['name'] == 'GCOMW1_AMSR2':
+        # Get scan time in seconds since 1993-01-01
+        scan_sec = scan_time[scan_idx]
 
-    # Get scan time in seconds since 1993-01-01
-    scan_sec = scan_time[scan_idx]
-
-    # Convert to UTC datetime
-    epoch = datetime(1993, 1, 1, tzinfo=timezone.utc)
-    utc_time = epoch + timedelta(seconds=scan_sec - tai_utc_offset)
+        # Convert to UTC datetime
+        epoch = datetime(1993, 1, 1, tzinfo=timezone.utc)
+        utc_time = epoch + timedelta(seconds=scan_sec - tai_utc_offset)
+    elif file_type['name'] == 'GPMGMI':
+        utc_time = datetime(
+            scan_time['Year'][scan_idx],
+            scan_time['Month'][scan_idx],
+            scan_time['DayOfMonth'][scan_idx],
+            scan_time['Hour'][scan_idx],
+            scan_time['Minute'][scan_idx],
+            scan_time['Second'][scan_idx],
+            np.int32(scan_time['MilliSecond'][scan_idx]) * 1000,
+            tzinfo=timezone.utc
+            )
+    else:
+        raise Exception("get_center_scan_time(): Unknown file type")
 
     return utc_time, scan_idx
 
@@ -577,42 +661,116 @@ def load_latlon_cache(filepath):
     else:
         return None, None
 
+def get_file_type(file_path):
+    basename = os.path.basename(file_path)
+    
+    if "GPM" in basename and "GMI" in basename:
+        # file names distributed by JAXA
+        # GPMCOR_GMI_2507111111_1244_064522_1BS_G1B_07B.h5
+                
+        # file names distributed by GES DISC (1B is same binary as JAXA 1B)
+        # 1B.GPM.GMI.TB2021.20250711-S111136-E124449.064522.V07B.HDF5
+        # Tc, with co-registration for high freq (not used in this program)
+        # 1C-R.GPM.GMI.XCAL2016-C.20250711-S093822-E111135.064521.V07B.HDF5
+        # Common Intercalibrated Brightness Temperature (Tc)
+        # 1C.GPM.GMI.XCAL2016-C.20250711-S111136-E124449.064522.V07B.HDF5
+        
+        # swath is 'S1' for low freq (36, 89GHz) (hardcoded)
+        if "G1B" in basename or basename.startswith('1B.'):
+            return {'name': 'GPMGMI', 'var': 'Tb', 'swath': 'S1', 'short': 'GPM GMI (GES DISC) (from L1 Tb)', 'timevar': "ScanTime"}
+        elif basename.startswith('1C'):
+            return {'name': 'GPMGMI', 'var': 'Tc', 'swath': 'S1', 'short': 'GPM GMI (GES DISC) (from L1 Tc)', 'timevar': "ScanTime"}
+    elif "GW1AM2" in basename:
+        return {'name': 'GCOMW1_AMSR2', 'var': 'Tb', 'short': 'GCOM-W1 (JAXA) (from L1 Tb)', 'timevar': "Scan Time"}
+    else:
+        return {}
+
+def get_num_scans(f, file_type):
+    if file_type['name'] == 'GCOMW1_AMSR2':
+        return f[file_type['timevar']].shape[0]
+    elif file_type['name'] == 'GPMGMI':
+        return f[file_type['swath']][file_type['var']].shape[0]
+    else:
+        raise Exception("get_num_scans(): Unknown file type")
 
 def plot_pct(file_path, center_lat, center_lon):
 
+    file_type = get_file_type(file_path)
+    if not(file_type):
+        raise Exception("get_file_type(): File name did not match expected patterns (GCOM-W1 AMSR 1B, or GPM GMI 1B,1C)")
+
     with h5py.File(file_path, "r") as f:
-        # Determine scan range (you might already know this)
-        from_scan, to_scan = 0, f["Scan Time"].shape[0] - 1
-
-        # === Read 89A/B lat/lon ===
-        lat_89a, lon_89a = get_latlon(f, from_scan, to_scan, AM2_LATLON_89A)
-        lat_89b, lon_89b = get_latlon(f, from_scan, to_scan, AM2_LATLON_89B)
-
-        # === Get scan time near center ===
-        scan_dt, scan_idx = get_center_scan_time(lat_89a, lon_89a, f["Scan Time"], center_lat, center_lon)
-
-        # === Read BT data and scale ===
-        tb_89av = f["Brightness Temperature (89.0GHz-A,V)"][:] * f["Brightness Temperature (89.0GHz-A,V)"].attrs['SCALE FACTOR']
-        tb_89ah = f["Brightness Temperature (89.0GHz-A,H)"][:] * f["Brightness Temperature (89.0GHz-A,H)"].attrs['SCALE FACTOR']
-        tb_89bv = f["Brightness Temperature (89.0GHz-B,V)"][:] * f["Brightness Temperature (89.0GHz-B,V)"].attrs['SCALE FACTOR']
-        tb_89bh = f["Brightness Temperature (89.0GHz-B,H)"][:] * f["Brightness Temperature (89.0GHz-B,H)"].attrs['SCALE FACTOR']
-        tb_36v = f["Brightness Temperature (36.5GHz,V)"][:] * f["Brightness Temperature (36.5GHz,V)"].attrs['SCALE FACTOR']
-        tb_36h = f["Brightness Temperature (36.5GHz,H)"][:] * f["Brightness Temperature (36.5GHz,H)"].attrs['SCALE FACTOR']
-
-        # === Read coregistration coefficients for 36GHz ===
-        coef36 = get_coef_from_attrs(f.attrs)["36G"]  # you must define this helper to extract from f.attrs[]
-
-        # === Get 36.5 GHz lat,lon from 89A lat,lon and coregistration ===
-        # TODO: Optimize for speed
-        # This is very slow and by far the slowest part of the program (because its a close port of the original c code)
-        # for now there is a TQDM to let us know far along we are
-        lat_36, lon_36 = get_latlon(f, from_scan, to_scan, AM2_LATLON_36, coef36=coef36)
         
-        #cache_file = "latlon_36_cache.npz"
-        #lat_36, lon_36 = load_latlon_cache(cache_file)
-        #if lat_36 is None or lon_36 is None:
-        #    lat_36, lon_36 = get_latlon(f, from_scan, to_scan, AM2_LATLON_36, coef36=coef36)
-        #    save_latlon_cache(cache_file, lat_36, lon_36)
+        # Determine scan range (you might already know this)
+        from_scan, to_scan = 0, get_num_scans(f, file_type) - 1
+        
+        # for GCOMW1 89GHz, (Horn B)
+        second_89_horn = False
+        if file_type['name'] == 'GCOMW1_AMSR2':
+            second_89_horn = True
+            # === Read 89A/B lat/lon ===
+            lat_89a, lon_89a = get_latlon(f, from_scan, to_scan, AM2_LATLON_89A)
+            lat_89b, lon_89b = get_latlon(f, from_scan, to_scan, AM2_LATLON_89B)
+
+            # === Get scan time near center ===
+            scan_dt, scan_idx = get_center_scan_time(file_type, lat_89a, lon_89a, f[file_type['timevar']], center_lat, center_lon)
+
+            # === Read BT data and scale ===
+            tb_89av = f["Brightness Temperature (89.0GHz-A,V)"][:] * f["Brightness Temperature (89.0GHz-A,V)"].attrs['SCALE FACTOR']
+            tb_89ah = f["Brightness Temperature (89.0GHz-A,H)"][:] * f["Brightness Temperature (89.0GHz-A,H)"].attrs['SCALE FACTOR']
+            tb_89bv = f["Brightness Temperature (89.0GHz-B,V)"][:] * f["Brightness Temperature (89.0GHz-B,V)"].attrs['SCALE FACTOR']
+            tb_89bh = f["Brightness Temperature (89.0GHz-B,H)"][:] * f["Brightness Temperature (89.0GHz-B,H)"].attrs['SCALE FACTOR']
+            tb_36v = f["Brightness Temperature (36.5GHz,V)"][:] * f["Brightness Temperature (36.5GHz,V)"].attrs['SCALE FACTOR']
+            tb_36h = f["Brightness Temperature (36.5GHz,H)"][:] * f["Brightness Temperature (36.5GHz,H)"].attrs['SCALE FACTOR']
+
+            if GCOM_AMSR_DO_QC_CHECK:
+                # 1. Load the pixel data quality flags
+                pdq_89 = f['Pixel Data Quality 89'][:]  # shape: (scans, pixels), dtype: uint8
+
+                # Create boolean masks using bitwise AND
+                # see p.120 of AMSR2_Product_IO_Tool_Kit_manual_EN.pdf
+                mask_89ah = (pdq_89 & 0x01) != 0
+                mask_89av = (pdq_89 & 0x02) != 0
+                mask_89bh = (pdq_89 & 0x04) != 0
+                mask_89bv = (pdq_89 & 0x08) != 0
+
+                # Apply the masks to fill with MISSING
+                tb_89ah[mask_89ah] = MISSING_FLOAT
+                tb_89av[mask_89av] = MISSING_FLOAT
+                tb_89bh[mask_89bh] = MISSING_FLOAT
+                tb_89bv[mask_89bv] = MISSING_FLOAT
+
+            # === Read coregistration coefficients for 36GHz ===
+            coef36 = get_coef_from_attrs(f.attrs)["36G"]  # you must define this helper to extract from f.attrs[]
+
+            # === Get 36.5 GHz lat,lon from 89A lat,lon and coregistration ===
+            # TODO: Optimize for speed
+            # This is very slow and by far the slowest part of the program (because its a close port of the original c code)
+            # for now there is a TQDM to let us know far along we are
+            lat_36, lon_36 = get_latlon(f, from_scan, to_scan, AM2_LATLON_36, coef36=coef36)
+            
+            #cache_file = "latlon_36_cache.npz"
+            #lat_36, lon_36 = load_latlon_cache(cache_file)
+            #if lat_36 is None or lon_36 is None:
+            #    lat_36, lon_36 = get_latlon(f, from_scan, to_scan, AM2_LATLON_36, coef36=coef36)
+            #    save_latlon_cache(cache_file, lat_36, lon_36)
+        elif file_type['name'] == 'GPMGMI':
+            ds_map = DATASET_MAPS[GPMGMI_LATLON_LOWFREQ]
+            lat_89a, lon_89a = get_latlon(f, from_scan, to_scan, GPMGMI_LATLON_LOWFREQ)
+            lat_36 = lat_89a
+            lon_36 = lon_89a
+            # swath group (S1 or S1; S1 is relevant for 36,89 GHz)
+            swath = ds_map['swath']
+            
+            scan_dt, scan_idx = get_center_scan_time(file_type, lat_89a, lon_89a, f[swath][file_type['timevar']], center_lat, center_lon)
+            # Tb or Tc
+            tvar = file_type['var']
+            
+            tb_89av = f[swath][tvar][:,:,GPMGMI_CHANNELS['89V']]
+            tb_89ah = f[swath][tvar][:,:,GPMGMI_CHANNELS['89H']]
+            tb_36v = f[swath][tvar][:,:,GPMGMI_CHANNELS['36V']]
+            tb_36h = f[swath][tvar][:,:,GPMGMI_CHANNELS['36H']]
+            
 
     # === Convert scan time to UTC & get month ===
     #scan_dt = tai93_to_utc(time_val)
@@ -624,42 +782,72 @@ def plot_pct(file_path, center_lat, center_lon):
 
     # === Compute PCT ===
     pct_89a = compute_pct(tb_89av, tb_89ah, theta_89)
-    pct_89b = compute_pct(tb_89bv, tb_89bh, theta_89)
+    if second_89_horn:
+        pct_89b = compute_pct(tb_89bv, tb_89bh, theta_89)
+    
     pct_36 = compute_pct(tb_36v, tb_36h, theta_36)
 
-    # === Subset within bounding box ===
-    mask_89a = (
-        (lat_89a >= center_lat - PLOT_RADIUS_DEG) & (lat_89a <= center_lat + PLOT_RADIUS_DEG) &
-        (lon_89a >= center_lon - PLOT_RADIUS_DEG) & (lon_89a <= center_lon + PLOT_RADIUS_DEG)
-    )
-    # === Subset within bounding box ===
-    mask_89b = (
-        (lat_89b >= center_lat - PLOT_RADIUS_DEG) & (lat_89b <= center_lat + PLOT_RADIUS_DEG) &
-        (lon_89b >= center_lon - PLOT_RADIUS_DEG) & (lon_89b <= center_lon + PLOT_RADIUS_DEG)
-    )
+    if file_type['name'] == 'GCOMW1_AMSR2':
+        # === Subset within bounding box ===
+        # Mask for valid lat/lon AND valid brightness temps for 89
+        mask_89a = (
+            (lat_89a >= center_lat - PLOT_RADIUS_DEG) & (lat_89a <= center_lat + PLOT_RADIUS_DEG) &
+            (lon_89a >= center_lon - PLOT_RADIUS_DEG) & (lon_89a <= center_lon + PLOT_RADIUS_DEG) &
+            (tb_89av != MISSING_FLOAT) &
+            (tb_89ah != MISSING_FLOAT)
+        )
+        mask_89b = (
+            (lat_89b >= center_lat - PLOT_RADIUS_DEG) & (lat_89b <= center_lat + PLOT_RADIUS_DEG) &
+            (lon_89b >= center_lon - PLOT_RADIUS_DEG) & (lon_89b <= center_lon + PLOT_RADIUS_DEG) &
+            (tb_89bv != MISSING_FLOAT) &
+            (tb_89bh != MISSING_FLOAT)
+        )
 
-    mask_36 = (
-        (lat_36 >= center_lat - PLOT_RADIUS_DEG) & (lat_36 <= center_lat + PLOT_RADIUS_DEG) &
-        (lon_36 >= center_lon - PLOT_RADIUS_DEG) & (lon_36 <= center_lon + PLOT_RADIUS_DEG)
-    )
+        # Mask for valid lat/lon AND valid brightness temps for 36 GHz
+        mask_36 = (
+            (lat_36 >= center_lat - PLOT_RADIUS_DEG) & (lat_36 <= center_lat + PLOT_RADIUS_DEG) &
+            (lon_36 >= center_lon - PLOT_RADIUS_DEG) & (lon_36 <= center_lon + PLOT_RADIUS_DEG) &
+            (tb_36v != MISSING_FLOAT) &
+            (tb_36h != MISSING_FLOAT)
+        )
+    
+    elif file_type['name'] == 'GPMGMI':
+        # Mask for valid lat/lon AND valid brightness temps for 89
+        mask_89a = (
+            (lat_89a >= center_lat - PLOT_RADIUS_DEG) & (lat_89a <= center_lat + PLOT_RADIUS_DEG) &
+            (lon_89a >= center_lon - PLOT_RADIUS_DEG) & (lon_89a <= center_lon + PLOT_RADIUS_DEG) &
+            (tb_89av != MISSING_FLOAT) &
+            (tb_89ah != MISSING_FLOAT)
+        )
 
-    target_lon_min = center_lon - PLOT_RADIUS_DEG
-    target_lon_max = center_lon + PLOT_RADIUS_DEG
-    target_lat_min = center_lat - PLOT_RADIUS_DEG
-    target_lat_max = center_lat + PLOT_RADIUS_DEG
+        # Mask for valid lat/lon AND valid brightness temps for 36 GHz
+        mask_36 = (
+            (lat_36 >= center_lat - PLOT_RADIUS_DEG) & (lat_36 <= center_lat + PLOT_RADIUS_DEG) &
+            (lon_36 >= center_lon - PLOT_RADIUS_DEG) & (lon_36 <= center_lon + PLOT_RADIUS_DEG) &
+            (tb_36v != MISSING_FLOAT) &
+            (tb_36h != MISSING_FLOAT)
+        )
+
 
     for freq in [89, 36]:
 
         if freq == 89:
             freq_str = '89 GHz'
-            # Concatenate lat/lon
-            lat_all = np.concatenate([lat_89a[mask_89a], lat_89b[mask_89b]])
-            lon_all = np.concatenate([lon_89a[mask_89a], lon_89b[mask_89b]])
+            if second_89_horn:
+                # Concatenate lat/lon
+                lat_all = np.concatenate([lat_89a[mask_89a], lat_89b[mask_89b]])
+                lon_all = np.concatenate([lon_89a[mask_89a], lon_89b[mask_89b]])
 
-            # Concatenate PCT and TBs
-            pct_all = np.concatenate([pct_89a[mask_89a], pct_89b[mask_89b]])
-            tb_v_all = np.concatenate([tb_89av[mask_89a], tb_89bv[mask_89b]])
-            tb_h_all = np.concatenate([tb_89ah[mask_89a], tb_89bh[mask_89b]])
+                # Concatenate PCT and TBs
+                pct_all = np.concatenate([pct_89a[mask_89a], pct_89b[mask_89b]])
+                tb_v_all = np.concatenate([tb_89av[mask_89a], tb_89bv[mask_89b]])
+                tb_h_all = np.concatenate([tb_89ah[mask_89a], tb_89bh[mask_89b]])
+            else:
+                lat_all = lat_89a[mask_89a]
+                lon_all = lon_89a[mask_89a]
+                pct_all = pct_89a[mask_89a]
+                tb_v_all = tb_89av[mask_89a]
+                tb_h_all = tb_89ah[mask_89a]
 
             pct_min_temp = PCT_MIN89
             pct_max_temp = PCT_MAX89
@@ -669,7 +857,11 @@ def plot_pct(file_path, center_lat, center_lon):
             tbh_max_temp = TBH_MAX89
         
         elif freq == 36:
-            freq_str = '36.5 GHz'
+            if file_type['name'] == 'GCOMW1_AMSR2':
+                freq_str = '36.5 GHz'
+            elif file_type['name'] == 'GPMGMI':
+                freq_str = '36.64 GHz'
+            
             lat_all = lat_36[mask_36]
             lon_all = lon_36[mask_36]
             
@@ -802,7 +994,8 @@ def plot_pct(file_path, center_lat, center_lon):
             interpolation='none'
         )
 
-        plt.title(f"PCT {freq_str} - GCOM-W1 (JAXA)\n{scan_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        short_text = file_type['short']
+        plt.title(f"PCT {freq_str} - {short_text}\n{scan_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
         plt.tight_layout()
     
