@@ -66,6 +66,9 @@
 
 
 ####### CONFIG
+# For Measure Tool, display angle off of North (0 deg = N)
+DISPLAY_MEASURE_ANGLE = True
+
 # Process the wind radii data from TCGEN ensembles
 #PROCESS_TCGEN_WIND_RADII = True
 PROCESS_TCGEN_WIND_RADII = False
@@ -101,18 +104,18 @@ SST_NC_PATH = 'netcdf/20241005000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLO
 
 # Auto download overwrites the paths given above:
 # Download latest OHC on startup
-AUTO_DOWNLOAD_LATEST_OHC = False
+AUTO_DOWNLOAD_LATEST_OHC = True
 # Download latest SST on startup
-AUTO_DOWNLOAD_LATEST_SST = False
+AUTO_DOWNLOAD_LATEST_SST = True
 
 FINE_SST_BINS = False
 # load netcdf files (regardless of display)
-LOAD_NETCDF = False
+LOAD_NETCDF = True
 # default netcdf display?
 DISPLAY_NETCDF = None
 #DISPLAY_NETCDF = 'd26'
 #DISPLAY_NETCDF = 'tchp'
-#DISPLAY_NETCDF = 'ohc'
+DISPLAY_NETCDF = 'ohc'
 #DISPLAY_NETCDF = 'iso26C'
 #DISPLAY_NETCDF = 'sst'
 # Set to True or False to bin the NETCDF data
@@ -916,7 +919,7 @@ regional_models = ['HFSA', 'HFSB', 'HFAI', 'HFA2', 'HFBI', 'HFB2',
                    'HMON', 'HMNI', 'HMN2',
                    'HWRF', 'HWF2', 'HWFI', 'HWFI', 'BEST', 'TCVITALS']
 official_models = ['OFCI', 'OFCL', 'BEST', 'TCVITALS']
-consensus_models = ['ICON', 'IVCN', 'RVCN', 'NNIC', 'NNIB', 'BEST', 'TCVITALS']
+consensus_models = ['HCCA', 'ICON', 'IVCN', 'RVCN', 'NNIC', 'NNIB', 'BEST', 'TCVITALS']
 
 # atcf models (don't include tcvitals, best track as that messes with statistics)
 gefs_atcf_members = [
@@ -6062,6 +6065,10 @@ class MeasureTool:
             offset_x_deg = offset_degrees_x * np.cos(np.radians(angle + 90))
             offset_y_deg = offset_degrees_y * np.sin(np.radians(angle + 90))
 
+            angle_north = (90 - angle) % 360
+            if DISPLAY_MEASURE_ANGLE:
+                measure_angle_text = f", {int(round(angle_north))}°"
+
             # Adjust angle to ensure text is always right-side up
             if angle > 90 or angle < -90:
                 angle += 180
@@ -6069,7 +6076,7 @@ class MeasureTool:
                 offset_y_deg = -offset_y_deg
 
             self.distance_text = App.ax.text(mid_point[0] + offset_x_deg, mid_point[1] + offset_y_deg,
-                                              f"{distance:.2f} NM", color='white', fontsize=12,
+                                              f"{distance:.2f} NM{measure_angle_text}", color='white', fontsize=12,
                                               ha='center', va='center', rotation=angle,
                                               bbox=dict(facecolor='black', alpha=0.5))
 
