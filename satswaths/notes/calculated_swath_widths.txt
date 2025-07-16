@@ -1,0 +1,14 @@
+Calculated swath widths from satellite L2B data (PMW)
+H and V polarization data were combined, and swath widths calculated from lat,lons using custom python code using alphashape + geod
+The L2B files were masked from -55. to +55 latitude and for the western hemisphere; swaths gets narrower near equator.
+
+GPM-CORE calculated swath widths for PMW:
+sample file: gmi/1B.GPM.GMI.TB2021.20250711-S111136-E124449.064522.V07B.HDF5
+89a GHz Min swath width: 999.9431148429529 km
+36 GHz Min swath width: 999.9431148429529 km
+
+GCOM-W1 calculated swath widths for PMW:
+sample file: amsr2/GW1AM2_202507070913_038D_L1SGBTBR_2220220.h5
+89a GHz Min swath width: 1601.8404619928 km
+89b GHz Min swath width: 1577.7232862928454 km
+36GHz Min swath width: 1600.398667534456 km
