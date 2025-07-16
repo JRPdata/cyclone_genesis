@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="description"
+        content="Satellite Swath Predictions for select satellites. Experimental! Uses interpolated 1-min trapezoidal swaths to simplify pass time calculations, providing only rough estimates."
+        ` />
+    <meta http-equiv="refresh" content="21600"> <!-- 6 hours in seconds -->
+    <title>Sat. Swath Predictions</title>
+    <style>
+        body,
+        html,
+        #map {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100vh;
+            font-family: sans-serif;
+        }
+
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 4px;
+            max-height: 90vh;
+            overflow-y: auto;
+            z-index: 10;
+        }
+
+        #tooltip {
+            position: absolute;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            font-size: 20px;
+            padding: 8px;
+            border-radius: 4px;
+            z-index: 1000;
+            display: none;
+        }
+    </style>
+    <!-- MapLibre GL -->
+    <link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet" />
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.6.1/nouislider.min.css" rel="stylesheet" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.6.1/nouislider.min.js"></script>
+
+</head>
+
+<body>
+    <div id="controls">
+        <h3>
+            <center>Sat. Swaths</center>
+        </h3>
+        <hr>
+        <h3>
+            <center>! Experimental !</center>
+        </h3>
+        <hr>
+        <div style="font-family: sans-serif; max-width: 100%;">
+            <center>
+                <button id="btn-ws" style="width: 40%; padding: 8px;">WS</button>
+                <button id="btn-mw" style="width: 40%; padding: 8px;">MW</button>
+            </center>
+        </div>
+
+        <h3>
+            <center>Satellites</center>
+        </h3>
+        <div id="sat-list"></div>
+        <h3>Filter Time (UTC)</h3>
+        <div style="margin: 10px; font-family: sans-serif; max-width: 120px;">
+
+            <div style="margin-bottom: 12px;">
+                <label style="display: block; margin-bottom: 4px;">Start:</label>
+                <input type="date" id="start-date" style="width: 100%; margin-bottom: 4px;">
+                <input type="time" id="start-time" step="60" style="width: 100%;">
+            </div>
+
+            <div style="margin-bottom: 12px;">
+                <label style="display: block; margin-bottom: 4px;">End:</label>
+                <input type="date" id="end-date" style="width: 100%; margin-bottom: 4px;">
+                <input type="time" id="end-time" step="60" style="width: 100%;">
+            </div>
+
+            <button id="update-time" style="width: 100%; padding: 8px;">Update Time</button>
+
+        </div>
+        <h4>
+            <center>Swath times<br />are approximate</center>
+        </h4>
+        <h4>
+            <center>Press 'n' to<br />cycle tooltip</center>
+        </h4>
+
+    </div>
+
+    <div id="map"></div>
+    <div id="tooltip"></div>
+
+    <!-- Load libraries -->
+    <script src="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js"></script>
+    <script src="https://unpkg.com/deck.gl@^8.8.0/dist.min.js"></script>
+    <script src="https://unpkg.com/@deck.gl/mapbox@8.8.0/dist.min.js"></script>
+
+
+
+    <script>
+        const { DeckGL, GeoJsonLayer } = deck;
+
+        // Initialize MapLibre GL map
+
+        // transparency out of 255
+        const default_transparency = 25;
+        // default time period (now (UTC) +- window hours)
+        const defaultWindowHours = 6;
+        // Allow setting of windowHoursBefore via url, i.e. ?windowHoursBefore=6&windowHoursAfter=6
+        
+        // Get query params
+        const params = new URLSearchParams(window.location.search);
+
+        // Safely parse the parameters
+        function parseWindowParam(key) {
+            const val = parseFloat(params.get(key));
+            return (isFinite(val) && val >= 0) ? val : null;
+        }
+
+        const windowHoursBefore = parseWindowParam("windowHoursBefore") ?? defaultWindowHours;
+        const windowHoursAfter  = parseWindowParam("windowHoursAfter")  ?? defaultWindowHours;
+
+
+        let swathData = null;
+        let mapReady = false;
+        let dataReady = false;
+        let overlay = null;
+
+        // Global variables
+        let satelliteNames = new Set();
+        const defaultSelected = new Set(['GCOM-W1', 'GPM-CORE']);
+        let selectedSats = new Set(defaultSelected);
+
+        // Cycle through swaths with 'n' key
+        let lastHoveredObjects = [];
+        let hoveredIndex = 0;
+        let mouseX = 0;
+        let mouseY = 0;
+
+
+        // mouse move debounce
+        const mousemove_debounce_ms = 300
+        let moveTimeout = null;
+
+        // cycle through tooltip swaths
+        const handlePick = (e) => {
+            if (!e) return;
+
+            mouseX = e.offsetX;
+            mouseY = e.offsetY;
+
+            const deckInstance = overlay._deck;
+            const picks = deckInstance.pickMultipleObjects({
+                x: mouseX,
+                y: mouseY,
+                radius: 5,
+                depth: 10
+            });
+
+            if (picks.length > 0) {
+                lastHoveredObjects = picks;
+                hoveredIndex = 0;
+                showTooltip(picks[0]);
+            } else {
+                lastHoveredObjects = [];
+                hoveredIndex = 0;
+                hideTooltip();
+            }
+
+        };
+
+
+        /*
+        const map = new maplibregl.Map({
+            container: 'map',
+            style: {
+                version: 8,
+                sources: {
+                    osm: {
+                        type: 'raster',
+                        tiles: [
+                        'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png'
+                        ],
+                        tileSize: 256,
+                        attribution: '&copy; OpenStreetMap contributors'
+                    }
+                },
+                layers: [{
+                id: 'osm',
+                type: 'raster',
+                source: 'osm'
+                }]
+            },
+            center: [0, 0],
+            zoom: 2
+        });
+        */
+        // Use Carto for speed
+        const map = new maplibregl.Map({
+            container: 'map',
+            style: {
+                version: 8,
+                sources: {
+                    carto: {
+                        type: 'raster',
+                        tiles: [
+                            'https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
+                            'https://b.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
+                            'https://c.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png',
+                            'https://d.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png'
+                        ],
+                        tileSize: 256,
+                        attribution: '&copy; <a href="https://carto.com/">CARTO</a>'
+                    }
+                },
+                layers: [{
+                    id: 'carto',
+                    type: 'raster',
+                    source: 'carto'
+                }]
+
+            },
+            center: [0, 0],
+            zoom: 2
+        });
+
+        map.on('load', () => {
+
+            mapReady = true;
+            if (dataReady) {
+                createDeckLayer();
+            }
+
+        });
+
+        // add zoom control buttons
+        map.addControl(new maplibregl.NavigationControl());
+
+        // optionally ensure interaction is enabled
+        map.scrollZoom.enable();
+        map.dragPan.enable();
+        map.doubleClickZoom.enable();
+
+        // Fetch GeoJSON.gz and load swaths
+        fetch('swaths.geojson.gz')
+            .then(response => response.json())
+            .catch(() => {
+                // If the server serves with gzip header, this works; else fallback to pako decompress
+                return fetch('swaths.geojson.gz')
+                    .then(res => res.arrayBuffer())
+                    .then(buffer => {
+                        return new Promise((resolve, reject) => {
+                            // Lazy load pako for gzip decompress
+                            const script = document.createElement('script');
+                            script.onload = () => {
+                                try {
+                                    const decompressed = pako.ungzip(new Uint8Array(buffer), { to: 'string' });
+                                    resolve(JSON.parse(decompressed));
+                                } catch (e) {
+                                    reject(e);
+                                }
+                            };
+                            script.src = 'https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js';
+                            document.head.appendChild(script);
+                        });
+                    });
+            })
+            .then(data => {
+                swathData = data;
+                dataReady = true;
+                initApp();
+            })
+            .catch(err => {
+                alert('Failed to load swaths.geojson.gz: ' + err.message);
+            });
+
+        function initApp() {
+            // Extract unique satellite names for controls
+            swathData.features.forEach(f => satelliteNames.add(f.properties.satellite_name));
+            satelliteNames.forEach(sat => selectedSats.add(sat));
+
+            renderSatelliteControls();
+
+            if (mapReady) {
+                createDeckLayer();
+            }
+
+        }
+
+        function renderSatelliteControls() {
+            const container = document.getElementById('sat-list');
+            container.innerHTML = '';
+
+            // Set initial default selected satellites
+            selectedSats.clear();
+
+            satelliteNames.forEach(sat => {
+                const id = `chk_${sat.replace(/\W/g, '')}`;
+                const isChecked = defaultSelected.has(sat);
+
+                if (isChecked) {
+                    selectedSats.add(sat);
+                }
+
+                const div = document.createElement('div');
+                div.innerHTML = `
+            <label><input type="checkbox" id="${id}" ${isChecked ? 'checked' : ''}> ${sat}</label>
+            `;
+                container.appendChild(div);
+
+                document.getElementById(id).addEventListener('change', e => {
+                    if (e.target.checked) {
+                        selectedSats.add(sat);
+                    } else {
+                        selectedSats.delete(sat);
+                    }
+                    if (swathData) {
+                        createDeckLayer();
+                    }
+                });
+            });
+        }
+
+        // WS and MW button code to select groups of satellites
+        document.getElementById('btn-ws').addEventListener('click', () => {
+            const wsSats = ['METOP-B', 'METOP-C', 'HAIYANG-2B', 'HAIYANG-2C', 'OCEANSAT-3'];
+            const mwSats = ['GPM-CORE', 'GCOM-W1'];
+
+            selectedSats.clear();
+            wsSats.forEach(sat => {
+                selectedSats.add(sat);
+                const id = `chk_${sat.replace(/\W/g, '')}`;
+                const el = document.getElementById(id);
+                if (el) el.checked = true;
+            });
+
+            mwSats.forEach(sat => {
+                const id = `chk_${sat.replace(/\W/g, '')}`;
+                const el = document.getElementById(id);
+                if (el) el.checked = false;
+            });
+
+            createDeckLayer();
+        });
+
+        document.getElementById('btn-mw').addEventListener('click', () => {
+            const mwSats = ['GPM-CORE', 'GCOM-W1'];
+            const wsSats = ['METOP-B', 'METOP-C', 'HAIYANG-2B', 'HAIYANG-2C', 'OCEANSAT-3'];
+
+            selectedSats.clear();
+            mwSats.forEach(sat => {
+                selectedSats.add(sat);
+                const id = `chk_${sat.replace(/\W/g, '')}`;
+                const el = document.getElementById(id);
+                if (el) el.checked = true;
+            });
+
+            wsSats.forEach(sat => {
+                const id = `chk_${sat.replace(/\W/g, '')}`;
+                const el = document.getElementById(id);
+                if (el) el.checked = false;
+            });
+
+            createDeckLayer();
+        });
+
+        // tooltip function (needed) to cycle through tooltips)
+        function showTooltip(info) {
+            const { x, y, object } = info;
+            if (!object) return;
+
+            const props = object.properties;
+            tooltip.style.display = 'block';
+            tooltip.style.left = `${x + 10}px`;
+            tooltip.style.top = `${y + 10}px`;
+            tooltip.innerHTML = `
+            <b>Satellite:</b> ${props.satellite_name}<br/>
+            <b>Pass:</b> ${props.ascending ? 'Ascending' : 'Descending'}<br/>
+            <b>Time:</b> ${props.valid_time}<br/>
+            <i>Swath ${hoveredIndex + 1} of ${lastHoveredObjects.length}</i>
+        `;
+        }
+
+        function hideTooltip() {
+            tooltip.style.display = 'none';
+        }
+
+
+
+        function debounce(func, delay) {
+            let timeoutId;
+            return function (...args) {
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => func.apply(this, args), delay);
+            };
+        }
+
+
+
+        function createDeckLayer() {
+
+            // Read current start/end time from the inputs
+            const startDateVal = document.getElementById('start-date').value;
+            const startTimeVal = document.getElementById('start-time').value;
+            const endDateVal = document.getElementById('end-date').value;
+            const endTimeVal = document.getElementById('end-time').value;
+
+            let now;
+            let startTime;
+            let endTime;
+
+            if (!startDateVal || !startTimeVal || !endDateVal || !endTimeVal) {
+                console.warn("Time picker values missing, defaulting to now ± 1 hour");
+                now = new Date();
+                startTime = new Date(now.getTime() - windowHoursBefore * 3600 * 1000);
+                endTime = new Date(now.getTime() + windowHoursAfter * 3600 * 1000);
+
+                //filterAndUpdateDeckLayer(startTime.getTime(), endTime.getTime());
+                //eturn;
+            } else {
+                startTime = new Date(`${startDateVal}T${startTimeVal}:00Z`);
+                endTime = new Date(`${endDateVal}T${endTimeVal}:00Z`);
+            }
+
+            if (isNaN(startTime) || isNaN(endTime)) {
+                console.error("Invalid time picker values, using default");
+                now = new Date();
+                startTime = new Date(now.getTime() - windowHoursBefore * 3600 * 1000);
+                endTime = new Date(now.getTime() + windowHoursAfter * 3600 * 1000);
+            }
+
+
+
+            const filtered = {
+                type: 'FeatureCollection',
+                features: swathData.features.filter(f => {
+                    const satOk = selectedSats.has(f.properties.satellite_name);
+                    const timeStr = f.properties.valid_time;
+                    const ft = new Date(timeStr);
+
+                    if (isNaN(ft)) {
+                        console.warn("Invalid time string in feature:", f);
+                        return false;
+                    }
+
+                    const timeOk = ft >= startTime && ft <= endTime;
+                    return satOk && timeOk;
+                }),
+
+            };
+
+
+            // Set initial values
+            document.getElementById('start-date').value = startTime.toISOString().slice(0, 10);
+            document.getElementById('start-time').value = startTime.toISOString().slice(11, 16);
+
+            document.getElementById('end-date').value = endTime.toISOString().slice(0, 10);
+            document.getElementById('end-time').value = endTime.toISOString().slice(11, 16);
+
+            // On "Update" button click
+            document.getElementById('update-time').addEventListener('click', () => {
+                const sd = document.getElementById('start-date').value;
+                const st = document.getElementById('start-time').value;
+                const ed = document.getElementById('end-date').value;
+                const et = document.getElementById('end-time').value;
+
+                const start = new Date(`${sd}T${st}Z`);
+                const end = new Date(`${ed}T${et}Z`);
+
+                if (isNaN(start) || isNaN(end)) {
+                    alert("Invalid time selection.");
+                    return;
+                }
+
+                filterAndUpdateDeckLayer(start, end);
+            });
+
+
+
+            function filterAndUpdateDeckLayer(startMs, endMs) {
+                const filtered = {
+                    type: "FeatureCollection",
+                    features: swathData.features.filter(f => {
+                        const ft = new Date(f.properties.valid_time).getTime();
+                        // Also filter by selected satellites
+                        return (
+                            ft >= startMs &&
+                            ft <= endMs &&
+                            selectedSats.has(f.properties.satellite_name)
+                        );
+                    }),
+                };
+
+                overlay.setProps({
+                    layers: [createSwathLayer(filtered)]
+                });
+
+            }
+
+            if (overlay) {
+                overlay.setProps({
+                    layers: [createSwathLayer(filtered)]
+                });
+
+            } else {
+                overlay = new deck.MapboxOverlay({
+                    layers: [createSwathLayer(filtered)]
+                });
+
+
+
+                const mapElement = document.getElementById('map');
+
+
+                mapElement.addEventListener('mousemove', (e) => {
+                    // Clear previous timeout
+                    clearTimeout(moveTimeout);
+
+                    // Schedule handlePick only if no movement for 200ms
+                    moveTimeout = setTimeout(() => {
+                        handlePick(e)
+                    }, mousemove_debounce_ms);
+                });
+
+
+                // Cycle tooltip swaths on 'n' key
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'n' && lastHoveredObjects.length > 1) {
+                        e.preventDefault();
+                        hoveredIndex = (hoveredIndex + 1) % lastHoveredObjects.length;
+                        showTooltip(lastHoveredObjects[hoveredIndex]);
+                    }
+                });
+
+            }
+
+            filterAndUpdateDeckLayer(
+                startTime,
+                endTime
+            );
+
+            map.addControl(overlay)
+        }
+
+        function createSwathLayer(data) {
+            return new deck.GeoJsonLayer({
+                id: 'swaths',
+                data: data,
+                filled: true,
+                stroked: true,
+                getFillColor: [255, 0, 0, default_transparency],   // bright red fill with some transparency
+                getLineColor: [0, 0, 0, 255],     // black outline
+                lineWidthMinPixels: 1,
+                pickable: true
+            });
+        }
+
+
+    </script>
+</body>
+
+</html>

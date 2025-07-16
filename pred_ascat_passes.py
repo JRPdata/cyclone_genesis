@@ -2,15 +2,14 @@
 # EXPERIMENTAL!
 # Demo: http://jrpdata.free.nf/ascatpred
 # Hover/click/touch over global map to get storm's ASCAT predictions
-# Only covers METOP-B, METOP-C
+# Covers METOP-B, METOP-C, HY-2B, HY-2C, OCEANSAT-3
 
 # The credit for the main idea or method for swath prediction is owed to STAR/NESDIS/NOAA's ASCAT pass predictions page: https://manati.star.nesdis.noaa.gov/datasets/SatellitePrediction.php
 # Uses the same numbers for METOP-B and METOP-C for swath widths and nadir blind range
-# Does not include other scatterometers from China, India (KY series, and Oceansat); (need the TLEs, and similar measures of nadir and swath)
-# There are external (unofficial) sources for such TLEs this but they have not been tested
+# HY-2B, HY-2C, OCEANSAT-3 all have the same swath widths (1800 km in diameter, we use half this value as a radius)
 # There are some limitations such as track accuracy (especially further out) and the use of the RMW to calculate a successful "pass", which may be inaccurate or not the desired measured for depending on the use case. Suggested alterations include, multiplying the interpolated RMW by a constant factor to get a larger wind field (more possible misses), use a different parameter, or generate a radius of interest in a heuristic using existing parameters and/or climatology?
 
-# Updated TLEs are downloaded each run (from EUMETSAT directly)
+# Updated TLEs are downloaded each run (from EUMETSAT directly for METOP-B,C, rest from celestrak.org)
 
 # auto_update_cyclones_tcgen.py uses data from GEFS genesis tracker (NCEP) to generate tracks into a db
 # Some tracks may be missing from corresponind GEFS genesis tracks, especially in cases of merges, as we use a 24 hour cutoff and (in a very ad-hoc way) handle merging tropical cyclones
@@ -43,7 +42,7 @@ import requests
 import sqlite3
 import warnings
 
-# Predict ASCAT passes (METOP-B, METOP-C) for TCs (including genesis)
+# Predict ASCAT passes (METOP-B, METOP-C, HY-2B, HY-2C, OCEANSAT-3) for TCs (including genesis)
 # Uses RMW from forecast track from tc genesis models (NCEP TC genesis tracker -> own database)
 
 # start_dt for passes is the beginning of the valid day (00Z) from the latest model
@@ -66,10 +65,13 @@ genesis_previous_selected = 'GEFS-TCGEN'
 model_member_name_for_prediction = 'GFSO'
 
 # save pass images
-save_passes = True
+save_swath_images = False
 save_ascat_swath_images_folder = './ascat_swaths'
+save_model_passes = True
 save_model_passes_folder = './model_ascat_passes'
 
+# disable swath chart plotting
+do_plot_swath_chart = False
 # show swaths chart (ascat swaths)
 show_swath_chart = False
 # show model pass predictions (each pass image)
@@ -80,14 +82,20 @@ if model_cycle_str is not None:
 else:
     model_cycle = None
 
-# Define swath information for each satellite (m) (nadir blind range on each side and swath width in km)
+# Define swath information for each satellite (m) (nadir blind range on each side and swath width from nadir (radius) in km)
 swath_info = {
     "METOP-B": {"blind_range": 336000, "swath_width": 550000},
     "METOP-C": {"blind_range": 336000, "swath_width": 550000},
+    "HAIYANG-2B": {"blind_range": 0, "swath_width": 900000},
+    "HAIYANG-2C": {"blind_range": 0, "swath_width": 900000},
+    "OCEANSAT-3": {"blind_range": 0, "swath_width": 900000},
 }
 
 region = 'GLOBAL'
 #region = 'TROPICS'
+
+# used to update images (force reload on stale) in browser (to be replaced)
+candidate_init_time_dt = datetime.now()
 
 # Define the region you want to plot (e.g., Europe)
 if region == 'TROPICS':
@@ -100,7 +108,10 @@ elif region == 'GLOBAL':
 
 urls = {
     'METOP-B': 'https://service.eumetsat.int/tle/data_out/latest_m01_tle.txt',
-    'METOP-C': 'https://service.eumetsat.int/tle/data_out/latest_m03_tle.txt'
+    'METOP-C': 'https://service.eumetsat.int/tle/data_out/latest_m03_tle.txt',
+    'HAIYANG-2B': 'https://celestrak.org/NORAD/elements/gp.php?CATNR=43655&FORMAT=2LE',
+    'HAIYANG-2C': 'https://celestrak.org/NORAD/elements/gp.php?CATNR=46469&FORMAT=2LE',
+    'OCEANSAT-3': 'https://celestrak.org/NORAD/elements/gp.php?CATNR=54361&FORMAT=2LE'
 }
 
 # tcgen data (processed from NCEP/NOAA, ECMWF) by model and storm
@@ -182,15 +193,20 @@ def in_bounds(lat, lon):
         return False
 
 def calculate_swaths_and_plot(nadir_paths, start_dt, label_interval=30, opacity=0.3):
-    fig, ax = plt.subplots(figsize=(20, 10), subplot_kw={'projection': ccrs.PlateCarree()})
+    global do_plot_swath_chart
+    if do_plot_swath_chart:
+        fig, ax = plt.subplots(figsize=(20, 10), subplot_kw={'projection': ccrs.PlateCarree()})
 
-    # Set the extent of the map
-    ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
+        # Set the extent of the map
+        ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
 
-    ax.add_feature(cfeature.LAND, linestyle='-', edgecolor='black')
-    ax.gridlines(draw_labels=True, xlocs=np.arange(lon_min, lon_max + 5, 5), ylocs=np.arange(lat_min, lat_max + 5, 5))
+        ax.add_feature(cfeature.LAND, linestyle='-', edgecolor='black')
+        ax.gridlines(draw_labels=True, xlocs=np.arange(lon_min, lon_max + 5, 5), ylocs=np.arange(lat_min, lat_max + 5, 5))
+    else:
+        # placeholder
+        ax = None
 
-    colors = ['blue', 'purple', 'red', 'orange']
+    colors = ['blue', 'purple', 'red', 'orange', 'yellow', 'green', 'pink', 'turquoise', 'lavender', 'brown', 'black', 'teal', 'magenta', 'lime', 'gray', 'amber']
     added_labels = set()
     gdfs = []
     for i, (satellite_name, path) in enumerate(nadir_paths.items()):
@@ -207,45 +223,48 @@ def calculate_swaths_and_plot(nadir_paths, start_dt, label_interval=30, opacity=
             color = colors[color_index]
             label = f"{satellite_name} ({segment_type})"
 
-            # Create a shapely LineString from the segment path
-            line_string = LineString(zip(segment_lons, segment_lats))
-            try:
-                fixed_line = antimeridian.fix_line_string(line_string)
-            except Exception:
-                print("line_string, type:", type(line_string))
-                print("len lons,lats:", len(segment_lons), len(segment_lats))
-                print(line_string.coords[:])
-                print(traceback.format_exc())
+            if do_plot_swath_chart:
+                # Create a shapely LineString from the segment path
+                line_string = LineString(zip(segment_lons, segment_lats))
+                try:
+                    fixed_line = antimeridian.fix_line_string(line_string)
+                except Exception:
+                    print("line_string, type:", type(line_string))
+                    print("len lons,lats:", len(segment_lons), len(segment_lats))
+                    print(line_string.coords[:])
+                    print(traceback.format_exc())
 
 
-            # Plot the fixed line(s)
-            plot_fixed_line(ax, fixed_line, color)
+                # Plot the fixed line(s)
+                plot_fixed_line(ax, fixed_line, color)
 
             # Shade the swath halves
             #shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swath_info[satellite_name], opacity)
             gdf = shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swath_info[satellite_name], opacity, j, segment_times, start_dt, segment_type)
             gdfs.append(gdf)
 
-            # Add a label for the satellite's ascending/descending pass
-            if label not in added_labels:
-                added_labels.add(label)
-                ax.plot([], [], label=label, color=color)
+            if do_plot_swath_chart:
+                # Add a label for the satellite's ascending/descending pass
+                if label not in added_labels:
+                    added_labels.add(label)
+                    ax.plot([], [], label=label, color=color)
 
-            # Annotate pass times
-            annotate_pass_times(ax, segment_times, segment_lats, segment_lons, start_dt, color, last_label_time, label_interval)
+                # Annotate pass times
+                annotate_pass_times(ax, segment_times, segment_lats, segment_lons, start_dt, color, last_label_time, label_interval)
 
-    ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=2)
-    plt.title(f'Satellite Nadir Paths with ASCAT swaths (Ascending and Descending)\nRelative to {start_dt}')
-    timestamp = start_dt.strftime("%Y%m%d_%H_%M_%S")
+    if do_plot_swath_chart:
+        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=2)
+        plt.title(f'Satellite Nadir Paths with ASCAT swaths (Ascending and Descending)\nRelative to {start_dt}')
+        timestamp = start_dt.strftime("%Y%m%d_%H_%M_%S")
 
-    if save_passes:
-        file_name = os.path.join(save_ascat_swath_images_folder, f'ascat-{region}-{timestamp}.png')
-        plt.savefig(file_name, bbox_inches='tight')
+        if save_swath_images:
+            file_name = os.path.join(save_ascat_swath_images_folder, f'ascat-{region}-{timestamp}.png')
+            plt.savefig(file_name, bbox_inches='tight')
 
-    if show_swath_chart:
-        plt.show()
-    else:
-        plt.close(fig)
+        if show_swath_chart:
+            plt.show()
+        else:
+            plt.close(fig)
 
     return gdfs
 
@@ -272,17 +291,23 @@ def is_counterclockwise(points):
 #def shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swath_details, opacity):
 def shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swath_details, opacity, j, segment_times, start_dt, segment_type):
     """Shades the swath halves around the nadir path."""
+    global do_plot_swath_chart
     blind_range = swath_details["blind_range"]
     swath_width = swath_details["swath_width"]
 
-    colors = ['blue', 'purple', 'red', 'orange']
+    has_blind_range = True
+    if blind_range == 0:
+        # hy/oceansat circular swaths (no blind range)
+        has_blind_range = False
+
+    colors = ['blue', 'purple', 'red', 'orange', 'yellow', 'green', 'pink', 'turquoise', 'lavender', 'brown', 'black', 'teal', 'magenta', 'lime', 'gray', 'amber']
     color = colors[color_index % len(colors)]
 
     geod = Geodesic.WGS84
 
     # for the gdf
     rows = []
-
+    
     # Loop through each segment starting from the second point
     for i in range(1, len(segment_lons)):
         # Current point
@@ -297,31 +322,47 @@ def shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swa
 
         std_unroll_lats = (Geodesic.STANDARD | Geodesic.LONG_UNROLL)
 
-        # Calculate left and right swaths
-        left_swath_1 = geod.Direct(lat0, lon0, azimuth - 90, blind_range, outmask = std_unroll_lats)
-        left_swath_2 = geod.Direct(lat0, lon0, azimuth - 90, blind_range + swath_width, outmask = std_unroll_lats)
-        left_swath_3 = geod.Direct(lat1, lon1, azimuth - 90, blind_range, outmask = std_unroll_lats)
-        left_swath_4 = geod.Direct(lat1, lon1, azimuth - 90, blind_range + swath_width, outmask = std_unroll_lats)
+        if has_blind_range:
+            # Calculate left and right swaths
+            left_swath_1 = geod.Direct(lat0, lon0, azimuth - 90, blind_range, outmask = std_unroll_lats)
+            left_swath_2 = geod.Direct(lat0, lon0, azimuth - 90, blind_range + swath_width, outmask = std_unroll_lats)
+            left_swath_3 = geod.Direct(lat1, lon1, azimuth - 90, blind_range, outmask = std_unroll_lats)
+            left_swath_4 = geod.Direct(lat1, lon1, azimuth - 90, blind_range + swath_width, outmask = std_unroll_lats)
 
-        right_swath_1 = geod.Direct(lat0, lon0, azimuth + 90, blind_range, outmask = std_unroll_lats)
-        right_swath_2 = geod.Direct(lat0, lon0, azimuth + 90, blind_range + swath_width, outmask = std_unroll_lats)
-        right_swath_3 = geod.Direct(lat1, lon1, azimuth + 90, blind_range, outmask = std_unroll_lats)
-        right_swath_4 = geod.Direct(lat1, lon1, azimuth + 90, blind_range + swath_width, outmask = std_unroll_lats)
+            right_swath_1 = geod.Direct(lat0, lon0, azimuth + 90, blind_range, outmask = std_unroll_lats)
+            right_swath_2 = geod.Direct(lat0, lon0, azimuth + 90, blind_range + swath_width, outmask = std_unroll_lats)
+            right_swath_3 = geod.Direct(lat1, lon1, azimuth + 90, blind_range, outmask = std_unroll_lats)
+            right_swath_4 = geod.Direct(lat1, lon1, azimuth + 90, blind_range + swath_width, outmask = std_unroll_lats)
+        else:
+            # (left_swath == both swaths to simplify var names)
+            left_swath_1 = geod.Direct(lat0, lon0, azimuth + 90, swath_width, outmask = std_unroll_lats)
+            left_swath_2 = geod.Direct(lat0, lon0, azimuth - 90, swath_width, outmask = std_unroll_lats)
+            left_swath_3 = geod.Direct(lat1, lon1, azimuth + 90, swath_width, outmask = std_unroll_lats)
+            left_swath_4 = geod.Direct(lat1, lon1, azimuth - 90, swath_width, outmask = std_unroll_lats)
 
-        left_points = [
-            (left_swath_1['lon2'], left_swath_1['lat2']),
-            (left_swath_2['lon2'], left_swath_2['lat2']),
-            (left_swath_4['lon2'], left_swath_4['lat2']),
-            (left_swath_3['lon2'], left_swath_3['lat2']),
-            (left_swath_1['lon2'], left_swath_1['lat2']),
-        ]
-        right_points = [
-            (right_swath_1['lon2'], right_swath_1['lat2']),
-            (right_swath_2['lon2'], right_swath_2['lat2']),
-            (right_swath_4['lon2'], right_swath_4['lat2']),
-            (right_swath_3['lon2'], right_swath_3['lat2']),
-            (right_swath_1['lon2'], right_swath_1['lat2']),
-        ]
+        if has_blind_range:
+            left_points = [
+                (left_swath_1['lon2'], left_swath_1['lat2']),
+                (left_swath_2['lon2'], left_swath_2['lat2']),
+                (left_swath_4['lon2'], left_swath_4['lat2']),
+                (left_swath_3['lon2'], left_swath_3['lat2']),
+                (left_swath_1['lon2'], left_swath_1['lat2']),
+            ]
+            right_points = [
+                (right_swath_1['lon2'], right_swath_1['lat2']),
+                (right_swath_2['lon2'], right_swath_2['lat2']),
+                (right_swath_4['lon2'], right_swath_4['lat2']),
+                (right_swath_3['lon2'], right_swath_3['lat2']),
+                (right_swath_1['lon2'], right_swath_1['lat2']),
+            ]
+        else:
+            left_points = [
+                (left_swath_1['lon2'], left_swath_1['lat2']),
+                (left_swath_2['lon2'], left_swath_2['lat2']),
+                (left_swath_4['lon2'], left_swath_4['lat2']),
+                (left_swath_3['lon2'], left_swath_3['lat2']),
+                (left_swath_1['lon2'], left_swath_1['lat2']),
+            ]
 
         # booleans are just for commentary to understand flow
         #did_reverse_left = False
@@ -329,13 +370,15 @@ def shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swa
             #did_reverse_left = True
             left_points.reverse()
 
-        #did_reverse_right = False
-        if not is_counterclockwise(right_points):
-            #did_reverse_right = True
-            right_points.reverse()
+        if has_blind_range:
+            #did_reverse_right = False
+            if not is_counterclockwise(right_points):
+                #did_reverse_right = True
+                right_points.reverse()
 
         left_polygon = Polygon(left_points)
-        right_polygon = Polygon(right_points)
+        if has_blind_range:
+            right_polygon = Polygon(right_points)
 
         # Fix the polygon for antimeridian crossing
 
@@ -368,7 +411,8 @@ def shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swa
             # Filter warnings to catch only those related to winding
             warnings.simplefilter("always")  # Enable all warnings
             try:
-                fixed_right_polygon = antimeridian.fix_polygon(right_polygon)
+                if has_blind_range:
+                    fixed_right_polygon = antimeridian.fix_polygon(right_polygon)
             except:
                 print("right_polygon, type:", type(right_polygon))
                 print("right_polygon.exterior.coords:")
@@ -388,7 +432,8 @@ def shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swa
         # Plot the swaths
         if isinstance(fixed_left_polygon, MultiPolygon):
             for poly_num, poly in enumerate(fixed_left_polygon.geoms):
-                ax.add_patch(plt.Polygon(list(poly.exterior.coords), color=color, alpha=opacity))
+                if do_plot_swath_chart:
+                    ax.add_patch(plt.Polygon(list(poly.exterior.coords), color=color, alpha=opacity))
                 rows.append({
                     'interp_id': int((segment_times[i] - start_dt).total_seconds()),
                     'valid_time': segment_times[i],
@@ -400,7 +445,8 @@ def shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swa
                     'geometry': poly
                 })
         else:
-            ax.add_patch(plt.Polygon(list(fixed_left_polygon.exterior.coords), color=color, alpha=opacity))
+            if do_plot_swath_chart:
+                ax.add_patch(plt.Polygon(list(fixed_left_polygon.exterior.coords), color=color, alpha=opacity))
             rows.append({
                 'interp_id': int((segment_times[i] - start_dt).total_seconds()),
                 'valid_time': segment_times[i],
@@ -412,10 +458,24 @@ def shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swa
                 'geometry': fixed_left_polygon
             })
 
-
-        if isinstance(fixed_right_polygon, MultiPolygon):
-            for poly_num, poly in enumerate(fixed_right_polygon.geoms):
-                ax.add_patch(plt.Polygon(list(poly.exterior.coords), color=color, alpha=opacity))
+        if has_blind_range:
+            if isinstance(fixed_right_polygon, MultiPolygon):
+                for poly_num, poly in enumerate(fixed_right_polygon.geoms):
+                    if do_plot_swath_chart:
+                        ax.add_patch(plt.Polygon(list(poly.exterior.coords), color=color, alpha=opacity))
+                    rows.append({
+                        'interp_id': int((segment_times[i] - start_dt).total_seconds()),
+                        'valid_time': segment_times[i],
+                        'satellite_name': satellite_name,
+                        'pass_number': j,
+                        'ascending': 1 if segment_type == 'ascending' else 0,
+                        'swath_side': 1,
+                        'swath_side_poly_num': poly_num,
+                        'geometry': poly
+                    })
+            else:
+                if do_plot_swath_chart:
+                    ax.add_patch(plt.Polygon(list(fixed_right_polygon.exterior.coords), color=color, alpha=opacity))
                 rows.append({
                     'interp_id': int((segment_times[i] - start_dt).total_seconds()),
                     'valid_time': segment_times[i],
@@ -423,21 +483,9 @@ def shade_swath(color_index, ax, segment_lons, segment_lats, satellite_name, swa
                     'pass_number': j,
                     'ascending': 1 if segment_type == 'ascending' else 0,
                     'swath_side': 1,
-                    'swath_side_poly_num': poly_num,
-                    'geometry': poly
+                    'swath_side_poly_num': 0,
+                    'geometry': fixed_right_polygon
                 })
-        else:
-            ax.add_patch(plt.Polygon(list(fixed_right_polygon.exterior.coords), color=color, alpha=opacity))
-            rows.append({
-                'interp_id': int((segment_times[i] - start_dt).total_seconds()),
-                'valid_time': segment_times[i],
-                'satellite_name': satellite_name,
-                'pass_number': j,
-                'ascending': 1 if segment_type == 'ascending' else 0,
-                'swath_side': 1,
-                'swath_side_poly_num': 0,
-                'geometry': fixed_right_polygon
-            })
 
     # Create the GeoDataFrame from the collected rows
     gdf = gpd.GeoDataFrame(rows, columns=[
@@ -1959,7 +2007,7 @@ def plot_candidate_swath_matches(pruned_rows_by_gdf, swath_gdfs, candidate_gdf, 
         # Show the plot
         plt.grid()
 
-        if save_passes:
+        if save_model_passes:
             sat_file_str = sat_str.replace('-', '_').replace(' ', '_')
             file_name = f'pass_{start_basin}_lon_lat_{start_lon:.1f}_{start_lat:.1f}_{file_pass_valid_time_str}_{sat_file_str}.png'
             folder_path = os.path.join(save_model_passes_folder, subfolder_name)
@@ -1980,12 +2028,15 @@ def calculate_pass_predictions_and_plot():
     geod = Geodesic.WGS84  # Initialize the WGS84 model
 
     have_reset_once = False
-
+    global candidate_init_time_dt
+    global model_member_name_for_prediction
+    
     model_candidate_idx_list = []
     for candidate_idx in range(len(plotted_tc_candidates)):
         candidate_model_name = plotted_tc_candidates[candidate_idx][1][0]['model_name']
-        if candidate_model_name == 'GFSO':
+        if candidate_model_name == model_member_name_for_prediction:
             model_candidate_idx_list.append(candidate_idx)
+            candidate_init_time_dt = plotted_tc_candidates[candidate_idx][1][0]['init_time'].replace(tzinfo=pytz.utc)
 
     #num_candidates = len(model_candidate_idx_list)
 
@@ -2284,9 +2335,10 @@ with open(html_file_path, 'w') as f:
     f.write('<div id="global-map-frame" style="width: 55%; height: 90vh; overflow-x: auto; overflow-y: auto; float: left;">\n')
     f.write('<h1 style="font-size: 20px; text-align: center;">ASCAT Predictions for Tropical Cyclones</h1>\n')
     f.write('<h3 style="font-size: 18px; text-align: center;">EXPERIMENTAL! Includes genesis tracks.</h3>\n')
+    f.write('<h3 style="font-size: 18px; text-align: center;">METOP-B, METOP-C, HAIYANG-2B, HAIYANG-2C, OCEANSAT-3</h3>\n')
     f.write(f'<h2 style="font-size: 18px; text-align: center;">Predictions from {latest_pass}</h1>\n')
 
-    timestamp = start_dt.strftime("%Y%m%d%H%M%S%f")
+    timestamp = candidate_init_time_dt.strftime("%Y%m%d%H%M%S%f")
     url = f"global_image.png?_t={timestamp}"
 
     f.write(
