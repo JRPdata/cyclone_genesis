@@ -54,14 +54,15 @@ do_plot_swath_chart = False
 show_swath_chart = False
 
 # Define swath information for each satellite (m) (nadir blind range on each side and swath width from nadir (radius) in km)
+# For sattelites  except METOP-B,C this is the HALF swath width; for satellites with PMW we use the typical min. effective swath widths (36/89 GHz)
 swath_info = {
     "METOP-B": {"blind_range": 336000, "swath_width": 550000},
     "METOP-C": {"blind_range": 336000, "swath_width": 550000},
     "HAIYANG-2B": {"blind_range": 0, "swath_width": 900000},
     "HAIYANG-2C": {"blind_range": 0, "swath_width": 900000},
     "OCEANSAT-3": {"blind_range": 0, "swath_width": 900000},
-    "GPM-CORE": {"blind_range": 0, "swath_width": 442500},
-    "GCOM-W1": {"blind_range": 0, "swath_width": 725000}
+    "GPM-CORE": {"blind_range": 0, "swath_width": 500000}, # 442500 minimum (885km nominal, but using typical min. effective swath width for microwave imagery: 1000 km)
+    "GCOM-W1": {"blind_range": 0, "swath_width": 800000} # 725000 minimum (1450km nominal, but using typical min. effective swath width for microwave imagery: 1600 km)
 }
 
 region = 'GLOBAL'
