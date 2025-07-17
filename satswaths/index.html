@@ -47,6 +47,10 @@
     <link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet" />
     <link href="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.6.1/nouislider.min.css" rel="stylesheet" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/noUiSlider/15.6.1/nouislider.min.js"></script>
+    <!-- Flatpickr CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <!-- Flatpickr JS -->
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 
 </head>
 
@@ -72,23 +76,23 @@
         </h3>
         <div id="sat-list"></div>
         <h3>Filter Time (UTC)</h3>
-        <div style="margin: 10px; font-family: sans-serif; max-width: 120px;">
+            <div style="margin: 10px; font-family: sans-serif; max-width: 120px;">
 
-            <div style="margin-bottom: 12px;">
-                <label style="display: block; margin-bottom: 4px;">Start:</label>
-                <input type="date" id="start-date" style="width: 100%; margin-bottom: 4px;">
-                <input type="time" id="start-time" step="60" style="width: 100%;">
+                <div style="margin-bottom: 12px;">
+                    <label style="display: block; margin-bottom: 4px;">Start Date:</label>
+                    <input type="text" id="start-date" style="width: 100%; margin-bottom: 4px;" placeholder="YYYY-MM-DD">
+                    <input type="text" id="start-time" style="width: 100%;" placeholder="HH:MM">
+                </div>
+
+                <div style="margin-bottom: 12px;">
+                    <label style="display: block; margin-bottom: 4px;">End Date:</label>
+                    <input type="text" id="end-date" style="width: 100%; margin-bottom: 4px;" placeholder="YYYY-MM-DD">
+                    <input type="text" id="end-time" style="width: 100%;" placeholder="HH:MM">
+                </div>
+
+                <button id="update-time" style="width: 100%; padding: 8px;">Filter on Time</button>
+
             </div>
-
-            <div style="margin-bottom: 12px;">
-                <label style="display: block; margin-bottom: 4px;">End:</label>
-                <input type="date" id="end-date" style="width: 100%; margin-bottom: 4px;">
-                <input type="time" id="end-time" step="60" style="width: 100%;">
-            </div>
-
-            <button id="update-time" style="width: 100%; padding: 8px;">Update Time</button>
-
-        </div>
         <h4>
             <center>Swath times<br />are approximate</center>
             <hr/>
@@ -110,6 +114,33 @@
 
 
     <script>
+        // use 24 hour format
+        flatpickr("#start-date", {
+            dateFormat: "Y-m-d",
+            allowInput: true
+        });
+
+        flatpickr("#end-date", {
+            dateFormat: "Y-m-d",
+            allowInput: true
+        });
+
+        flatpickr("#start-time", {
+            enableTime: true,
+            noCalendar: true,
+            dateFormat: "H:i",
+            time_24hr: true,
+            allowInput: true
+        });
+
+        flatpickr("#end-time", {
+            enableTime: true,
+            noCalendar: true,
+            dateFormat: "H:i",
+            time_24hr: true,
+            allowInput: true
+        });
+
         const { DeckGL, GeoJsonLayer } = deck;
 
         // Initialize MapLibre GL map
