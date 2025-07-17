@@ -160,9 +160,12 @@
             return (isFinite(val) && val >= 0) ? val : null;
         }
 
+        defaultGridSizeDeg = 5
+        defaultGridLabelSizeDeg = 10
         const windowHoursBefore = parseWindowParam("windowHoursBefore") ?? defaultWindowHours;
         const windowHoursAfter = parseWindowParam("windowHoursAfter") ?? defaultWindowHours;
-
+        const gridSizeDeg = parseWindowParam("gridSizeDeg") ?? defaultGridSizeDeg;
+        const gridLabelSizeDeg = parseWindowParam("gridLabelSizeDeg") ?? defaultGridLabelSizeDeg;
 
         let swathData = null;
         let mapReady = false;
@@ -278,16 +281,112 @@
                     id: 'carto',
                     type: 'raster',
                     source: 'carto'
-                }]
-
+                }],
+                glyphs: "fonts/{fontstack}/{range}.pbf",
             },
-            projection: 'equirectangular',
             center: [0, 0],
             zoom: 2
         });
 
         map.on('load', () => {
+            const step = gridSizeDeg;
+            const labelStep = gridLabelSizeDeg;
 
+            if (step !== 0) {
+                const gridGeoJSON = {
+                    type: "FeatureCollection",
+                    features: []
+                };
+
+                const labelGeoJSON = {
+                    type: "FeatureCollection",
+                    features: []
+                };
+                
+                for (let lon = -180; lon <= 180; lon += step) {
+                    gridGeoJSON.features.push({
+                    type: "Feature",
+                    geometry: {
+                        type: "LineString",
+                        coordinates: Array.from({ length: 181 }, (_, i) => [lon, -90 + i])
+                    }
+                    });
+                }
+
+                for (let lat = -90; lat <= 90; lat += step) {
+                    gridGeoJSON.features.push({
+                    type: "Feature",
+                    geometry: {
+                        type: "LineString",
+                        coordinates: Array.from({ length: 361 }, (_, i) => [-180 + i, lat])
+                    }
+                    });
+                }
+
+                map.addSource("graticule", {
+                    type: "geojson",
+                    data: gridGeoJSON
+                });
+
+                map.addLayer({
+                    id: "graticule-lines",
+                    type: "line",
+                    source: "graticule",
+                    paint: {
+                    "line-color": "#888",
+                    "line-width": 1,
+                    "line-opacity": 0.5
+                    }
+                });
+
+                for (let lon = -180; lon <= 180; lon += labelStep) {
+                    labelGeoJSON.features.push({
+                        type: "Feature",
+                        geometry: {
+                            type: "Point",
+                            coordinates: [lon, 0]
+                        },
+                        properties: {
+                            label: `${lon}`
+                        }
+                    });
+                }
+                
+                for (let lat = -90; lat <= 90; lat += labelStep) {
+                    labelGeoJSON.features.push({
+                        type: "Feature",
+                        geometry: {
+                            type: "Point",
+                            coordinates: [0, lat]
+                        },
+                        properties: {
+                            label: `${lat}`
+                        }
+                    });
+                }
+
+                map.addSource("graticule-labels", {
+                    type: "geojson",
+                    data: labelGeoJSON
+                });
+
+                map.addLayer({
+                    id: "graticule-labels",
+                    type: "symbol",
+                    source: "graticule-labels",
+                    layout: {
+                        "text-field": ["get", "label"],
+                        "text-font": ["Open Sans Regular"],
+                        "text-size": 12,
+                        "text-anchor": "center",
+                        "text-offset": [0, 0]
+                    },
+                    paint: {
+                        "text-color": "#333"
+                    }
+                });
+            }
+        
             mapReady = true;
             if (dataReady) {
                 createDeckLayer();
