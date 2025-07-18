@@ -528,7 +528,7 @@
             <b>Pass:</b> ${props.ascending ? 'Ascending' : 'Descending'}<br/>
             <b>Time:</b> ${props.valid_time}<br/>
             <i>Swath ${hoveredIndex + 1} of ${lastHoveredObjects.length}</i>
-        `;
+            `;
         }
 
 
@@ -686,6 +686,25 @@
                         e.preventDefault();
                         hoveredIndex = (hoveredIndex + 1) % lastHoveredObjects.length;
                         showTooltip(lastHoveredObjects[hoveredIndex]);
+                    } else if (e.key.toLowerCase() === 'c' && lastHoveredObjects.length >= 1) {
+                        let tooltipsTextForClipboard = lastHoveredObjects.map((obj, index) => {
+                            const props = obj.object.properties;
+                            return (
+                                `Satellite: ${props.satellite_name}\n` +
+                                `Pass: ${props.ascending ? 'Ascending' : 'Descending'}\n` +
+                                `Time: ${props.valid_time}\n` +
+                                `Swath ${index + 1} of ${lastHoveredObjects.length}`
+                            );
+                        }).join('\n\n'); // Blank line between each tooltip
+
+                        // Copy to clipboard
+                        navigator.clipboard.writeText(tooltipsTextForClipboard)
+                        .then(() => {
+                            console.log("Copied tooltips' text to clipboard!");
+                        })
+                        .catch(err => {
+                            console.error("Failed to copy text: ", err);
+                        });
                     } else if (e.key === '0') {
                         map.flyTo({
                             center: [0, 0],
