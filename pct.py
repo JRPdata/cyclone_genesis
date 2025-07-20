@@ -66,6 +66,9 @@ from shapely.geometry import LineString
 from matplotlib.path import Path
 from scipy.spatial import Delaunay
 
+# where to output saved images
+PCT_OUTPUT_FOLDER = 'pct_output'
+
 # FILL VALUE FOR GMI; also using this as a fill value for Radio interference for GCOMW1 AMSR Pixel Quality (QC)
 MISSING_FLOAT = -9999.9
 
@@ -995,9 +998,13 @@ def plot_pct(file_path, center_lat, center_lon):
         )
 
         short_text = file_type['short']
-        plt.title(f"PCT {freq_str} - {short_text}\n{scan_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        plt.title(f"PCT {freq_str} - {short_text}\n{scan_dt.strftime(r'%Y-%m-%d %H:%M:%S UTC')}")
 
         plt.tight_layout()
+        
+        scan_dt_str = scan_dt.strftime(r'%Y-%m-%d_%H_%M_%SZ')
+        os.makedirs(PCT_OUTPUT_FOLDER, exist_ok=True)
+        plt.savefig(os.path.join(PCT_OUTPUT_FOLDER, f"{scan_dt_str}_{file_type['name']}_{freq}GHz.png"))
     
     plt.show()
 
