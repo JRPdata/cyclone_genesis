@@ -86,9 +86,9 @@ output_cat_file_name = 'output_cat_values.json'
 
 NETCDF_FOLDER_PATH = 'netcdf'
 
-# Switched to using OHC from NCIE, so this is defunct but left as reference
+# Switched to using OHC from NCEI, so this is left as reference for fallbacks
 #https://cwcgom.aoml.noaa.gov/erddap/griddap/aomlTCHP.html
-TCHP_NC_PATH = 'netcdf/aomlTCHP_32f9_dc68_adee-2024-09-26.nc'
+TCHP_NC_PATH = 'netcdf/TCHP_20250717.nc'
 
 # https://www.ncei.noaa.gov/data/oceans/sohcs/2024/09/
 # https://coastwatch.noaa.gov/thredds/catalog/OHC/NA/14Day/2024/
@@ -107,6 +107,8 @@ SST_NC_PATH = 'netcdf/20241005000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLO
 AUTO_DOWNLOAD_LATEST_OHC = True
 # Download latest SST on startup
 AUTO_DOWNLOAD_LATEST_SST = True
+# Download latest TCHP on startup (good for fallback if OHC fails)
+AUTO_DOWNLOAD_LATEST_TCHP = True
 
 FINE_SST_BINS = False
 # load netcdf files (regardless of display)
@@ -114,8 +116,9 @@ LOAD_NETCDF = True
 # default netcdf display?
 DISPLAY_NETCDF = None
 #DISPLAY_NETCDF = 'd26'
-#DISPLAY_NETCDF = 'tchp'
+# prefer OHC but use TCHP if OHC fails
 DISPLAY_NETCDF = 'ohc'
+#DISPLAY_NETCDF = 'ohc'
 #DISPLAY_NETCDF = 'iso26C'
 #DISPLAY_NETCDF = 'sst'
 # Set to True or False to bin the NETCDF data
@@ -454,6 +457,10 @@ import matplotlib
 # for plotting netcdf4 data
 import netCDF4 as nc
 import matplotlib.colors as mcolors
+
+# for downloading TCHP data
+from xml.etree import ElementTree as ET
+from urllib.parse import urlencode, quote
 
 # Disable all pre-existing keymaps in mpl (conflict causes bugs)
 for key in plt.rcParams.keys():
@@ -1298,6 +1305,87 @@ def download_file(url, local_filename):
         return None
     return dt_mod
 
+def download_latest_tchp_file_aoml():
+    latest_url = None
+    local_file_path = None
+    local_file_name = None
+
+    for attempt in range(2):
+        url = r'https://cwcgom.aoml.noaa.gov/thredds/wcs/TCHP/TCHP.nc?service=WCS&version=1.0.0&request=GetCapabilities'
+        response = requests.get(url, verify=False)
+        if response.ok:
+            xml_content = response.content
+
+            # parse XML and extract <gml:timePosition> values
+            root = ET.fromstring(xml_content)
+            namespaces = {
+                'gml': 'http://www.opengis.net/gml',
+            }
+            time_elements = root.findall('.//gml:timePosition', namespaces)
+
+            time_strings = [elem.text for elem in time_elements]
+            time_datetimes = [datetime.strptime(t, r"%Y-%m-%dT%H:%M:%SZ") for t in time_strings]
+
+            latest_time = max(time_datetimes)
+            latest_date_string = latest_time.strftime(r"%Y-%m-%dT%H:%M:%SZ")
+            short_date = latest_time.strftime(r"%Y-%m-%d")
+            local_file_name = f"TCHP_{short_date}.nc"
+            local_file_path = os.path.join(NETCDF_FOLDER_PATH, local_file_name)
+            
+            # build the url for subsetting TCHP
+            base_url = "https://cwcgom.aoml.noaa.gov/thredds/ncss/TCHP/TCHP.nc"
+            params = {
+                "var": ["D26", "Tropical_Cyclone_Heat_Potential"],
+                "north": "90.0000",
+                "south": "-90.0000",
+                "east": "180.0000",
+                "west": "-180.0000",
+                "disableLLSubset": "on",
+                "disableProjSubset": "on",
+                "horizStride": "1",
+                "time_start": latest_date_string,
+                "time_end": latest_date_string,
+                "timeStride": "1",
+                "accept": "netcdf"
+            }
+
+            # Encode multi-valued parameters correctly
+            encoded_query = []
+            for k, v in params.items():
+                if isinstance(v, list):
+                    for item in v:
+                        encoded_query.append((k, item))
+                else:
+                    encoded_query.append((k, v))
+
+            
+            latest_url = f"{base_url}?{urlencode(encoded_query, quote_via=quote)}"
+            break
+        else:
+            print(url, response)
+    else:
+        print(f'Failed to download {basin}')
+        return None
+
+    # Download the latest files
+    if latest_url:
+        file_ok = False
+        if not os.path.exists(local_file_path):
+            os.makedirs(NETCDF_FOLDER_PATH, exist_ok=True)
+            response = requests.get(latest_url, stream=True, verify=False)
+            if response.ok:
+                print("Downloading latest TCHP file: ", local_file_name)
+                with open(local_file_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=1024):
+                        f.write(chunk)
+                file_ok = True
+        else:
+            file_ok = True
+
+        if file_ok:
+            return local_file_path
+
+    return None
 
 def download_latest_ohc_nc_files_coastwatch():
     basins = ['sp', 'np', 'na']
@@ -3256,6 +3344,7 @@ class AnalysisDialog(tk.Toplevel):
         if current_value != self.basin_previous_selected:
             self.basin_previous_selected = self.basin_combobox.get()
             self.update_opt_preset_min_max(pdf=True)
+            self.update_opt_preset_min_max(cdf=True)
 
     def combo_selected_cdf_event(self, event):
         current_value = self.cdf_combobox.get()
@@ -6349,8 +6438,8 @@ class NetCDFPlotter:
                 # this is defunct as we are using OHC now from NCEI
                 self.tchp = ds.variables['Tropical_Cyclone_Heat_Potential'][:][0]
                 self.d26 = ds.variables['D26'][:][0]
-                self.lat = ds.variables['latitude'][:]
-                self.lon = ds.variables['longitude'][:]
+                self.lat = ds.variables['lat'][:]
+                self.lon = ds.variables['lon'][:]
             elif self.data_type in ['ohc', 'iso26C']:
                 self.ohc = ds.variables['ohc'][:][0]
                 self.iso26C = ds.variables['iso26C'][:][0]
@@ -7457,6 +7546,11 @@ if AUTO_DOWNLOAD_LATEST_SST:
     print("Updating latest SST file...")
     SST_NC_PATH = download_latest_sst_nc_file()
     print("Done updating SST file.")
+    
+if AUTO_DOWNLOAD_LATEST_TCHP:
+    print("Updating latest TCHP file...")
+    TCHP_NC_PATH = download_latest_tchp_file_aoml()
+    print("Done updating TCHP file.")
 
 # Main app class
 class App:
@@ -7473,9 +7567,9 @@ class App:
         plotter_sst.load_data()
 
         # using OHC instead
-        """file_path = TCHP_NC_PATH
+        file_path = TCHP_NC_PATH
         plotter_tchp_d26 = NetCDFPlotter(file_path, 'tchp')
-        plotter_tchp_d26.load_data()"""
+        plotter_tchp_d26.load_data()
 
         file_paths = OHC_NC_PATHS
         for file_path in file_paths:
@@ -10101,6 +10195,9 @@ class App:
         cls.root.bind('4', cls.set_netcdf_display_sst)
         cls.root.bind('5', cls.set_netcdf_display_ohc)
         cls.root.bind('6', cls.set_netcdf_display_iso26C)
+        # AOML's version
+        cls.root.bind('7', cls.set_netcdf_display_tchp)
+        cls.root.bind('8', cls.set_netcdf_display_d26)
         cls.root.bind('r', cls.set_netcdf_display_none)
         cls.root.bind('<F8>', cls.exec_custom_code)
 
@@ -11414,6 +11511,12 @@ class App:
         ttk.Button(dialog, text='Cancel', command=cancel, style='TButton').pack(side=tk.LEFT, padx=5, pady=5)
 
     @classmethod
+    def set_netcdf_display_d26(cls, event=None):
+        global DISPLAY_NETCDF
+        DISPLAY_NETCDF = 'D26'
+        cls.redraw_map_with_data(model_cycle=cls.genesis_model_cycle_time)
+        
+    @classmethod
     def set_netcdf_display_iso26C(cls, event=None):
         global DISPLAY_NETCDF
         DISPLAY_NETCDF = 'iso26C'
@@ -11435,6 +11538,12 @@ class App:
     def set_netcdf_display_sst(cls, event=None):
         global DISPLAY_NETCDF
         DISPLAY_NETCDF = 'sst'
+        cls.redraw_map_with_data(model_cycle=cls.genesis_model_cycle_time)
+    
+    @classmethod
+    def set_netcdf_display_tchp(cls, event=None):
+        global DISPLAY_NETCDF
+        DISPLAY_NETCDF = 'tchp'
         cls.redraw_map_with_data(model_cycle=cls.genesis_model_cycle_time)
 
     @classmethod
