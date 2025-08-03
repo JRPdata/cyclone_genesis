@@ -1092,15 +1092,15 @@ def read_gdfl_txt_file_to_df(model_file_path):
 
     # Column numbers referenced in comments are 1 indexed per HWRF doc
     # Coerce columns 5, 7, 10-11, 13, 15-18 to integer
-    for col in [4, 6] + list(range(9, 11)) + [12] + list(range(14, 19)):
+    for col in [4, 6, 9, 10, 12] + list(range(14, 18)):
         df[col] = pd.to_numeric(df[col], downcast='integer')
 
-    # Coerce columns 19-21 and 26-31 to numeric, replacing -999 with NaN
-    for col in list(range(19, 22)) + list(range(25, 31)):
+    # Coerce columns 19-22 and 26-31 to numeric, replacing -999 with NaN
+    for col in list(range(18, 22)) + list(range(25, 31)):
         df[col] = pd.to_numeric(df[col], errors='coerce').replace(-999, np.nan)
 
-    # Coerce columns 22-24 to numeric, replacing -9999 with NaN
-    for col in range(22, 23):
+    # Coerce columns 23-24 to numeric, replacing -9999 with NaN
+    for col in [22, 23]:
         df[col] = pd.to_numeric(df[col], errors='coerce').replace(-9999, np.nan)
 
     # Convert column 4 to datetime
@@ -1108,12 +1108,12 @@ def read_gdfl_txt_file_to_df(model_file_path):
 
     # Convert columns 22-24 to np.float32, divide by 10 (these are Hart's phase space parameters multiplied by 10)
     for col in range(21, 24):
-        df[col] = np.float32(df[col]) / 10
+        df[col] = np.float32(df[col]) / 10.0
 
     # Column 25 is warm core flag character (Y = Warm core, N = No warm core, U = Undetermined), leave as is
 
-    # Convert column 27 to np.float32, multiply by 10 (moving speed is in units 10^1 m/s)
-    df[26] = np.float32(df[26]) / 10
+    # Convert column 27 to np.float32, divide by 10 (moving speed is in units 10^-1 m/s)
+    df[26] = np.float32(df[26]) / 10.0
 
     # Convert columns 28-31 to np.float64, divide by 10^6 (these are the storm's relative vorticity values in units 10^-6 m/s)
     for col in range(27, 31):
@@ -1419,7 +1419,12 @@ def read_tc_bufr_to_df(file_path):
     # loop for the messages in the file
     while 1:
         # get handle for message
-        bufr = codes_bufr_new_from_file(f)
+        try:
+            bufr = codes_bufr_new_from_file(f)
+        except:
+            print('Error reading bufr message from:', f)
+            print('Skipping message and continuing...')
+            continue
         if bufr is None:
             break
 
