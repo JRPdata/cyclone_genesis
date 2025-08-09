@@ -44,6 +44,10 @@ offset = 0
 # 1 = 24 hours (from 00Z), 2 = 48 hours, etc
 total_days = 5
 
+# archive swath (for validation, debugging)
+save_archive_swath_files = True
+save_archive_path = './archive'
+
 # save pass images
 save_swath_images = False
 save_ascat_swath_images_folder = './ascat_swaths'
@@ -54,13 +58,17 @@ do_plot_swath_chart = False
 show_swath_chart = False
 
 # Define swath information for each satellite (m) (nadir blind range on each side and swath width from nadir (radius) in km)
-# For sattelites  except METOP-B,C this is the HALF swath width; for satellites with PMW we use the typical min. effective swath widths (36/89 GHz)
+# For sattelites  except METOP-B,C this is the HALF swath width; for satellites with PMW we use typically the typical min. effective swath widths (36/89 GHz)
+# Different swath widths for SMOS (https://www.eoportal.org/satellite-missions/smos#mission-capabilities lists it as 1050 km)
+#   For own effective swath width calculations for SMOS L2 NRT wind speed (operationally run by ESA), I get ~1128 km
 swath_info = {
     "METOP-B": {"blind_range": 336000, "swath_width": 550000},
     "METOP-C": {"blind_range": 336000, "swath_width": 550000},
     "HAIYANG-2B": {"blind_range": 0, "swath_width": 900000},
     "HAIYANG-2C": {"blind_range": 0, "swath_width": 900000},
     "OCEANSAT-3": {"blind_range": 0, "swath_width": 900000},
+    "SMAP": {"blind_range": 0, "swath_width": 500000}, # ~1000km (effective swath can vary for the RSS Ocean AWS product but is above 1000 for latitudes < 10 deg. N, however from 10N to 50N it drops from ~980km to 950km)
+    "SMOS": {"blind_range": 0, "swath_width": 564000}, # ~1000km (see above; using typical min. effective swath width for ESA L2 NRT WS ~ 1128 km)
     "GPM-CORE": {"blind_range": 0, "swath_width": 500000}, # 442500 minimum (885km nominal, but using typical min. effective swath width for microwave imagery: 1000 km)
     "GCOM-W1": {"blind_range": 0, "swath_width": 800000} # 725000 minimum (1450km nominal, but using typical min. effective swath width for microwave imagery: 1600 km)
 }
@@ -86,6 +94,8 @@ urls = {
     'HAIYANG-2B': 'https://celestrak.org/NORAD/elements/gp.php?CATNR=43655&FORMAT=2LE',
     'HAIYANG-2C': 'https://celestrak.org/NORAD/elements/gp.php?CATNR=46469&FORMAT=2LE',
     'OCEANSAT-3': 'https://celestrak.org/NORAD/elements/gp.php?CATNR=54361&FORMAT=2LE',
+    'SMAP': 'https://celestrak.org/NORAD/elements/gp.php?CATNR=40376&FORMAT=2LE',
+    'SMOS': 'https://celestrak.org/NORAD/elements/gp.php?CATNR=36036&FORMAT=2LE',
     'GPM-CORE': 'https://celestrak.org/NORAD/elements/gp.php?CATNR=39574&FORMAT=2LE',
     'GCOM-W1': 'https://celestrak.org/NORAD/elements/gp.php?CATNR=38337&FORMAT=2LE',
 }
@@ -174,7 +184,8 @@ def calculate_swaths_and_plot(nadir_paths, start_dt, label_interval=30, opacity=
         # placeholder
         ax = None
 
-    colors = ['blue', 'purple', 'red', 'orange', 'yellow', 'green', 'pink', 'turquoise', 'lavender', 'brown', 'black', 'teal', 'magenta', 'lime', 'gray', 'amber']
+    # must match the number of unique swaths (for metop-b,c this is each 4)
+    colors = ['blue', 'purple', 'red', 'orange', 'yellow', 'green', 'pink', 'turquoise', 'lavender', 'brown', 'black', 'teal', 'magenta', 'lime', 'gray', 'amber', 'purple', 'cyan', 'gold', 'lime']
     added_labels = set()
     gdfs = []
     for i, (satellite_name, path) in enumerate(nadir_paths.items()):
@@ -646,19 +657,20 @@ swath_gdfs = calculate_swaths_and_plot(nadir_paths, start_dt, label_interval=10,
 all_swath_gdf = gpd.GeoDataFrame(pd.concat(swath_gdfs, ignore_index=True))
 columns_to_keep = ['valid_time', 'satellite_name', 'ascending', 'geometry']
 gdf_clean = all_swath_gdf[columns_to_keep].copy()
-gdf_clean['valid_time'] = gdf_clean['valid_time'].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+gdf_clean['valid_time'] = gdf_clean['valid_time'].dt.strftime(r'%Y-%m-%dT%H:%M:%SZ')
 
-gdf_clean.to_file("swaths.geojson", driver="GeoJSON")
-
-
-# Save your GeoDataFrame as regular GeoJSON
 gdf_clean.to_file("swaths.geojson", driver="GeoJSON")
 
 # Compress it with gzip
 with open("swaths.geojson", "rb") as f_in:
-    with gzip.open("swaths.geojson.gz", "wb") as f_out:
+    ts_str = dt_now.strftime(r'%Y%m%dT%H%M%SZ')
+    output_filename = "swaths.geojson.gz"
+    archive_filename = f"swaths.geojson.{ts_str}.gz"
+    with gzip.open(output_filename, "wb") as f_out:
         shutil.copyfileobj(f_in, f_out)
-
+    if save_archive_swath_files:
+        os.makedirs(save_archive_path, exist_ok=True)
+        shutil.copy(output_filename, os.path.join(save_archive_path, archive_filename))
 
 def upload_to_ftp(ftp_address, ftp_port, ftp_username, ftp_password, http_proj_folder):
     # Connect to the FTP server

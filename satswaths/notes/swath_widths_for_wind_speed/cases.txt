@@ -1,0 +1,127 @@
+Swath width notes for ocean wind speed products based on passive microwave
+
+SMOS (L2 NRT, run operationally by ESA)
+
+Satellite: SMOS
+Pass: Descending
+Time: 2025-08-07T04:01:00Z
+Swath 1 of 1
+missing.. why?
+
+
+smos case 1
+case1
+Satellite: SMOS
+Pass: Descending
+Time: 2025-08-06T04:40:00Z
+Swath 1 of 1
+SM_OPER_MIR_SCNFSW_20250806T040403_20250806T053403_307_001_7.nc
+
+Min swath width: 1128.4716122944667 km
+Max swath width: 1229.235160928966 km
+Mean swath width: 1149.2015548287914 km
+
+
+case2
+Satellite: SMOS
+Pass: Ascending
+Time: 2025-08-08T07:49:00Z
+Swath 1 of 1
+SM_OPER_MIR_SCNFSW_20250808T060122_20250808T075122_307_001_7.nc
+
+Min swath width: 1131.3065698270682 km
+Max swath width: 1190.714933980968 km
+Mean swath width: 1148.2881724395415 km
+
+
+
+~~~
+
+
+
+
+RSS swath widths (SMAP and GCOM-W1):
+
+smap case1
+Satellite: SMAP
+Pass: Ascending
+Time: 2025-08-07T02:00:00Z
+Swath 1 of 1
+to
+Satellite: SMAP
+Pass: Ascending
+Time: 2025-08-07T02:40:00Z
+Swath 1 of 1
+lat -60, 52
+lon -172,-80
+RSS_smap_wind_daily_2025_08_07_NRT_v01.0.nc
+
+Min swath width: 951.9404458992321 km
+Max swath width: 1023.5587166002798 km
+Mean swath width: 998.9485123776302 km
+
+smap case2
+Satellite: SMAP
+Pass: Ascending
+Time: 2025-08-08T02:36:00Z
+Swath 1 of 1
+to
+Satellite: SMAP
+Pass: Ascending
+Time: 2025-08-08T03:15:00Z
+Swath 1 of 1
+lat -60,55
+lon -160,-90
+RSS_smap_wind_daily_2025_08_08_NRT_v01.0.nc
+
+Min swath width: 946.7591315857586 km
+Max swath width: 1048.238800470771 km
+Mean swath width: 994.996907871804 km
+
+
+Looks like 1000km is about right for SMAP for satellite predictions from images though (decreases after 10N though, from 10N to 50N it drops from ~980km to 950km)
+Will probably slightly overpromise for North Hemisphere storms though.
+
+
+
+
+~~~
+
+
+GCOM-W1 AMSR L2 (ocean. all weather wind speed) (not TC wind!)
+
+
+amsr ocean aws case1
+Satellite: GCOM-W1
+# AMSR case 1 (RSS)
+file_name = 'products/RSS_AMSR2_ocean_L3_daily_2025-08-07_v08.2-rt.nc'
+# adjust to earlier for actual sensing time
+time_min_str = '2025-08-07T22:08:00Z'
+time_max_str = '2025-08-07T23:59:00Z'
+lat_min = -60
+lat_max = 50
+lon_min = -178
+lon_max = -90
+
+Min swath width: 1598.8541353583694 km
+Max swath width: 1787.0666889875686 km
+Mean swath width: 1634.2739805443996 km
+
+
+amsr ocean aws case2
+# AMSR case 2 (RSS)
+file_name = 'products/RSS_AMSR2_ocean_L3_daily_2025-08-04_v08.2.nc'
+# adjust to earlier for actual sensing time
+time_min_str = '2025-08-04T21:08:00Z'
+time_max_str = '2025-08-04T22:30:00Z'
+lat_min = -60
+lat_max = 50
+lon_min = -178
+lon_max = -90
+
+Min swath width: 1617.02168005967 km
+Max swath width: 1778.2071557214788 km
+Mean swath width: 1638.6750544256834 km
+
+
+There is also a RSS TC wind product using GCOM-W1's AMSR2 (the above is for the all weather wind speed product)
